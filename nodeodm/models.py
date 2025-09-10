@@ -95,8 +95,13 @@ class ProcessingNode(models.Model):
         except exceptions.OdmError:
             return False
 
-    def api_client(self, timeout=30):
-        return Node(self.hostname, self.port, self.token, timeout)
+    def api_client(self, timeout=30, jwt_token=None):
+        if jwt_token:
+            # Create a custom Node wrapper that includes JWT token support
+            from nodeodm.jwt_node_wrapper import JWTNodeWrapper
+            return JWTNodeWrapper(self.hostname, self.port, self.token, timeout, jwt_token)
+        else:
+            return Node(self.hostname, self.port, self.token, timeout)
 
     def get_available_options_json(self, pretty=False):
         """
@@ -119,7 +124,7 @@ class ProcessingNode(models.Model):
 
         return opts
 
-    def process_new_task(self, images, name=None, options=[], progress_callback=None):
+    def process_new_task(self, images, name=None, options=[], progress_callback=None, jwt_token=None):
         """
         Sends a set of images (and optional GCP file) via the API
         to start processing.
@@ -128,40 +133,41 @@ class ProcessingNode(models.Model):
         :param name: name of the task
         :param options: options to be used for processing ([{'name': optionName, 'value': optionValue}, ...])
         :param progress_callback: optional callback invoked during the upload images process to be used to report status.
+        :param jwt_token: optional JWT token to pass to the processing node
 
         :returns UUID of the newly created task
         """
         if len(images) < 1: raise exceptions.NodeServerError("Need at least 1 file")
 
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
 
         opts = self.options_list_to_dict(options)
 
         task = api_client.create_task(images, opts, name, progress_callback)
         return task.uuid
 
-    def get_task_info(self, uuid, with_output=None):
+    def get_task_info(self, uuid, with_output=None, jwt_token=None):
         """
         Gets information about this task, such as name, creation date, 
         processing time, status, command line options and number of 
         images being processed.
         """
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         task_info = task.info(with_output)
 
         # Output support for older clients
         if not api_client.version_greater_or_equal_than("1.5.1") and with_output:
-            task_info.output = self.get_task_console_output(uuid, with_output)
+            task_info.output = self.get_task_console_output(uuid, with_output, jwt_token)
 
         return task_info
 
-    def get_task_console_output(self, uuid, line):
+    def get_task_console_output(self, uuid, line, jwt_token=None):
         """
         Retrieves the console output of the OpenDroneMap's process.
         Useful for monitoring execution and to provide updates to the user.
         """
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         return task.output(line)
 

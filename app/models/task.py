@@ -46,6 +46,7 @@ from pyodm.exceptions import NodeResponseError, NodeConnectionError, NodeServerE
 from webodm import settings
 from app.classes.gcp import GCPFile
 from .project import Project
+from .oauth2 import TapisOAuth2Token
 from django.utils.translation import gettext_lazy as _, gettext
 
 from functools import partial
@@ -743,9 +744,12 @@ class Task(models.Model):
                             Task.objects.filter(pk=self.id).update(upload_progress=float(progress) / 100.0)
                             last_update = time.time()
 
+                    # Get JWT token for the task owner if available
+                    jwt_token = self._get_tapis_jwt_token()
+                    
                     # This takes a while
                     try:
-                        uuid = self.processing_node.process_new_task(images, self.name, self.options, callback)
+                        uuid = self.processing_node.process_new_task(images, self.name, self.options, callback, jwt_token=jwt_token)
                     except NodeConnectionError as e:
                         # If we can't create a task because the node is offline
                         # We want to fail instead of trying again
@@ -790,7 +794,8 @@ class Task(models.Model):
 
                         if self.uuid:
                             try:
-                                info = self.processing_node.get_task_info(self.uuid)
+                                jwt_token = self._get_tapis_jwt_token()
+                                info = self.processing_node.get_task_info(self.uuid, jwt_token=jwt_token)
                                 uuid_still_exists = info.uuid == self.uuid
                             except OdmError:
                                 pass
@@ -865,7 +870,8 @@ class Task(models.Model):
                     else:
                         current_lines_count = len(self.console.output().split("\n"))
 
-                    info = self.processing_node.get_task_info(self.uuid, current_lines_count)
+                    jwt_token = self._get_tapis_jwt_token()
+                    info = self.processing_node.get_task_info(self.uuid, current_lines_count, jwt_token)
 
                     self.processing_time = info.processing_time
                     self.status = info.status.value
@@ -1429,3 +1435,46 @@ class Task(models.Model):
             self.project.owner.profile.clear_used_quota_cache()
         except Exception as e:
             logger.warn("Cannot update size for task {}: {}".format(self, str(e)))
+
+    def _get_tapis_jwt_token(self):
+        """
+        Get the JWT token for the task owner from Tapis OAuth2 tokens.
+        
+        :returns: JWT token string if available, None otherwise
+        """
+        try:
+            # Get the most recent valid Tapis OAuth2 token for the task owner
+            token = TapisOAuth2Token.objects.filter(
+                user=self.project.owner,
+                access_token__isnull=False
+            ).exclude(
+                access_token__exact=''
+            ).order_by('-created_at').first()
+            
+            if token and token.is_valid:
+                # Extract the JWT string from the token data
+                access_token = token.access_token
+                if isinstance(access_token, dict) and 'access_token' in access_token:
+                    return access_token['access_token']
+                elif isinstance(access_token, str):
+                    # Handle case where token is stored as string representation of dict
+                    if access_token.startswith("{'access_token'"):
+                        import ast
+                        try:
+                            token_dict = ast.literal_eval(access_token)
+                            return token_dict.get('access_token')
+                        except:
+                            logger.warning(f"Could not parse token string for user {self.project.owner.username}")
+                            return None
+                    else:
+                        return access_token
+                else:
+                    logger.warning(f"Invalid access token format for user {self.project.owner.username}")
+                    return None
+            else:
+                logger.info(f"No valid Tapis OAuth2 token found for user {self.project.owner.username}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting Tapis JWT token for user {self.project.owner.username}: {str(e)}")
+            return None
