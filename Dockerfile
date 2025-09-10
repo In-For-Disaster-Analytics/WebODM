@@ -85,6 +85,31 @@ EOT
 # Copy remaining files
 COPY . ./
 
+# Apply Tapis OAuth2 integration fixes
+RUN <<EOT
+    # Make scripts executable
+    if [ -f scripts/setup_tapis_oauth2.py ]; then
+        chmod +x scripts/setup_tapis_oauth2.py
+        echo "✓ Made Tapis setup script executable"
+    fi
+    
+    if [ -f scripts/entrypoint-tapis.sh ]; then
+        chmod +x scripts/entrypoint-tapis.sh
+        echo "✓ Made Tapis entrypoint script executable"
+    fi
+    
+    # Temporarily exclude OAuth2 models and admin during build (will be re-enabled at runtime)
+    if [ -f app/models/__init__.py ]; then
+        sed -i 's/^from \.oauth2 import/#TAPIS_TEMP_DISABLE#from \.oauth2 import/' app/models/__init__.py
+        echo "✓ Temporarily disabled OAuth2 models for build compatibility"
+    fi
+    
+    if [ -f app/admin.py ]; then
+        sed -i 's/^from \.admin\.oauth2 import/#TAPIS_TEMP_DISABLE#from \.admin\.oauth2 import/' app/admin.py
+        echo "✓ Temporarily disabled OAuth2 admin for build compatibility"
+    fi
+EOT
+
 # Defining this here allows for caching of previous layers.
 ARG TEST_BUILD
 

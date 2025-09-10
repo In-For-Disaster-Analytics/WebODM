@@ -1,0 +1,46 @@
+{% extends 'registration/registration_base.html' %}
+{% load i18n %}
+{% load settings %}
+
+{% block registration_content %}
+    <div class="text-center">
+        <h2>{% trans "Login with Tapis" %}</h2>
+        <p class="text-muted">{% trans "Authenticate using your Tapis credentials" %}</p>
+        
+        <div class="login-options" style="margin-top: 30px;">
+            <a href="/api/oauth2/tapis/authorize/{{ default_client_id }}/?redirect_after={% firstof request.GET.next '/dashboard/' %}" 
+               class="btn btn-primary btn-lg" style="padding: 15px 30px; font-size: 16px;">
+                <i class="fa fa-sign-in" style="margin-right: 10px;"></i>
+                {% trans "Login with Tapis" %}
+            </a>
+        </div>
+        
+        <div class="help-text" style="margin-top: 30px;">
+            <p class="text-muted">
+                {% trans "Don't have a Tapis account?" %} 
+                <a href="https://tapis.readthedocs.io/en/latest/getting-started/index.html" target="_blank">
+                    {% trans "Learn more about Tapis" %}
+                </a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+    // Auto-redirect if we have a single Tapis client configured
+    $(function() {
+        {% is_single_user_mode as autologin %}
+        {% if autologin %}
+            location.href='/dashboard/';
+        {% endif %}
+        
+        // If there's an error parameter, show it
+        var urlParams = new URLSearchParams(window.location.search);
+        var error = urlParams.get('error');
+        if (error) {
+            $('<div class="alert alert-danger" style="margin-top: 20px;">' + 
+              '<strong>Authentication Error:</strong> ' + decodeURIComponent(error) + 
+              '</div>').insertAfter('.login-options');
+        }
+    });
+    </script>
+{% endblock %}

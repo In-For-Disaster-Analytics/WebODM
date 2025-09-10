@@ -41,7 +41,7 @@ schema_view = get_schema_view(
 
 urlpatterns = [
     url(r'^', include('app.urls')),
-    url(r'^', include('django.contrib.auth.urls')),
+    # Django auth URLs removed - Tapis OAuth2 only
     url(r'^admin/', admin.site.urls),
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
     re_path(r'^swagger/$', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),

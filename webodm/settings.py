@@ -167,18 +167,21 @@ AUTH_PASSWORD_VALIDATORS = [
    },
 ]
 
-# Hook guardian
+# Hook guardian - Tapis OAuth2 only
 AUTHENTICATION_BACKENDS = (
-    'django.contrib.auth.backends.ModelBackend', # this is default
     'guardian.backends.ObjectPermissionBackend',
-    'app.auth.backends.ExternalBackend',
+    'app.auth.tapis_oauth2.TapisOAuth2Backend',
 )
 
 # Internationalization
 # https://docs.djangoproject.com/en/1.10/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = tzlocal.get_localzone().zone
+try:
+    TIME_ZONE = tzlocal.get_localzone().zone
+except AttributeError:
+    # Handle newer tzlocal versions
+    TIME_ZONE = str(tzlocal.get_localzone())
 USE_I18N = True
 USE_L10N = True
 USE_TZ = True
@@ -296,6 +299,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'app.contexts.settings.load',
+                'app.contexts.tapis.tapis_oauth2_context',
             ],
         },
     },
@@ -367,8 +371,12 @@ NODE_OFFLINE_MINUTES = 5
 # and assumes that all nodes are always online, avoiding polling
 NODE_OPTIMISTIC_MODE = False
 
-# URL to external auth endpoint
+# URL to external auth endpoint - DISABLED for Tapis-only auth
 EXTERNAL_AUTH_ENDPOINT = ''
+
+# Tapis OAuth2 Configuration
+TAPIS_BASE_URL = os.environ.get('WO_TAPIS_BASE_URL', '')
+TAPIS_TENANT_ID = os.environ.get('WO_TAPIS_TENANT_ID', '')
 
 # Enable cluster mode for this instance by setting an integer ID >= 1
 CLUSTER_ID = None

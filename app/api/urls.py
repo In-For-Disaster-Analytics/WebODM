@@ -13,13 +13,24 @@ from .tiler import TileJson, Bounds, Metadata, Tiles, Export
 from .potree import Scene, CameraView
 from .workers import CheckTask, GetTaskResult
 from .users import UsersList
-from .externalauth import ExternalTokenAuth
+# External auth removed - Tapis OAuth2 only
+# from .externalauth import ExternalTokenAuth
+from .tapis_oauth2 import (
+    TapisOAuth2AuthorizeView, 
+    TapisOAuth2CallbackView, 
+    TapisOAuth2TokenRefreshView,
+    TapisOAuth2StatusView,
+    TapisOAuth2RevokeView
+)
+from .tapis_storage import TapisStorageViewSet
+from .tapis_preferences import TapisUserPreferencesView, TapisDiscoveryControlView
 from webodm import settings
 
 router = routers.DefaultRouter()
 router.register(r'projects', ProjectViewSet)
 router.register(r'processingnodes', ProcessingNodeViewSet)
 router.register(r'presets', PresetViewSet, basename='presets')
+router.register(r'tapis-storage', TapisStorageViewSet, basename='tapis-storage')
 
 tasks_router = routers.NestedSimpleRouter(router, r'projects', lookup='project')
 tasks_router.register(r'tasks', TaskViewSet, basename='projects-tasks')
@@ -66,6 +77,20 @@ urlpatterns = [
 if settings.ENABLE_USERS_API:
     urlpatterns.append(url(r'users', UsersList.as_view()))
 
-if settings.EXTERNAL_AUTH_ENDPOINT != '':
-    urlpatterns.append(url(r'^external-token-auth/', ExternalTokenAuth.as_view()))
+# External auth disabled - Tapis OAuth2 only
+# if settings.EXTERNAL_AUTH_ENDPOINT != '':
+#     urlpatterns.append(url(r'^external-token-auth/', ExternalTokenAuth.as_view()))
+
+# Tapis OAuth2 endpoints
+urlpatterns.extend([
+    url(r'^oauth2/tapis/authorize/(?P<client_id>[^/.]+)/$', TapisOAuth2AuthorizeView.as_view(), name='tapis_oauth2_authorize'),
+    url(r'^oauth2/tapis/callback/$', TapisOAuth2CallbackView.as_view(), name='tapis_oauth2_callback'),
+    url(r'^oauth2/tapis/refresh/(?P<client_id>[^/.]+)/$', TapisOAuth2TokenRefreshView.as_view(), name='tapis_oauth2_refresh'),
+    url(r'^oauth2/tapis/status/$', TapisOAuth2StatusView.as_view(), name='tapis_oauth2_status'),
+    url(r'^oauth2/tapis/revoke/(?P<client_id>[^/.]+)/$', TapisOAuth2RevokeView.as_view(), name='tapis_oauth2_revoke'),
+    
+    # Tapis preferences and discovery control
+    url(r'^tapis-preferences/$', TapisUserPreferencesView.as_view(), name='tapis_user_preferences'),
+    url(r'^tapis-discovery/trigger/$', TapisDiscoveryControlView.as_view(), name='tapis_discovery_trigger'),
+])
 

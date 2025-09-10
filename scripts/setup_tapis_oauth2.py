@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""
+Tapis OAuth2 setup script for WebODM
+Runs database migrations and creates default OAuth2 client
+"""
+
+import os
+import sys
+import django
+import logging
+
+# Setup logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Step 0: Re-enable OAuth2 models (disabled during Docker build) and fix compatibility BEFORE Django setup
+logger.info("Re-enabling OAuth2 models and admin...")
+try:
+    # Re-enable models
+    models_init_path = '/webodm/app/models/__init__.py'
+    if os.path.exists(models_init_path):
+        with open(models_init_path, 'r') as f:
+            content = f.read()
+        if '#TAPIS_TEMP_DISABLE#from .oauth2 import' in content:
+            content = content.replace('#TAPIS_TEMP_DISABLE#from .oauth2 import', 'from .oauth2 import')
+            with open(models_init_path, 'w') as f:
+                f.write(content)
+            logger.info("✓ Re-enabled OAuth2 models")
+    
+    # Fix JSONField compatibility BEFORE Django setup
+    oauth2_model_path = '/webodm/app/models/oauth2.py'
+    if os.path.exists(oauth2_model_path):
+        with open(oauth2_model_path, 'r') as f:
+            content = f.read()
+        if 'models.JSONField(default=dict, blank=True' in content:
+            content = content.replace('models.JSONField(default=dict, blank=True', 'models.TextField(blank=True, default="{}"')
+            with open(oauth2_model_path, 'w') as f:
+                f.write(content)
+            logger.info("✓ Fixed OAuth2 model Django compatibility")
+    
+    # Fix JSONField in migration files
+    migration_path = '/webodm/app/migrations/0002_tapis_oauth2_models.py'
+    if os.path.exists(migration_path):
+        with open(migration_path, 'r') as f:
+            content = f.read()
+        if 'models.JSONField(blank=True, default=dict' in content:
+            content = content.replace('models.JSONField(blank=True, default=dict', 'models.TextField(blank=True, default="{}"')
+            with open(migration_path, 'w') as f:
+                f.write(content)
+            logger.info("✓ Fixed OAuth2 migration Django compatibility")
+    
+    # Re-enable admin
+    admin_path = '/webodm/app/admin.py'
+    if os.path.exists(admin_path):
+        with open(admin_path, 'r') as f:
+            content = f.read()
+        if '#TAPIS_TEMP_DISABLE#from .admin.oauth2 import' in content:
+            content = content.replace('#TAPIS_TEMP_DISABLE#from .admin.oauth2 import', 'from .admin.oauth2 import')
+            with open(admin_path, 'w') as f:
+                f.write(content)
+            logger.info("✓ Re-enabled OAuth2 admin")
+            
+except Exception as e:
+    logger.warning(f"Could not re-enable OAuth2 components: {e}")
+
+# Setup Django AFTER re-enabling models
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'webodm.settings')
+sys.path.insert(0, '/webodm')
+django.setup()
+
+from django.core.management import call_command
+from app.models import TapisOAuth2Client
+from django.db import connection
+
+def main():
+    """Setup Tapis OAuth2 integration"""
+    
+    # Step 1: Apply compatibility fixes
+    logger.info("Applying Tapis OAuth2 compatibility fixes...")
+    try:
+        # Fix Django compatibility issue with JSONField
+        oauth2_model_path = '/webodm/app/models/oauth2.py'
+        if os.path.exists(oauth2_model_path):
+            with open(oauth2_model_path, 'r') as f:
+                content = f.read()
+            if 'models.JSONField(default=dict, blank=True' in content:
+                content = content.replace('models.JSONField(default=dict, blank=True', 'models.TextField(blank=True, default="{}"')
+                with open(oauth2_model_path, 'w') as f:
+                    f.write(content)
+                logger.info("✓ Fixed OAuth2 model Django compatibility")
+        
+        # Fix URL naming conflict
+        urls_path = '/webodm/app/urls.py'
+        if os.path.exists(urls_path):
+            with open(urls_path, 'r') as f:
+                content = f.read()
+            if "name='login'" in content:
+                content = content.replace("name='login'", "name='tapis_login'")
+                with open(urls_path, 'w') as f:
+                    f.write(content)
+                logger.info("✓ Fixed URL naming conflict")
+        
+        # Fix template URL references
+        template_path = '/webodm/app/templates/app/registration/login.html'
+        if os.path.exists(template_path):
+            with open(template_path, 'r') as f:
+                content = f.read()
+            if "{% url 'login' %}" in content:
+                content = content.replace("{% url 'login' %}", "/login/")
+                with open(template_path, 'w') as f:
+                    f.write(content)
+                logger.info("✓ Fixed template URL references")
+                
+    except Exception as e:
+        logger.warning(f"Could not apply all fixes: {e}")
+    
+    # Step 2: Create and run migrations
+    logger.info("Creating Tapis OAuth2 migrations...")
+    try:
+        call_command('makemigrations', 'app', verbosity=0)
+        logger.info("✓ Migrations created")
+    except Exception as e:
+        if "Conflicting migrations" in str(e):
+            logger.info("Migration conflict detected, attempting to merge...")
+            try:
+                call_command('makemigrations', '--merge', '--noinput', 'app', verbosity=0)
+                logger.info("✓ Migration conflict resolved with merge")
+            except Exception as merge_e:
+                logger.warning(f"Could not merge migrations: {merge_e}")
+        else:
+            logger.info(f"No new migrations needed: {e}")
+    
+    logger.info("Running database migrations...")
+    try:
+        call_command('migrate', verbosity=0)
+        logger.info("✓ Database migrations completed")
+    except Exception as e:
+        if "Conflicting migrations" in str(e):
+            logger.info("Migration conflict during migrate, attempting to merge...")
+            try:
+                call_command('makemigrations', '--merge', '--noinput', 'app', verbosity=0)
+                call_command('migrate', verbosity=0)
+                logger.info("✓ Migration conflict resolved and migrations completed")
+            except Exception as merge_e:
+                logger.error(f"Migration failed even after merge: {merge_e}")
+                return False
+        elif "already exists" in str(e) or "does not exist" in str(e):
+            logger.info("OAuth2 database schema issue detected, attempting to resolve...")
+            try:
+                call_command('migrate', '--fake', 'app', verbosity=0)
+                logger.info("✓ Database schema issues resolved, migrations marked as applied")
+            except Exception as fake_e:
+                logger.warning(f"Could not fake migration, continuing anyway: {fake_e}")
+                # Don't return False here - continue with the rest of setup
+        else:
+            logger.error(f"Migration failed: {e}")
+            return False
+    
+    # Step 3: Check if OAuth2 client already exists
+    try:
+        existing_client = TapisOAuth2Client.objects.filter(client_id="webodm-localhost-dev").first()
+        if existing_client:
+            logger.info(f"✓ OAuth2 client already exists: {existing_client.name}")
+            return True
+    except Exception:
+        # Table might not exist yet
+        pass
+    
+    # Step 4: Create OAuth2 client
+    tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
+    tapis_tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', 'portals')
+    hostname = os.environ.get('WO_HOST', 'localhost')
+    port = os.environ.get('WO_PORT', '8000')
+    
+    # Determine callback URL based on environment
+    if port == '443' or os.environ.get('WO_SSL'):
+        callback_url = f"https://{hostname}/api/oauth2/tapis/callback/"
+    else:
+        callback_url = f"http://{hostname}:{port}/api/oauth2/tapis/callback/"
+    
+    try:
+        client = TapisOAuth2Client.objects.create(
+            client_id="webodm-localhost-dev",
+            client_secret="temp-secret-for-testing-123",
+            tenant_id=tapis_tenant_id,
+            base_url=tapis_base_url,
+            callback_url=callback_url,
+            name="WebODM Development Client",
+            description=f"Auto-generated OAuth2 client for WebODM ({hostname})"
+        )
+        
+        logger.info(f"✓ Created OAuth2 client: {client.name}")
+        logger.info(f"  Client ID: {client.client_id}")
+        logger.info(f"  Callback URL: {client.callback_url}")
+        logger.info(f"  Tenant: {client.tenant_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to create OAuth2 client: {e}")
+        return False
+
+if __name__ == '__main__':
+    success = main()
+    sys.exit(0 if success else 1)

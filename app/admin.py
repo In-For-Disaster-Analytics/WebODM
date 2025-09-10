@@ -21,6 +21,40 @@ from app.plugins import get_plugin_by_name, enable_plugin, disable_plugin, delet
     get_plugins_persistent_path, clear_plugins_cache, init_plugins
 from .models import Project, Task, Setting, Theme
 from django import forms
+
+# Tapis OAuth2 Admin Classes
+try:
+    from app.models import TapisOAuth2Client, TapisOAuth2Token, TapisOAuth2State
+
+    class TapisOAuth2ClientAdmin(admin.ModelAdmin):
+        list_display = ('client_id', 'name', 'tenant_id', 'base_url', 'created_at')
+        list_filter = ('tenant_id', 'created_at')
+        search_fields = ('client_id', 'name', 'tenant_id')
+        readonly_fields = ('created_at', 'updated_at')
+
+    class TapisOAuth2TokenAdmin(admin.ModelAdmin):
+        list_display = ('user', 'access_token_short', 'expires_at', 'created_at')
+        list_filter = ('expires_at', 'created_at')
+        search_fields = ('user__username', 'user__email')
+        readonly_fields = ('created_at', 'updated_at')
+        
+        def access_token_short(self, obj):
+            return obj.access_token[:20] + "..." if obj.access_token else ""
+        access_token_short.short_description = 'Access Token'
+
+    class TapisOAuth2StateAdmin(admin.ModelAdmin):
+        list_display = ('state', 'created_at')
+        list_filter = ('created_at',)
+        readonly_fields = ('created_at',)
+
+    # Register OAuth2 Admin
+    admin.site.register(TapisOAuth2Client, TapisOAuth2ClientAdmin)
+    admin.site.register(TapisOAuth2Token, TapisOAuth2TokenAdmin)
+    admin.site.register(TapisOAuth2State, TapisOAuth2StateAdmin)
+
+except ImportError:
+    # OAuth2 models not available during build
+    pass
 from codemirror2.widgets import CodeMirrorEditor
 from webodm import settings
 from django.core.files.uploadedfile import InMemoryUploadedFile
