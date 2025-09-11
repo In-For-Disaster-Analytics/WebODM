@@ -78,8 +78,8 @@ setup_storage() {
     sudo mkdir -p "$CORRAL_BASE/clusterodm/data"
     
     # Set permissions
-    sudo chown -R "$USER:$USER" "$CORRAL_BASE/webodm"
-    sudo chown -R "$USER:$USER" "$CORRAL_BASE/clusterodm"
+    sudo chown -R "$USER:$(id -gn)" "$CORRAL_BASE/webodm"
+    sudo chown -R "$USER:$(id -gn)" "$CORRAL_BASE/clusterodm"
     
     log_success "Storage directories created"
 }
