@@ -122,6 +122,12 @@ update_repos() {
 build_images() {
     log_info "Building Docker images..."
     
+    # Enable Docker BuildKit
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_DOCKER_CLI_BUILD=1
+    
+    log_info "Docker BuildKit enabled for advanced build features"
+    
     # Build ClusterODM
     if [[ -d "$REPO_BASE/ClusterODM" ]]; then
         cd "$REPO_BASE/ClusterODM"
@@ -257,22 +263,137 @@ setup_nodeodm() {
     fi
 }
 
+# Setup nginx reverse proxy
+setup_nginx() {
+    log_info "Setting up nginx reverse proxy..."
+    
+    # Install nginx if not present
+    if ! command -v nginx &> /dev/null; then
+        log_info "Installing nginx..."
+        sudo apt update
+        sudo apt install -y nginx
+    fi
+    
+    # Create nginx configuration
+    sudo tee /etc/nginx/sites-available/webodm << 'EOF'
+server {
+    listen 80;
+    server_name webodm.tacc.utexas.edu;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name webodm.tacc.utexas.edu;
+
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/wedodm.tacc.utexas.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/wedodm.tacc.utexas.edu/privkey.pem;
+    
+    # Modern SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    
+    # Security headers
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    
+    # Increase client max body size for large uploads
+    client_max_body_size 10G;
+    
+    # WebODM main application (root path)
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts for long uploads/processing
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+    
+    # ClusterODM API (accessible at /cluster/)
+    location /cluster/ {
+        proxy_pass http://localhost:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support for ClusterODM
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    
+    # ClusterODM info endpoint (for health checks)
+    location /cluster-info {
+        proxy_pass http://localhost:3000/info;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+    
+    # Enable the site
+    sudo ln -sf /etc/nginx/sites-available/webodm /etc/nginx/sites-enabled/
+    
+    # Remove default nginx site if it exists
+    sudo rm -f /etc/nginx/sites-enabled/default
+    
+    # Test nginx configuration
+    if sudo nginx -t; then
+        log_success "Nginx configuration is valid"
+        
+        # Restart nginx
+        sudo systemctl restart nginx
+        sudo systemctl enable nginx
+        
+        log_success "Nginx reverse proxy configured and started"
+    else
+        log_error "Nginx configuration is invalid"
+        exit 1
+    fi
+}
+
 # Configure firewall
 setup_firewall() {
     log_info "Configuring firewall..."
     
     # Check if ufw is available
     if command -v ufw &> /dev/null; then
-        sudo ufw allow "$WEBODM_PORT/tcp"
-        sudo ufw allow "$CLUSTERODM_PORT/tcp"
-        sudo ufw allow "$NODEODM_PORT/tcp"
+        # Allow HTTP and HTTPS
+        sudo ufw allow 80/tcp
+        sudo ufw allow 443/tcp
+        
+        # Allow SSH (important!)
+        sudo ufw allow 22/tcp
+        
+        # Optional: Allow direct access to services (for debugging)
+        # sudo ufw allow "$WEBODM_PORT/tcp"
+        # sudo ufw allow "$CLUSTERODM_PORT/tcp"
+        # sudo ufw allow "$NODEODM_PORT/tcp"
         
         # Enable firewall if not already enabled
         if ! sudo ufw status | grep -q "Status: active"; then
             sudo ufw --force enable
         fi
         
-        log_success "Firewall configured"
+        log_success "Firewall configured for HTTP/HTTPS"
     else
         log_warning "ufw not available, skipping firewall configuration"
     fi
@@ -426,6 +547,7 @@ main() {
     setup_clusterodm
     setup_webodm
     setup_nodeodm
+    setup_nginx
     setup_firewall
     setup_backup
     
