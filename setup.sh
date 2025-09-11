@@ -118,15 +118,46 @@ update_repos() {
     log_success "Repository updates completed"
 }
 
+# Install Docker Buildx if needed
+install_buildx() {
+    if ! docker buildx version &> /dev/null; then
+        log_info "Installing Docker Buildx..."
+        
+        # Get latest buildx release
+        BUILDX_VERSION=$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | grep 'tag_name' | cut -d '"' -f 4)
+        
+        # Create plugin directory
+        mkdir -p ~/.docker/cli-plugins
+        
+        # Download and install buildx
+        curl -L "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" -o ~/.docker/cli-plugins/docker-buildx
+        chmod +x ~/.docker/cli-plugins/docker-buildx
+        
+        log_success "Docker Buildx installed"
+    else
+        log_info "Docker Buildx is already available"
+    fi
+}
+
 # Build Docker images
 build_images() {
     log_info "Building Docker images..."
     
-    # Enable Docker BuildKit
-    export DOCKER_BUILDKIT=1
-    export COMPOSE_DOCKER_CLI_BUILD=1
+    # Try to install buildx if missing
+    install_buildx
     
-    log_info "Docker BuildKit enabled for advanced build features"
+    # Check if buildx is working
+    if docker buildx version &> /dev/null; then
+        # Enable Docker BuildKit
+        export DOCKER_BUILDKIT=1
+        export COMPOSE_DOCKER_CLI_BUILD=1
+        log_info "Docker BuildKit enabled with Buildx"
+    else
+        # Fallback to legacy build
+        log_warning "BuildKit/Buildx not available, using legacy Docker build"
+        unset DOCKER_BUILDKIT
+        unset COMPOSE_DOCKER_CLI_BUILD
+    fi
     
     # Build ClusterODM
     if [[ -d "$REPO_BASE/ClusterODM" ]]; then
