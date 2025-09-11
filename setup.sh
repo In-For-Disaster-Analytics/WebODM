@@ -97,12 +97,12 @@ update_repos() {
         fi
     fi
     
-    # Update ClusterODM-Tapis
-    if [[ -d "$REPO_BASE/ClusterODM-Tapis" ]]; then
-        cd "$REPO_BASE/ClusterODM-Tapis"
+    # Update ClusterODM
+    if [[ -d "$REPO_BASE/ClusterODM" ]]; then
+        cd "$REPO_BASE/ClusterODM"
         if [[ -d ".git" ]]; then
-            log_info "Pulling latest ClusterODM-Tapis..."
-            git pull origin master || git pull origin main || log_warning "Failed to pull ClusterODM-Tapis"
+            log_info "Pulling latest ClusterODM..."
+            git pull origin master || git pull origin main || log_warning "Failed to pull ClusterODM"
         fi
     fi
     
@@ -123,8 +123,8 @@ build_images() {
     log_info "Building Docker images..."
     
     # Build ClusterODM
-    if [[ -d "$REPO_BASE/ClusterODM-Tapis" ]]; then
-        cd "$REPO_BASE/ClusterODM-Tapis"
+    if [[ -d "$REPO_BASE/ClusterODM" ]]; then
+        cd "$REPO_BASE/ClusterODM"
         log_info "Building ClusterODM Docker image..."
         docker-compose build --no-cache
     fi
@@ -152,8 +152,8 @@ build_images() {
 setup_clusterodm() {
     log_info "Setting up ClusterODM..."
     
-    cd "$REPO_BASE/ClusterODM-Tapis" || {
-        log_error "ClusterODM-Tapis directory not found"
+    cd "$REPO_BASE/ClusterODM" || {
+        log_error "ClusterODM directory not found"
         exit 1
     }
     
@@ -392,7 +392,7 @@ full_update() {
     # Stop services first
     log_info "Stopping services for update..."
     cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
-    cd "$REPO_BASE/ClusterODM-Tapis" && docker-compose down || log_warning "ClusterODM stop failed"
+    cd "$REPO_BASE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
     
     # Update repositories and rebuild images
@@ -401,7 +401,7 @@ full_update() {
     
     # Restart services
     log_info "Restarting services after update..."
-    cd "$REPO_BASE/ClusterODM-Tapis" && docker-compose up -d
+    cd "$REPO_BASE/ClusterODM" && docker-compose up -d
     cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT"
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
     
@@ -449,13 +449,13 @@ case "${1:-}" in
     "stop")
         log_info "Stopping all services..."
         cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
-        cd "$REPO_BASE/ClusterODM-Tapis" && docker-compose down || log_warning "ClusterODM stop failed"
+        cd "$REPO_BASE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
         log_success "All services stopped"
         ;;
     "start")
         log_info "Starting all services..."
-        cd "$REPO_BASE/ClusterODM-Tapis" && docker-compose up -d
+        cd "$REPO_BASE/ClusterODM" && docker-compose up -d
         cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT"
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
         log_success "All services started"
