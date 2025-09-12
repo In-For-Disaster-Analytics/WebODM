@@ -147,16 +147,26 @@ def main():
         elif "already exists" in str(e) or "does not exist" in str(e):
             logger.info("OAuth2 database schema issue detected, attempting to resolve...")
             try:
+                # Reset database connection to clear aborted transaction
+                connection.close()
                 call_command('migrate', '--fake', 'app', verbosity=0)
                 logger.info("✓ Database schema issues resolved, migrations marked as applied")
             except Exception as fake_e:
                 logger.warning(f"Could not fake migration, continuing anyway: {fake_e}")
-                # Don't return False here - continue with the rest of setup
+                # Reset connection again before continuing
+                connection.close()
         else:
             logger.error(f"Migration failed: {e}")
             return False
     
-    # Step 3: Check if OAuth2 client already exists
+    # Step 3: Get environment variables first
+    tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
+    tapis_tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', 'portals')
+    tapis_client_id = os.environ.get('WO_TAPIS_CLIENT_ID', 'webodm.tacc.utexas.edu')
+    tapis_client_secret = os.environ.get('WO_TAPIS_CLIENT_SECRET')
+    callback_url = os.environ.get('WO_TAPIS_CALLBACK_URL', 'https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback/')
+    
+    # Step 4: Check if OAuth2 client already exists
     try:
         existing_client = TapisOAuth2Client.objects.filter(client_id=tapis_client_id).first()
         if existing_client:
@@ -166,18 +176,14 @@ def main():
         # Table might not exist yet
         pass
     
-    # Step 4: Create OAuth2 client
-    tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
-    tapis_tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', 'portals')
-    tapis_client_id = os.environ.get('WO_TAPIS_CLIENT_ID', 'webodm.tacc.utexas.edu')
-    tapis_client_secret = os.environ.get('WO_TAPIS_CLIENT_SECRET')
-    callback_url = os.environ.get('WO_TAPIS_CALLBACK_URL', 'https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback/')
-    
     if not tapis_client_secret:
         logger.error("WO_TAPIS_CLIENT_SECRET environment variable is required for production")
         return False
     
+    # Step 5: Create OAuth2 client
     try:
+        # Ensure clean database connection
+        connection.close()
         client = TapisOAuth2Client.objects.create(
             client_id=tapis_client_id,
             client_secret=tapis_client_secret,
