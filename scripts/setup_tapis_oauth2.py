@@ -158,7 +158,7 @@ def main():
     
     # Step 3: Check if OAuth2 client already exists
     try:
-        existing_client = TapisOAuth2Client.objects.filter(client_id="webodm.tacc.utexas.edu").first()
+        existing_client = TapisOAuth2Client.objects.filter(client_id=tapis_client_id).first()
         if existing_client:
             logger.info(f"✓ OAuth2 client already exists: {existing_client.name}")
             return True
@@ -169,8 +169,9 @@ def main():
     # Step 4: Create OAuth2 client
     tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
     tapis_tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', 'portals')
+    tapis_client_id = os.environ.get('WO_TAPIS_CLIENT_ID', 'webodm.tacc.utexas.edu')
     tapis_client_secret = os.environ.get('WO_TAPIS_CLIENT_SECRET')
-    callback_url = "https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback/"
+    callback_url = os.environ.get('WO_TAPIS_CALLBACK_URL', 'https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback/')
     
     if not tapis_client_secret:
         logger.error("WO_TAPIS_CLIENT_SECRET environment variable is required for production")
@@ -178,7 +179,7 @@ def main():
     
     try:
         client = TapisOAuth2Client.objects.create(
-            client_id="webodm.tacc.utexas.edu",
+            client_id=tapis_client_id,
             client_secret=tapis_client_secret,
             tenant_id=tapis_tenant_id,
             base_url=tapis_base_url,

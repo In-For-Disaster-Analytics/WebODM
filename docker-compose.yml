@@ -37,6 +37,10 @@ services:
       - WEB_CONCURRENCY
       - WO_TAPIS_BASE_URL
       - WO_TAPIS_TENANT_ID
+      - WO_TAPIS_CLIENT_ID
+      - WO_TAPIS_CLIENT_KEY
+      - WO_TAPIS_CLIENT_SECRET
+      - WO_TAPIS_CALLBACK_URL
     restart: unless-stopped
     oom_score_adj: 0
   broker:
@@ -60,5 +64,9 @@ services:
       - WEB_CONCURRENCY
       - WO_TAPIS_BASE_URL
       - WO_TAPIS_TENANT_ID
+      - WO_TAPIS_CLIENT_ID
+      - WO_TAPIS_CLIENT_KEY
+      - WO_TAPIS_CLIENT_SECRET
+      - WO_TAPIS_CALLBACK_URL
     restart: unless-stopped
     oom_score_adj: 250
