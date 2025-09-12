@@ -70,7 +70,7 @@ django.setup()
 
 from django.core.management import call_command
 from app.models import TapisOAuth2Client
-from django.db import connection
+from django.db import connection, transaction
 
 def main():
     """Setup Tapis OAuth2 integration"""
@@ -147,13 +147,18 @@ def main():
         elif "already exists" in str(e) or "does not exist" in str(e):
             logger.info("OAuth2 database schema issue detected, attempting to resolve...")
             try:
-                # Reset database connection to clear aborted transaction
+                # Rollback any pending transaction and start fresh
+                transaction.rollback()
                 connection.close()
                 call_command('migrate', '--fake', 'app', verbosity=0)
                 logger.info("✓ Database schema issues resolved, migrations marked as applied")
             except Exception as fake_e:
                 logger.warning(f"Could not fake migration, continuing anyway: {fake_e}")
-                # Reset connection again before continuing
+                # Ensure clean state before continuing
+                try:
+                    transaction.rollback()
+                except:
+                    pass
                 connection.close()
         else:
             logger.error(f"Migration failed: {e}")
@@ -182,17 +187,24 @@ def main():
     
     # Step 5: Create OAuth2 client
     try:
-        # Ensure clean database connection
+        # Ensure clean transaction state
+        try:
+            transaction.rollback()
+        except:
+            pass
         connection.close()
-        client = TapisOAuth2Client.objects.create(
-            client_id=tapis_client_id,
-            client_secret=tapis_client_secret,
-            tenant_id=tapis_tenant_id,
-            base_url=tapis_base_url,
-            callback_url=callback_url,
-            name="WEBodm.tacc.utexas.edu",
-            description="OAuth2 client for WebODM at TACC"
-        )
+        
+        # Use atomic transaction for client creation
+        with transaction.atomic():
+            client = TapisOAuth2Client.objects.create(
+                client_id=tapis_client_id,
+                client_secret=tapis_client_secret,
+                tenant_id=tapis_tenant_id,
+                base_url=tapis_base_url,
+                callback_url=callback_url,
+                name="WEBodm.tacc.utexas.edu",
+                description="OAuth2 client for WebODM at TACC"
+            )
         
         logger.info(f"✓ Created OAuth2 client: {client.name}")
         logger.info(f"  Client ID: {client.client_id}")
