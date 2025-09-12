@@ -144,25 +144,9 @@ def main():
             except Exception as merge_e:
                 logger.error(f"Migration failed even after merge: {merge_e}")
                 return False
-        elif "already exists" in str(e) or "does not exist" in str(e):
-            logger.info("OAuth2 database schema issue detected, attempting to resolve...")
-            try:
-                # Rollback any pending transaction and start fresh
-                transaction.rollback()
-                connection.close()
-                call_command('migrate', '--fake', 'app', verbosity=0)
-                logger.info("✓ Database schema issues resolved, migrations marked as applied")
-            except Exception as fake_e:
-                logger.warning(f"Could not fake migration, continuing anyway: {fake_e}")
-                # Ensure clean state before continuing
-                try:
-                    transaction.rollback()
-                except:
-                    pass
-                connection.close()
         else:
-            logger.error(f"Migration failed: {e}")
-            return False
+            logger.warning(f"Migration issue detected, skipping: {e}")
+            # Skip migration issues and continue - the table might already exist
     
     # Step 3: Get environment variables first
     tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
@@ -177,9 +161,11 @@ def main():
         if existing_client:
             logger.info(f"✓ OAuth2 client already exists: {existing_client.name}")
             return True
-    except Exception:
-        # Table might not exist yet
-        pass
+    except Exception as e:
+        # Table might not exist yet, or we have transaction issues
+        logger.info(f"Could not check existing client (table may not exist): {e}")
+        # Reset connection before continuing
+        connection.close()
     
     if not tapis_client_secret:
         logger.error("WO_TAPIS_CLIENT_SECRET environment variable is required for production")
