@@ -56,10 +56,11 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if corral exists
+    # Create corral base directory if it doesn't exist
     if [[ ! -d "$CORRAL_BASE" ]]; then
-        log_error "/corral directory does not exist"
-        exit 1
+        log_info "Creating /corral base directory..."
+        sudo mkdir -p "$CORRAL_BASE"
+        log_success "/corral directory created"
     fi
     
     log_success "Prerequisites check passed"
@@ -69,10 +70,13 @@ check_prerequisites() {
 setup_storage() {
     log_info "Setting up storage directories..."
     
+    # Create WebODM build directory (needed for Docker build context)
+    mkdir -p "$REPO_BASE/WebODM/db"
+    
     # Create WebODM storage
-    sudo mkdir -p "$CORRAL_BASE/webodm/media"
-    sudo mkdir -p "$CORRAL_BASE/webodm/db"
-    sudo mkdir -p "$CORRAL_BASE/webodm/backups"
+    mkdir -p "$CORRAL_BASE/webodm/media"
+    mkdir -p "$CORRAL_BASE/webodm/db"
+    mkdir -p "$CORRAL_BASE/webodm/backups"
     
     # Create ClusterODM storage
     sudo mkdir -p "$CORRAL_BASE/clusterodm/data"
