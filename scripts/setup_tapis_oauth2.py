@@ -135,6 +135,10 @@ def main():
         call_command('migrate', verbosity=0)
         logger.info("✓ Database migrations completed")
     except Exception as e:
+        logger.error(f"DETAILED MIGRATION ERROR: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Exception args: {e.args}")
+        
         if "Conflicting migrations" in str(e):
             logger.info("Migration conflict during migrate, attempting to merge...")
             try:
@@ -142,11 +146,20 @@ def main():
                 call_command('migrate', verbosity=0)
                 logger.info("✓ Migration conflict resolved and migrations completed")
             except Exception as merge_e:
-                logger.error(f"Migration failed even after merge: {merge_e}")
+                logger.error(f"DETAILED MERGE ERROR: {merge_e}")
                 return False
         else:
-            logger.warning(f"Migration issue detected, skipping: {e}")
-            # Skip migration issues and continue - the table might already exist
+            logger.warning(f"Migration issue detected, attempting to continue...")
+            # Check connection status
+            logger.info(f"Connection status: {connection.connection}")
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                logger.info("✓ Database connection is working")
+            except Exception as conn_e:
+                logger.error(f"Database connection error: {conn_e}")
+                connection.close()
+                logger.info("Reset database connection")
     
     # Step 3: Get environment variables first
     tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
@@ -199,7 +212,26 @@ def main():
         return True
         
     except Exception as e:
-        logger.error(f"Failed to create OAuth2 client: {e}")
+        logger.error(f"DETAILED CLIENT CREATION ERROR: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Exception args: {e.args}")
+        
+        # Check if it's a database connection issue
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            logger.info("Database connection is working during client creation")
+        except Exception as conn_e:
+            logger.error(f"Database connection error during client creation: {conn_e}")
+            
+        # Check if table exists
+        try:
+            from django.db import models
+            TapisOAuth2Client._meta.get_field('client_id')
+            logger.info("OAuth2 model seems to be properly defined")
+        except Exception as model_e:
+            logger.error(f"OAuth2 model issue: {model_e}")
+            
         return False
 
 if __name__ == '__main__':
