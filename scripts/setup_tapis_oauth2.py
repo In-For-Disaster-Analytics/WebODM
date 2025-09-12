@@ -158,7 +158,7 @@ def main():
     
     # Step 3: Check if OAuth2 client already exists
     try:
-        existing_client = TapisOAuth2Client.objects.filter(client_id="webodm-localhost-dev").first()
+        existing_client = TapisOAuth2Client.objects.filter(client_id="webodm.tacc.utexas.edu").first()
         if existing_client:
             logger.info(f"✓ OAuth2 client already exists: {existing_client.name}")
             return True
@@ -169,24 +169,22 @@ def main():
     # Step 4: Create OAuth2 client
     tapis_base_url = os.environ.get('WO_TAPIS_BASE_URL', 'https://portals.tapis.io')
     tapis_tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', 'portals')
-    hostname = os.environ.get('WO_HOST', 'localhost')
-    port = os.environ.get('WO_PORT', '8000')
+    tapis_client_secret = os.environ.get('WO_TAPIS_CLIENT_SECRET')
+    callback_url = "https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback/"
     
-    # Determine callback URL based on environment
-    if port == '443' or os.environ.get('WO_SSL'):
-        callback_url = f"https://{hostname}/api/oauth2/tapis/callback/"
-    else:
-        callback_url = f"http://{hostname}:{port}/api/oauth2/tapis/callback/"
+    if not tapis_client_secret:
+        logger.error("WO_TAPIS_CLIENT_SECRET environment variable is required for production")
+        return False
     
     try:
         client = TapisOAuth2Client.objects.create(
-            client_id="webodm-localhost-dev",
-            client_secret="temp-secret-for-testing-123",
+            client_id="webodm.tacc.utexas.edu",
+            client_secret=tapis_client_secret,
             tenant_id=tapis_tenant_id,
             base_url=tapis_base_url,
             callback_url=callback_url,
-            name="WebODM Development Client",
-            description=f"Auto-generated OAuth2 client for WebODM ({hostname})"
+            name="WEBodm.tacc.utexas.edu",
+            description="OAuth2 client for WebODM at TACC"
         )
         
         logger.info(f"✓ Created OAuth2 client: {client.name}")
