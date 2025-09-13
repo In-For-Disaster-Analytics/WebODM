@@ -8,7 +8,7 @@ set -e  # Exit on any error
 # Configuration
 HOSTNAME="webodm.tacc.utexas.edu"
 WEBODM_PORT="8000"
-CLUSTERODM_PORT="3000"
+CLUSTERODM_PORT="4000"
 NODEODM_PORT="3001"
 CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
@@ -407,9 +407,9 @@ server {
     listen 443 ssl http2;
     server_name clusterodm.tacc.utexas.edu;
 
-    # SSL Configuration
-    ssl_certificate /etc/letsencrypt/live/clusterodm.tacc.utexas.edu/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/clusterodm.tacc.utexas.edu/privkey.pem;
+    # SSL Configuration (using webodm certificate for both domains)
+    ssl_certificate /etc/letsencrypt/live/webodm.tacc.utexas.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/webodm.tacc.utexas.edu/privkey.pem;
     
     # Modern SSL configuration
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -428,7 +428,7 @@ server {
     
     # ClusterODM main application (root path)
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:$CLUSTERODM_PORT;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
