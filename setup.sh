@@ -232,13 +232,20 @@ EOF
     
     # Wait for ClusterODM to be ready
     log_info "Waiting for ClusterODM to be ready..."
+    clusterodm_ready=false
     for i in {1..30}; do
         if curl -s "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
             log_success "ClusterODM is ready"
+            clusterodm_ready=true
             break
         fi
         sleep 2
     done
+    
+    if [ "$clusterodm_ready" = false ]; then
+        log_error "ClusterODM failed to start within timeout"
+        return 1
+    fi
     
     log_success "ClusterODM setup completed"
 }
