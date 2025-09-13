@@ -38,7 +38,7 @@ existing_node = ProcessingNode.objects.filter(hostname=clusterodm_hostname, port
 
 if existing_node:
     print(f'ClusterODM node already exists: {existing_node.hostname}:{existing_node.port}')
-    print(f'Status: {\"Online\" if existing_node.online else \"Offline\"}')
+    print(f'Status: {\"Online\" if existing_node.is_online() else \"Offline\"}')
 else:
     # Create new ClusterODM processing node
     try:
@@ -53,8 +53,7 @@ else:
         print(f'✓ Created ClusterODM processing node: {node.hostname}:{node.port}')
         
         # Test the connection
-        node.update_node_info()
-        if node.online:
+        if node.update_node_info():
             print(f'✓ ClusterODM node is online and ready')
         else:
             print(f'⚠ ClusterODM node created but appears offline')
