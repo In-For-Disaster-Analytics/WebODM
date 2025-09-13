@@ -5,6 +5,13 @@
 
 set -e  # Exit on any error
 
+# Handle signals properly
+cleanup() {
+    log_error "Script interrupted"
+    exit 1
+}
+trap cleanup SIGINT SIGTERM
+
 # Configuration
 HOSTNAME="webodm.tacc.utexas.edu"
 WEBODM_PORT="8000"
@@ -270,13 +277,20 @@ setup_webodm() {
     
     # Wait for WebODM to be ready
     log_info "Waiting for WebODM to be ready..."
+    webodm_ready=false
     for i in {1..60}; do
         if curl -s "http://localhost:$WEBODM_PORT/api/" > /dev/null; then
             log_success "WebODM is ready"
+            webodm_ready=true
             break
         fi
         sleep 5
     done
+    
+    if [ "$webodm_ready" = false ]; then
+        log_error "WebODM failed to start within timeout"
+        return 1
+    fi
     
     # Setup Tapis OAuth2 integration
     log_info "Setting up Tapis OAuth2 integration..."
