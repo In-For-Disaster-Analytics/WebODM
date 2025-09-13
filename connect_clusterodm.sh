@@ -28,19 +28,15 @@ log_info "ClusterODM is responding, registering as processing node..."
 docker exec webapp python manage.py shell -c "
 from nodeodm.models import ProcessingNode
 
-# ClusterODM connection details (use Docker network IP and internal port)
-import subprocess
-result = subprocess.run(['docker', 'inspect', 'clusterodm'], capture_output=True, text=True)
-import json
-inspect_data = json.loads(result.stdout)
-clusterodm_ip = inspect_data[0]['NetworkSettings']['Networks']['webodm_default']['IPAddress']
+# ClusterODM connection details (use container name on Docker network)
+clusterodm_hostname = 'clusterodm'  # Docker container name
 clusterodm_port = 3000  # Internal port, not the mapped port
 node_name = 'ClusterODM (TACC)'
 
-print(f'Detected ClusterODM at {clusterodm_ip}:{clusterodm_port}')
+print(f'Connecting to ClusterODM at {clusterodm_hostname}:{clusterodm_port}')
 
 # Check if ClusterODM node already exists
-existing_node = ProcessingNode.objects.filter(hostname=clusterodm_ip, port=clusterodm_port).first()
+existing_node = ProcessingNode.objects.filter(hostname=clusterodm_hostname, port=clusterodm_port).first()
 
 if existing_node:
     print(f'ClusterODM node already exists: {existing_node.hostname}:{existing_node.port}')
@@ -49,7 +45,7 @@ else:
     # Create new ClusterODM processing node
     try:
         node = ProcessingNode.objects.create(
-            hostname=clusterodm_ip,
+            hostname=clusterodm_hostname,
             port=clusterodm_port,
             token='',
             label=node_name,
