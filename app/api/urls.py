@@ -83,11 +83,11 @@ if settings.ENABLE_USERS_API:
 
 # Tapis OAuth2 endpoints
 urlpatterns.extend([
-    url(r'^oauth2/tapis/authorize/(?P<client_id>[^/.]+)/$', TapisOAuth2AuthorizeView.as_view(), name='tapis_oauth2_authorize'),
+    url(r'^oauth2/tapis/authorize/(?P<client_id>[^/]+)/$', TapisOAuth2AuthorizeView.as_view(), name='tapis_oauth2_authorize'),
     url(r'^oauth2/tapis/callback/$', TapisOAuth2CallbackView.as_view(), name='tapis_oauth2_callback'),
-    url(r'^oauth2/tapis/refresh/(?P<client_id>[^/.]+)/$', TapisOAuth2TokenRefreshView.as_view(), name='tapis_oauth2_refresh'),
+    url(r'^oauth2/tapis/refresh/(?P<client_id>[^/]+)/$', TapisOAuth2TokenRefreshView.as_view(), name='tapis_oauth2_refresh'),
     url(r'^oauth2/tapis/status/$', TapisOAuth2StatusView.as_view(), name='tapis_oauth2_status'),
-    url(r'^oauth2/tapis/revoke/(?P<client_id>[^/.]+)/$', TapisOAuth2RevokeView.as_view(), name='tapis_oauth2_revoke'),
+    url(r'^oauth2/tapis/revoke/(?P<client_id>[^/]+)/$', TapisOAuth2RevokeView.as_view(), name='tapis_oauth2_revoke'),
     
     # Tapis preferences and discovery control
     url(r'^tapis-preferences/$', TapisUserPreferencesView.as_view(), name='tapis_user_preferences'),
