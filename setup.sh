@@ -285,6 +285,64 @@ setup_webodm() {
     log_success "WebODM setup completed"
 }
 
+# Connect ClusterODM to WebODM
+connect_clusterodm() {
+    log_info "Connecting ClusterODM to WebODM..."
+    
+    # Wait a bit for both services to be fully ready
+    sleep 10
+    
+    # Check if ClusterODM is responding
+    if ! curl -s "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
+        log_error "ClusterODM is not responding, cannot connect to WebODM"
+        return 1
+    fi
+    
+    # Add ClusterODM as a processing node in WebODM
+    log_info "Registering ClusterODM as a processing node..."
+    docker exec webapp python manage.py shell -c "
+from app.models import ProcessingNode
+import requests
+
+# ClusterODM connection details
+clusterodm_hostname = 'host.docker.internal'
+clusterodm_port = $CLUSTERODM_PORT
+node_name = 'ClusterODM (TACC)'
+
+# Check if ClusterODM node already exists
+existing_node = ProcessingNode.objects.filter(hostname=clusterodm_hostname, port=clusterodm_port).first()
+
+if existing_node:
+    print(f'ClusterODM node already exists: {existing_node.hostname}:{existing_node.port}')
+else:
+    # Create new ClusterODM processing node
+    try:
+        node = ProcessingNode.objects.create(
+            hostname=clusterodm_hostname,
+            port=clusterodm_port,
+            token='',
+            label=node_name,
+            engine='odm',
+            engine_version='',
+            max_images=0,
+            available=True
+        )
+        print(f'Created ClusterODM processing node: {node.hostname}:{node.port}')
+        
+        # Test the connection
+        node.update_node_info()
+        if node.online:
+            print(f'✓ ClusterODM node is online and ready')
+        else:
+            print(f'⚠ ClusterODM node created but appears offline')
+            
+    except Exception as e:
+        print(f'Error creating ClusterODM node: {e}')
+" || log_warning "Failed to register ClusterODM with WebODM"
+    
+    log_success "ClusterODM connection setup completed"
+}
+
 # Setup NodeODM-LS6 (optional)
 setup_nodeodm() {
     log_info "Setting up NodeODM-LS6..."
@@ -645,6 +703,7 @@ main() {
     build_images  # Build images during initial setup
     setup_clusterodm
     setup_webodm
+    connect_clusterodm
     setup_nodeodm
     setup_nginx
     setup_firewall

@@ -73,7 +73,7 @@ def setup_tapis_oauth2():
                     client_secret = TapisOAuth2Client.generate_client_secret()
                     print(f"Generated client secret: {client_secret}")
                 
-                callback_url = input("Enter callback URL (e.g., https://your-webodm.com/api/oauth2/tapis/callback/): ").strip()
+                callback_url = input("Enter callback URL (e.g., https://your-webodm.com/api/oauth2/tapis/callback): ").strip()
                 client_name = input("Enter descriptive name for this client: ").strip() or f"WebODM-{tapis_tenant_id}"
                 
                 # Create the client
@@ -109,7 +109,7 @@ Next steps:
 
 2. Register your WebODM callback URL with Tapis:
    - Use the Tapis API or dashboard
-   - Callback URL format: https://your-webodm-domain.com/api/oauth2/tapis/callback/
+   - Callback URL format: https://your-webodm-domain.com/api/oauth2/tapis/callback
 
 3. Test the authentication flow:
    - Visit /login/ 
@@ -123,7 +123,7 @@ Next steps:
 5. Available endpoints:
    - Login: /login/
    - OAuth2 authorize: /api/oauth2/tapis/authorize/<client_id>/
-   - OAuth2 callback: /api/oauth2/tapis/callback/
+   - OAuth2 callback: /api/oauth2/tapis/callback
    - Token status: /api/oauth2/tapis/status/
    - Token refresh: /api/oauth2/tapis/refresh/<client_id>/
    - Token revoke: /api/oauth2/tapis/revoke/<client_id>/
