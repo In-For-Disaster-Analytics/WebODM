@@ -48,9 +48,7 @@ else:
             token='',
             label=node_name,
             engine='odm',
-            engine_version='',
-            max_images=0,
-            available=True
+            max_images=0
         )
         print(f'✓ Created ClusterODM processing node: {node.hostname}:{node.port}')
         
