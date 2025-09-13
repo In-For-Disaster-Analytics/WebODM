@@ -26,7 +26,7 @@ log_info "ClusterODM is responding, registering as processing node..."
 
 # Add ClusterODM as a processing node in WebODM
 docker exec webapp python manage.py shell -c "
-from app.models import ProcessingNode
+from nodeodm.models import ProcessingNode
 
 # ClusterODM connection details
 clusterodm_hostname = 'host.docker.internal'
