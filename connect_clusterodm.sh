@@ -30,7 +30,7 @@ from nodeodm.models import ProcessingNode
 
 # ClusterODM connection details (use container name on Docker network)
 clusterodm_hostname = 'clusterodm'  # Docker container name
-clusterodm_port = 4000  # Internal port, not the mapped port
+clusterodm_port = 3000  # Internal port, not the mapped port
 node_name = 'ClusterODM (TACC)'
 
 print(f'Connecting to ClusterODM at {clusterodm_hostname}:{clusterodm_port}')
