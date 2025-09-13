@@ -264,9 +264,9 @@ setup_webodm() {
     # Make webodm.sh executable
     chmod +x webodm.sh
     
-    # Start WebODM
+    # Start WebODM without default NodeODM nodes
     log_info "Starting WebODM..."
-    ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT"
+    ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
     
     # Wait for WebODM to be ready
     log_info "Waiting for WebODM to be ready..."
@@ -622,7 +622,7 @@ full_update() {
     # Restart services
     log_info "Restarting services after update..."
     cd "$REPO_BASE/ClusterODM" && docker-compose up -d
-    cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT"
+    cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
     
     if health_check; then
@@ -677,7 +677,7 @@ case "${1:-}" in
     "start")
         log_info "Starting all services..."
         cd "$REPO_BASE/ClusterODM" && docker-compose up -d
-        cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT"
+        cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
         log_success "All services started"
         ;;
