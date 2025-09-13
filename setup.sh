@@ -73,6 +73,13 @@ setup_storage() {
     # Create WebODM build directory (needed for Docker build context)
     mkdir -p "$REPO_BASE/WebODM/db"
     
+    # Copy db build files if they don't exist
+    if [[ ! -f "$REPO_BASE/WebODM/db/Dockerfile" ]]; then
+        log_info "Database build files missing - this suggests the WebODM repository was not fully cloned"
+        log_error "Please ensure the WebODM repository is completely cloned with all files"
+        exit 1
+    fi
+    
     # Create WebODM storage
     mkdir -p "$CORRAL_BASE/webodm/media"
     mkdir -p "$CORRAL_BASE/webodm/db"
@@ -271,6 +278,10 @@ setup_webodm() {
         sleep 5
     done
     
+    # Setup Tapis OAuth2 integration
+    log_info "Setting up Tapis OAuth2 integration..."
+    ./webodm.sh exec webapp python setup_tapis_oauth2.py || log_warning "Tapis OAuth2 setup failed"
+    
     log_success "WebODM setup completed"
 }
 
@@ -309,7 +320,7 @@ setup_nginx() {
         sudo apt install -y nginx
     fi
     
-    # Create nginx configuration
+    # Create nginx configuration for WebODM
     sudo tee /etc/nginx/sites-available/webodm << 'EOF'
 server {
     listen 80;
@@ -384,8 +395,61 @@ server {
 }
 EOF
     
-    # Enable the site
+    # Create nginx configuration for ClusterODM
+    sudo tee /etc/nginx/sites-available/clusterodm << 'EOF'
+server {
+    listen 80;
+    server_name clusterodm.tacc.utexas.edu;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name clusterodm.tacc.utexas.edu;
+
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/clusterodm.tacc.utexas.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/clusterodm.tacc.utexas.edu/privkey.pem;
+    
+    # Modern SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    
+    # Security headers
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    
+    # Increase client max body size for large uploads
+    client_max_body_size 10G;
+    
+    # ClusterODM main application (root path)
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts for long uploads/processing
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}
+EOF
+    
+    # Enable both sites
     sudo ln -sf /etc/nginx/sites-available/webodm /etc/nginx/sites-enabled/
+    sudo ln -sf /etc/nginx/sites-available/clusterodm /etc/nginx/sites-enabled/
     
     # Remove default nginx site if it exists
     sudo rm -f /etc/nginx/sites-enabled/default
