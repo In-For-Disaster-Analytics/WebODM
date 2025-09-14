@@ -37,7 +37,9 @@ class JWTNodeWrapper:
         self.token = token
         self.timeout = timeout
         self.jwt_token = jwt_token
-        self.base_url = f"http://{hostname}:{port}"
+        # Use HTTPS for port 443, HTTP for others
+        protocol = "https" if port == 443 else "http"
+        self.base_url = f"{protocol}://{hostname}:{port}"
         
         # Create underlying Node instance for fallback operations
         self._node = Node(hostname, port, token, timeout)

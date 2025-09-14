@@ -127,7 +127,14 @@ class ProcessingNode(models.Model):
             from nodeodm.jwt_node_wrapper import JWTNodeWrapper
             return JWTNodeWrapper(self.hostname, self.port, self.token, timeout, jwt_token)
         else:
-            return Node(self.hostname, self.port, self.token, timeout)
+            # Handle HTTPS for port 443 (ClusterODM)
+            if self.port == 443:
+                # For HTTPS nodes, we need to create a custom Node with https scheme
+                # pyodm Node doesn't auto-detect HTTPS, so we use our JWT wrapper without JWT
+                from nodeodm.jwt_node_wrapper import JWTNodeWrapper
+                return JWTNodeWrapper(self.hostname, self.port, self.token, timeout, None)
+            else:
+                return Node(self.hostname, self.port, self.token, timeout)
 
     def get_available_options_json(self, pretty=False):
         """
