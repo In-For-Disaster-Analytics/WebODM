@@ -84,7 +84,7 @@ class ProcessingNode(models.Model):
             if hasattr(info, 'max_images') and isinstance(info.max_images, (int, float)):
                 self.max_images = max(0, info.max_images)
             elif hasattr(info, 'max_images') and info.max_images is None:
-                self.max_images = 0  # Unlimited for ClusterODM
+                self.max_images = None  # Unlimited for ClusterODM
             else:
                 self.max_images = None
 

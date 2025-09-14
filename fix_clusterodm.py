@@ -46,7 +46,7 @@ def fix_clusterodm_connection():
         if hasattr(info, 'max_images') and info.max_images is not None:
             node.max_images = info.max_images
         else:
-            node.max_images = 0  # Unlimited for ClusterODM
+            node.max_images = None  # Unlimited for ClusterODM
         
         node.save()
         
