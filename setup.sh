@@ -15,7 +15,7 @@ trap cleanup SIGINT SIGTERM
 # Configuration
 HOSTNAME="webodm.tacc.utexas.edu"
 WEBODM_PORT="8000"
-CLUSTERODM_PORT="4000"
+CLUSTERODM_PORT="3000"
 NODEODM_PORT="3001"
 CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
@@ -245,6 +245,7 @@ EOF
     
     log_info "Starting ClusterODM-Tapis with Node.js..."
     # Start ClusterODM-Tapis in background with nohup
+    # Use CLUSTERODM_PORT for consistency
     nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT > clusterodm-tapis.log 2>&1 &
     echo $! > clusterodm-tapis.pid
     
@@ -344,8 +345,8 @@ from app.models import ProcessingNode
 import requests
 
 # ClusterODM connection details
-clusterodm_hostname = 'host.docker.internal'
-clusterodm_port = $CLUSTERODM_PORT
+clusterodm_hostname = 'clusterodm.tacc.utexas.edu'
+clusterodm_port = 443
 node_name = 'ClusterODM (TACC)'
 
 # Check if ClusterODM node already exists
