@@ -115,12 +115,12 @@ update_repos() {
         fi
     fi
     
-    # Update ClusterODM
-    if [[ -d "$REPO_BASE/ClusterODM" ]]; then
-        cd "$REPO_BASE/ClusterODM"
+    # Update ClusterODM-Tapis
+    if [[ -d "/home/wmobley/ODM-SUITE/ClusterODM" ]]; then
+        cd "/home/wmobley/ODM-SUITE/ClusterODM"
         if [[ -d ".git" ]]; then
-            log_info "Pulling latest ClusterODM..."
-            git pull origin master || git pull origin main || log_warning "Failed to pull ClusterODM"
+            log_info "Pulling latest ClusterODM-Tapis..."
+            git pull origin master || git pull origin main || log_warning "Failed to pull ClusterODM-Tapis"
         fi
     fi
     
@@ -177,10 +177,10 @@ build_images() {
         unset COMPOSE_DOCKER_CLI_BUILD
     fi
     
-    # Build ClusterODM
-    if [[ -d "$REPO_BASE/ClusterODM" ]]; then
-        cd "$REPO_BASE/ClusterODM"
-        log_info "Building ClusterODM Docker image..."
+    # Build ClusterODM-Tapis
+    if [[ -d "/home/wmobley/ODM-SUITE/ClusterODM" ]]; then
+        cd "/home/wmobley/ODM-SUITE/ClusterODM"
+        log_info "Building ClusterODM-Tapis Docker image..."
         docker-compose build --no-cache
     fi
     
@@ -207,8 +207,8 @@ build_images() {
 setup_clusterodm() {
     log_info "Setting up ClusterODM..."
     
-    cd "$REPO_BASE/ClusterODM" || {
-        log_error "ClusterODM directory not found"
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" || {
+        log_error "ClusterODM-Tapis directory not found"
         exit 1
     }
     
@@ -691,7 +691,7 @@ full_update() {
     # Stop services first
     log_info "Stopping services for update..."
     cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
-    cd "$REPO_BASE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
     
     # Update repositories and rebuild images
@@ -700,7 +700,7 @@ full_update() {
     
     # Restart services
     log_info "Restarting services after update..."
-    cd "$REPO_BASE/ClusterODM" && docker-compose up -d
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" && docker-compose up -d
     cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
     
@@ -750,13 +750,13 @@ case "${1:-}" in
     "stop")
         log_info "Stopping all services..."
         cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
-        cd "$REPO_BASE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
+        cd "/home/wmobley/ODM-SUITE/ClusterODM" && docker-compose down || log_warning "ClusterODM stop failed"
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
         log_success "All services stopped"
         ;;
     "start")
         log_info "Starting all services..."
-        cd "$REPO_BASE/ClusterODM" && docker-compose up -d
+        cd "/home/wmobley/ODM-SUITE/ClusterODM" && docker-compose up -d
         cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
         log_success "All services started"
