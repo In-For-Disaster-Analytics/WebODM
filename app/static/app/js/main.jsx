@@ -5,6 +5,7 @@ import React from 'react';
 import $ from 'jquery';
 import PluginsAPI from './classes/plugins/API';
 import { setLocale } from './translations/functions';
+import './classes/TapisTokenManager';
 
 // Main is always executed first in the page
 

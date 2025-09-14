@@ -45,6 +45,25 @@
 
     {% block headers-before-bundle %}{% endblock %}
 
+    <!-- Tapis Token Information for Auto-logout -->
+    <script type="text/javascript">
+        {% if user.is_authenticated %}
+        {% load tapis_tags %}
+        {% get_user_tapis_token user as tapis_token %}
+        {% if tapis_token %}
+        window.tapisTokenInfo = {
+            expires_at: "{{ tapis_token.expires_at|date:'c' }}",
+            expires_in: {{ tapis_token.expires_at|timeuntil_seconds }},
+            has_token: true
+        };
+        {% else %}
+        window.tapisTokenInfo = { has_token: false };
+        {% endif %}
+        {% else %}
+        window.tapisTokenInfo = { has_token: false };
+        {% endif %}
+    </script>
+
     {% load render_bundle from webpack_loader %}
     {% render_bundle 'main' %}
 
