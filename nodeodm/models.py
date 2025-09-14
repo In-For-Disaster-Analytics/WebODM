@@ -80,15 +80,41 @@ class ProcessingNode(models.Model):
             self.api_version = info.version
             self.queue_count = info.task_queue_count
 
-            if isinstance(info.max_images, (int, float)):
+            # Handle max_images properly for both NodeODM and ClusterODM
+            if hasattr(info, 'max_images') and isinstance(info.max_images, (int, float)):
                 self.max_images = max(0, info.max_images)
+            elif hasattr(info, 'max_images') and info.max_images is None:
+                self.max_images = 0  # Unlimited for ClusterODM
             else:
                 self.max_images = None
-            self.engine_version = info.engine_version
-            self.engine = info.engine
 
-            options = list(map(lambda o: o.__dict__, api_client.options()))
-            self.available_options = options
+            # Handle engine info with ClusterODM compatibility
+            if hasattr(info, 'engine_version') and info.engine_version != '?':
+                self.engine_version = info.engine_version
+            elif 'clusterodm' in self.hostname.lower():
+                self.engine_version = 'ClusterODM'
+            else:
+                self.engine_version = info.engine_version if hasattr(info, 'engine_version') else None
+            
+            if hasattr(info, 'engine') and info.engine != '?':
+                self.engine = info.engine
+            elif 'clusterodm' in self.hostname.lower():
+                self.engine = 'odm'  # Keep as odm for compatibility
+            else:
+                self.engine = info.engine if hasattr(info, 'engine') else None
+
+            # Handle options - ClusterODM doesn't expose options the same way
+            try:
+                options = list(map(lambda o: o.__dict__, api_client.options()))
+                self.available_options = options
+            except:
+                # Fallback for ClusterODM or nodes that don't support options
+                if 'clusterodm' in self.hostname.lower():
+                    self.available_options = []
+                else:
+                    # Re-raise for other nodes to maintain existing behavior
+                    raise
+
             self.last_refreshed = timezone.now()
             self.save()
             return True
