@@ -57,6 +57,22 @@ check_prerequisites() {
         exit 1
     fi
     
+    # Check if Node.js is installed, install if not
+    if ! command -v node &> /dev/null; then
+        log_info "Node.js not found, installing..."
+        # Install Node.js via NodeSource repository
+        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        
+        # Verify installation
+        if ! command -v node &> /dev/null; then
+            log_error "Failed to install Node.js"
+            exit 1
+        else
+            log_success "Node.js $(node --version) installed successfully"
+        fi
+    fi
+    
     # Check if user is in docker group
     if ! groups | grep -q docker; then
         log_error "User is not in docker group. Please add user to docker group and re-login."
