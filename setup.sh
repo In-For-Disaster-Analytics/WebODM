@@ -234,6 +234,7 @@ setup_clusterodm() {
         cat > .env << EOF
 NODE_ENV=production
 PORT=$CLUSTERODM_PORT
+ADMIN_WEB_PORT=10000
 CLUSTER_HOST=$HOSTNAME
 CLUSTER_PORT=$CLUSTERODM_PORT
 DATA_DIR=$CORRAL_BASE/clusterodm/data
@@ -246,7 +247,7 @@ EOF
     log_info "Starting ClusterODM-Tapis with Node.js..."
     # Start ClusterODM-Tapis in background with nohup
     # Use CLUSTERODM_PORT for consistency
-    nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT > clusterodm-tapis.log 2>&1 &
+    nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
     echo $! > clusterodm-tapis.pid
     
     # Wait for ClusterODM to be ready
@@ -531,16 +532,39 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # WebSocket support
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        
+
         # Timeouts for long uploads/processing
         proxy_connect_timeout 60s;
         proxy_send_timeout 300s;
         proxy_read_timeout 300s;
+    }
+
+    # Admin web interface for webhook endpoints
+    location /admin {
+        proxy_pass http://localhost:10000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Webhook endpoints for node registration/de-registration
+    location /webhook {
+        proxy_pass http://localhost:10000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Shorter timeouts for webhook calls
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
     }
 }
 EOF
@@ -656,6 +680,13 @@ health_check() {
         log_error "ClusterODM is not responding"
         all_good=false
     fi
+
+    # Check ClusterODM admin web interface
+    if curl -s "http://localhost:10000/r/info" > /dev/null; then
+        log_success "ClusterODM admin interface is responding"
+    else
+        log_warning "ClusterODM admin interface is not responding (webhook registration may not work)"
+    fi
     
     # Check Docker containers
     local containers_down=$(docker ps -a --filter "status=exited" --format "table {{.Names}}" | grep -E "(webapp|db|broker|worker)" | wc -l)
@@ -728,7 +759,7 @@ full_update() {
     # Restart services
     log_info "Restarting services after update..."
     # Start ClusterODM-Tapis with Node.js
-    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT > clusterodm-tapis.log 2>&1 &
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
     echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
     cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
     [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
@@ -793,7 +824,7 @@ case "${1:-}" in
     "start")
         log_info "Starting all services..."
         # Start ClusterODM-Tapis with Node.js
-    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT > clusterodm-tapis.log 2>&1 &
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
     echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
         cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
