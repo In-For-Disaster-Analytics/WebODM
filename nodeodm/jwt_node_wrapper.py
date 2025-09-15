@@ -215,7 +215,7 @@ class JWTNodeWrapper:
                             params['token'] = self.jwt_token
                         if params:
                             output_endpoint += "?" + urlencode(params)
-                        
+
                         try:
                             output_response = requests.get(output_endpoint, timeout=self.timeout)
                             if output_response.status_code == 200:
@@ -224,6 +224,32 @@ class JWTNodeWrapper:
                                 return ""
                         except:
                             return ""
+
+                    def restart(self, options=None):
+                        # For task restart, we need to make a POST request to restart endpoint
+                        restart_endpoint = f"{self.base_url}/task/{self.uuid}/restart"
+                        params = {}
+                        if self.jwt_token:
+                            params['token'] = self.jwt_token
+                        if params:
+                            restart_endpoint += "?" + urlencode(params)
+
+                        data = {}
+                        if options:
+                            import json
+                            data['options'] = json.dumps([{'name': k, 'value': v} for k, v in options.items()])
+
+                        try:
+                            restart_response = requests.post(restart_endpoint, data=data, timeout=self.timeout)
+                            if restart_response.status_code == 200:
+                                return restart_response.json()
+                            else:
+                                error_msg = f"Failed to restart task: {restart_response.status_code} - {restart_response.text}"
+                                logger.error(error_msg)
+                                raise Exception(error_msg)
+                        except Exception as e:
+                            logger.error(f"Error restarting task with JWT token: {str(e)}")
+                            raise
                 
                 return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout)
             else:
