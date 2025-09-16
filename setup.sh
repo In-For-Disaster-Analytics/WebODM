@@ -204,7 +204,11 @@ build_images() {
     if [[ -d "$REPO_BASE/WebODM" ]]; then
         cd "$REPO_BASE/WebODM"
         log_info "Building WebODM Docker images..."
-        ./webodm.sh rebuild
+        # Use build instead of rebuild to avoid hanging on stop
+        timeout 1800 ./webodm.sh build || {
+            log_warning "WebODM build timed out or failed, trying alternative build method"
+            timeout 1800 docker-compose build --no-cache || log_error "WebODM build failed completely"
+        }
     fi
     
     # Build NodeODM-LS6
@@ -777,10 +781,16 @@ main() {
     log_info "Starting WebODM + ClusterODM automated setup..."
     log_info "Repository base: $REPO_BASE"
     log_info "Hostname: $HOSTNAME"
-    
+
     check_root
     check_prerequisites
     setup_storage
+
+    # Stop any existing services before building to avoid conflicts
+    log_info "Stopping any existing services before setup..."
+    cd "$REPO_BASE/WebODM" && ./webodm.sh stop 2>/dev/null || log_warning "No WebODM services to stop"
+    pkill -f "node index.js.*tapis-config.json" 2>/dev/null || log_warning "No ClusterODM process to stop"
+
     build_images  # Build images during initial setup
     setup_clusterodm
     setup_webodm
@@ -789,7 +799,7 @@ main() {
     setup_nginx
     setup_firewall
     setup_backup
-    
+
     if health_check; then
         log_success "Deployment completed successfully!"
         print_summary
@@ -824,8 +834,8 @@ case "${1:-}" in
     "start")
         log_info "Starting all services..."
         # Start ClusterODM-Tapis with Node.js
-    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
-    echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
+        cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
+        echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
         cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
         [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
         log_success "All services started"

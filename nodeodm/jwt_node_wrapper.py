@@ -187,7 +187,17 @@ class JWTNodeWrapper:
             
             if response.status_code == 200:
                 task_info_data = response.json()
-                
+
+                # Check if response contains an error instead of task data
+                if 'error' in task_info_data:
+                    logger.error(f"ClusterODM returned error: {task_info_data['error']}")
+                    raise NodeServerError(f"ClusterODM error: {task_info_data['error']}")
+
+                # Ensure required fields exist to prevent KeyError in TaskInfo
+                if 'uuid' not in task_info_data:
+                    logger.error(f"ClusterODM response missing required 'uuid' field")
+                    raise NodeServerError("ClusterODM response missing required 'uuid' field")
+
                 # Ensure 'options' field exists to prevent KeyError
                 if 'options' not in task_info_data:
                     logger.warning(f"ClusterODM response missing 'options' field, adding empty options")
@@ -210,20 +220,42 @@ class JWTNodeWrapper:
                     def output(self, line=0):
                         # For console output, we need to make another request
                         output_endpoint = f"{self.base_url}/task/{self.uuid}/output"
-                        params = {}
+                        params = {'line': line}
                         if self.jwt_token:
                             params['token'] = self.jwt_token
                         if params:
                             output_endpoint += "?" + urlencode(params)
 
+                        logger.info(f"=== HTTP REQUEST DETAILS (Task Output) ===")
+                        logger.info(f"Method: GET")
+                        logger.info(f"URL: {output_endpoint}")
+                        logger.info(f"Query Parameters: {params}")
+                        logger.info(f"==========================================")
+
                         try:
                             output_response = requests.get(output_endpoint, timeout=self.timeout)
+
+                            logger.info(f"=== HTTP RESPONSE DETAILS (Task Output) ===")
+                            logger.info(f"Status Code: {output_response.status_code}")
+                            logger.info(f"Response Headers: {dict(output_response.headers)}")
+                            logger.info(f"Response Content Length: {len(output_response.content)} bytes")
+
                             if output_response.status_code == 200:
-                                return output_response.text
+                                output_text = output_response.text
+                                logger.info(f"Output Text Preview: {output_text[:500]}...")
+                                logger.info(f"============================================")
+                                return output_text
                             else:
-                                return ""
-                        except:
-                            return ""
+                                error_text = output_response.text
+                                logger.error(f"Failed to get task output. Status: {output_response.status_code}")
+                                logger.error(f"Error Response: {error_text}")
+                                logger.info(f"============================================")
+                                # Return error info instead of empty string for debugging
+                                return f"Error retrieving output (Status {output_response.status_code}): {error_text}"
+                        except Exception as e:
+                            logger.error(f"Exception while retrieving task output: {str(e)}")
+                            logger.info(f"============================================")
+                            return f"Exception retrieving output: {str(e)}"
 
                     def restart(self, options=None):
                         # For task restart, we need to make a POST request to restart endpoint
