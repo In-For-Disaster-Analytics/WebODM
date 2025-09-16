@@ -252,6 +252,9 @@ class JWTNodeWrapper:
                         params = {'line': line}
                         if self.jwt_token:
                             params['token'] = self.jwt_token
+                        else:
+                            logger.warning(f"No JWT token available for task {self.uuid} output request")
+
                         if params:
                             output_endpoint += "?" + urlencode(params)
 
@@ -276,15 +279,33 @@ class JWTNodeWrapper:
                                 return output_text
                             else:
                                 error_text = output_response.text
-                                logger.error(f"Failed to get task output. Status: {output_response.status_code}")
-                                logger.error(f"Error Response: {error_text}")
+                                logger.warning(f"Failed to get task output. Status: {output_response.status_code}")
+                                logger.warning(f"Error Response: {error_text}")
                                 logger.info(f"============================================")
-                                # Return error info instead of empty string for debugging
-                                return f"Error retrieving output (Status {output_response.status_code}): {error_text}"
-                        except Exception as e:
-                            logger.error(f"Exception while retrieving task output: {str(e)}")
+
+                                # Check if this is a "task not found" error
+                                if ("no task table entry" in error_text.lower() or
+                                    "invalid route" in error_text.lower() or
+                                    output_response.status_code == 404):
+                                    return f"Task not found on ClusterODM (UUID: {self.uuid})\n\nThis task may have been processed on a different node or removed.\nNo console output is available."
+                                elif output_response.status_code == 401 or output_response.status_code == 403:
+                                    return f"Authentication failed when retrieving output for task {self.uuid}\n\nThis may indicate a JWT token issue.\nError: {error_text}"
+                                else:
+                                    # For other errors, provide helpful debugging info
+                                    return f"Unable to retrieve output for task {self.uuid}\n\nHTTP Status: {output_response.status_code}\nError: {error_text}\n\nThis task may be in an error state or not accessible."
+
+                        except requests.exceptions.ConnectionError as e:
+                            logger.warning(f"Connection error while retrieving task output: {str(e)}")
                             logger.info(f"============================================")
-                            return f"Exception retrieving output: {str(e)}"
+                            return f"Unable to connect to ClusterODM for task output (UUID: {self.uuid})\n\nConnection Error: {str(e)}\n\nClusterODM may be unreachable or the task may not exist."
+                        except requests.exceptions.Timeout as e:
+                            logger.warning(f"Timeout while retrieving task output: {str(e)}")
+                            logger.info(f"============================================")
+                            return f"Timeout retrieving output for task {self.uuid}\n\nThe request timed out after {self.timeout} seconds.\nClusterODM may be slow or unresponsive."
+                        except Exception as e:
+                            logger.warning(f"Exception while retrieving task output: {str(e)}")
+                            logger.info(f"============================================")
+                            return f"Error retrieving output for task {self.uuid}\n\nException: {str(e)}\n\nPlease check the logs for more details."
 
                     def restart(self, options=None):
                         # For task restart, we need to make a POST request to restart endpoint
@@ -348,18 +369,32 @@ class JWTNodeWrapper:
                                     return {"success": True, "message": remove_response.text}
                             else:
                                 error_text = remove_response.text
-                                logger.error(f"Failed to remove task. Status: {remove_response.status_code}")
-                                logger.error(f"Error Response: {error_text}")
-                                logger.info(f"============================================")
-                                raise Exception(f"Failed to remove task: HTTP {remove_response.status_code} - {error_text}")
+                                logger.warning(f"Failed to remove task from ClusterODM. Status: {remove_response.status_code}")
+                                logger.warning(f"Error Response: {error_text}")
+
+                                # Check if this is a "task not found" error - if so, consider it successful
+                                # since the task doesn't exist on ClusterODM anyway
+                                if ("no task table entry" in error_text.lower() or
+                                    "invalid route" in error_text.lower() or
+                                    remove_response.status_code == 404):
+                                    logger.info(f"Task {self.uuid} not found on ClusterODM, considering removal successful")
+                                    logger.info(f"============================================")
+                                    return {"success": True, "message": "Task not found on ClusterODM, removed from WebODM"}
+                                else:
+                                    # For other errors, still log but don't fail the removal
+                                    logger.warning(f"ClusterODM removal failed but continuing with WebODM cleanup")
+                                    logger.info(f"============================================")
+                                    return {"success": True, "message": f"WebODM cleanup completed (ClusterODM error: {error_text})"}
                         except requests.exceptions.RequestException as e:
-                            logger.error(f"Request error when removing task: {str(e)}")
+                            logger.warning(f"Request error when removing task from ClusterODM: {str(e)}")
+                            logger.warning(f"ClusterODM may be unreachable, continuing with WebODM cleanup")
                             logger.info(f"============================================")
-                            raise Exception(f"Request failed when removing task: {str(e)}")
+                            return {"success": True, "message": f"WebODM cleanup completed (ClusterODM unreachable: {str(e)})"}
                         except Exception as e:
-                            logger.error(f"Exception while removing task: {str(e)}")
+                            logger.warning(f"Exception while removing task from ClusterODM: {str(e)}")
+                            logger.warning(f"Continuing with WebODM cleanup despite ClusterODM error")
                             logger.info(f"============================================")
-                            raise
+                            return {"success": True, "message": f"WebODM cleanup completed (ClusterODM error: {str(e)})"}
                 
                 return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout)
             else:
