@@ -6,6 +6,7 @@ for ClusterODM integration with Tapis authentication.
 """
 
 import logging
+import os
 from pyodm import Node
 from pyodm.types import TaskStatus
 from urllib.parse import urlencode
@@ -79,7 +80,14 @@ class JWTNodeWrapper:
             files = []
             for image_path in images:
                 logger.info(f"Processing image path: {image_path}")
-                files.append(('images', open(image_path, 'rb')))
+                try:
+                    if not os.path.exists(image_path):
+                        logger.error(f"Image file does not exist: {image_path}")
+                        raise FileNotFoundError(f"Image file does not exist: {image_path}")
+                    files.append(('images', open(image_path, 'rb')))
+                except Exception as e:
+                    logger.error(f"Failed to open image file {image_path}: {str(e)}")
+                    raise
             
             data = {}
             if name:
@@ -103,7 +111,17 @@ class JWTNodeWrapper:
             logger.info(f"==============================")
             
             # Make the request
-            response = requests.post(endpoint, files=files, data=data, timeout=self.timeout)
+            try:
+                response = requests.post(endpoint, files=files, data=data, timeout=self.timeout)
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Connection error when creating task: {str(e)}")
+                raise Exception(f"Failed to connect to ClusterODM: {str(e)}")
+            except requests.exceptions.Timeout as e:
+                logger.error(f"Timeout error when creating task: {str(e)}")
+                raise Exception(f"Request to ClusterODM timed out: {str(e)}")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error when creating task: {str(e)}")
+                raise Exception(f"Request failed: {str(e)}")
             
             # Log detailed response information
             logger.info(f"=== HTTP RESPONSE DETAILS ===")
@@ -125,19 +143,30 @@ class JWTNodeWrapper:
                 file_handle.close()
             
             if response.status_code == 200:
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError as e:
+                    logger.error(f"Invalid JSON response: {response.text}")
+                    raise Exception(f"Invalid JSON response from ClusterODM: {str(e)}")
+
                 if 'uuid' in result:
                     # Create a task-like object that has the uuid attribute
                     class TaskResult:
                         def __init__(self, uuid):
                             self.uuid = uuid
-                    
+
                     logger.info(f"Successfully created task with UUID: {result['uuid']}")
                     return TaskResult(result['uuid'])
+                elif 'error' in result:
+                    error_msg = f"ClusterODM returned error: {result['error']}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
                 else:
-                    raise Exception(f"No UUID in response: {result}")
+                    error_msg = f"No UUID in response: {result}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
             else:
-                error_msg = f"Failed to create task: {response.status_code} - {response.text}"
+                error_msg = f"Failed to create task: HTTP {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
                 
@@ -281,6 +310,55 @@ class JWTNodeWrapper:
                                 raise Exception(error_msg)
                         except Exception as e:
                             logger.error(f"Error restarting task with JWT token: {str(e)}")
+                            raise
+
+                    def remove(self):
+                        # For task removal, we need to make a POST request to remove endpoint
+                        remove_endpoint = f"{self.base_url}/task/{self.uuid}/remove"
+                        params = {}
+                        if self.jwt_token:
+                            params['token'] = self.jwt_token
+                        if params:
+                            remove_endpoint += "?" + urlencode(params)
+
+                        logger.info(f"=== HTTP REQUEST DETAILS (Task Remove) ===")
+                        logger.info(f"Method: POST")
+                        logger.info(f"URL: {remove_endpoint}")
+                        logger.info(f"Query Parameters: {params}")
+                        logger.info(f"==========================================")
+
+                        try:
+                            remove_response = requests.post(remove_endpoint, timeout=self.timeout)
+
+                            logger.info(f"=== HTTP RESPONSE DETAILS (Task Remove) ===")
+                            logger.info(f"Status Code: {remove_response.status_code}")
+                            logger.info(f"Response Headers: {dict(remove_response.headers)}")
+                            logger.info(f"Response Content Length: {len(remove_response.content)} bytes")
+
+                            if remove_response.status_code == 200:
+                                try:
+                                    result = remove_response.json()
+                                    logger.info(f"Task removal response: {result}")
+                                    logger.info(f"============================================")
+                                    return result
+                                except ValueError:
+                                    # Some removal endpoints may return plain text instead of JSON
+                                    logger.info(f"Task removal response (text): {remove_response.text}")
+                                    logger.info(f"============================================")
+                                    return {"success": True, "message": remove_response.text}
+                            else:
+                                error_text = remove_response.text
+                                logger.error(f"Failed to remove task. Status: {remove_response.status_code}")
+                                logger.error(f"Error Response: {error_text}")
+                                logger.info(f"============================================")
+                                raise Exception(f"Failed to remove task: HTTP {remove_response.status_code} - {error_text}")
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"Request error when removing task: {str(e)}")
+                            logger.info(f"============================================")
+                            raise Exception(f"Request failed when removing task: {str(e)}")
+                        except Exception as e:
+                            logger.error(f"Exception while removing task: {str(e)}")
+                            logger.info(f"============================================")
                             raise
                 
                 return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout)
