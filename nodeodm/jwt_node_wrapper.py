@@ -15,6 +15,11 @@ import requests
 logger = logging.getLogger('app.logger')
 
 
+class JWTTokenExpiredError(Exception):
+    """Custom exception for JWT token expiration that can be handled by the frontend."""
+    pass
+
+
 class JWTNodeWrapper:
     """
     A wrapper around pyodm Node that adds JWT token support for ClusterODM.
@@ -141,7 +146,23 @@ class JWTNodeWrapper:
             # Close file handles
             for _, file_handle in files:
                 file_handle.close()
-            
+
+            # Check for authentication errors first
+            if response.status_code == 401:
+                try:
+                    error_data = response.json()
+                    if 'error' in error_data and 'Authentication expired' in error_data.get('message', ''):
+                        # This is a token expiration error - trigger frontend handling
+                        logger.error(f"JWT token expired for ClusterODM task creation")
+                        raise JWTTokenExpiredError("Your Tapis session has expired. Please refresh the page to re-authenticate.")
+                except ValueError:
+                    # Not JSON response, treat as generic auth error
+                    pass
+
+                error_msg = f"Authentication failed: HTTP 401 - {response.text}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
             if response.status_code == 200:
                 try:
                     result = response.json()

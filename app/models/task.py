@@ -750,10 +750,18 @@ class Task(models.Model):
                     # This takes a while
                     try:
                         uuid = self.processing_node.process_new_task(images, self.name, self.options, callback, jwt_token=jwt_token)
-                    except NodeConnectionError as e:
-                        # If we can't create a task because the node is offline
-                        # We want to fail instead of trying again
-                        raise NodeServerError(gettext('Connection error: %(error)s') % {'error': str(e)})
+                    except Exception as e:
+                        # Check if this is a JWT token expiration error
+                        if 'JWTTokenExpiredError' in str(type(e).__name__) or 'session has expired' in str(e).lower():
+                            logger.error(f"JWT token expired for task {self.id}: {str(e)}")
+                            raise NodeServerError(gettext('Authentication expired: Your Tapis session has expired. Please refresh the page to re-authenticate.'))
+                        elif isinstance(e, NodeConnectionError):
+                            # If we can't create a task because the node is offline
+                            # We want to fail instead of trying again
+                            raise NodeServerError(gettext('Connection error: %(error)s') % {'error': str(e)})
+                        else:
+                            # Re-raise other exceptions
+                            raise
 
                     # Refresh task object before committing change
                     self.refresh_from_db()
@@ -795,7 +803,17 @@ class Task(models.Model):
                         if self.uuid:
                             try:
                                 jwt_token = self._get_tapis_jwt_token()
-                                info = self.processing_node.get_task_info(self.uuid, jwt_token=jwt_token)
+                                try:
+                                    info = self.processing_node.get_task_info(self.uuid, jwt_token=jwt_token)
+                                except Exception as e:
+                                    # Check if this is a JWT token expiration error
+                                    if 'JWTTokenExpiredError' in str(type(e).__name__) or 'session has expired' in str(e).lower():
+                                        logger.error(f"JWT token expired for task {self.id} monitoring: {str(e)}")
+                                        self.set_failure(gettext('Authentication expired: Your Tapis session has expired. Please refresh the page to re-authenticate.'))
+                                        return
+                                    else:
+                                        # Re-raise other exceptions
+                                        raise
                                 uuid_still_exists = info.uuid == self.uuid
                             except OdmError:
                                 pass
