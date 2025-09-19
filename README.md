@@ -18,7 +18,6 @@ A user-friendly, commercial grade software for drone image processing. Generate 
       + [Enable IPv6](#enable-ipv6)
       + [Where Are My Files Stored?](#where-are-my-files-stored)
       + [Common Troubleshooting](#common-troubleshooting)
-         - [Images Missing from Lightning Assets](#images-missing-from-lightning-assets)
       + [Backup and Restore](#backup-and-restore)
       + [Reset Password](#reset-password)
       + [Manage Plugins](#manage-plugins)
@@ -46,7 +45,7 @@ A user-friendly, commercial grade software for drone image processing. Generate 
 
 Windows and macOS users can purchase an automated [installer](https://www.opendronemap.org/webodm/download#installer), which makes the installation process easier.
 
-There's also a cloud-hosted version of WebODM available from [webodm.net](https://webodm.net).
+This WebODM instance is configured for high-performance computing via TACC's Lonestar6 supercomputer.
 
 ## Recommended Machine Specs
 
@@ -59,7 +58,7 @@ Don't expect to process more than a few hundred images with these specifications
 
 WebODM runs best on Linux, but works well on Windows and Mac too. If you are technically inclined, you can get WebODM to run natively on all three platforms.
 
-WebODM by itself is just a user interface (see [below](#odm-nodeodm-webodm-what)) and does not require many resources. WebODM can be loaded on a machine with just 1 or 2 GB of RAM and work fine without NodeODM. You can then use a processing service such as the [lightning network](https://webodm.net) or run NodeODM on a separate, more powerful machine.
+WebODM by itself is just a user interface (see [below](#odm-nodeodm-webodm-what)) and does not require many resources. WebODM can be loaded on a machine with just 1 or 2 GB of RAM and work fine without NodeODM. You can then use ClusterODM-Tapis for HPC processing or run NodeODM on a separate, more powerful machine.
 
 ## Manual installation (Docker)
 To install WebODM manually on your machine with docker:
@@ -122,6 +121,25 @@ Adding more processing nodes will allow you to run multiple jobs in parallel.
 
 You can also setup a [ClusterODM](https://github.com/OpenDroneMap/ClusterODM) node to run a single task across multiple machines with [distributed split-merge](https://docs.opendronemap.org/large/?highlight=distributed#getting-started-with-distributed-split-merge) and process dozen of thousands of images more quickly, with less memory.
 
+#### High-Performance Computing Integration (TACC)
+
+This WebODM instance is configured for distributed processing using TACC's Lonestar6 supercomputer via ClusterODM-Tapis:
+
+- **Automatic Scaling**: Datasets of 50+ images automatically trigger distributed processing
+- **Split-Merge Processing**: Large datasets are intelligently split across multiple 16-core VMs
+- **Resource Optimization**: Tapis automatically selects appropriate compute resources based on dataset size:
+  - ≤50 images: 1×16-core VM, 30GB RAM
+  - ≤150 images: 1×16-core VM, 30GB RAM
+  - ≤300 images: 2×16-core VMs, 30GB RAM each
+  - ≤600 images: 3×16-core VMs, 30GB RAM each
+  - ≤1000 images: 4×16-core VMs, 30GB RAM each
+  - ≤1500 images: 6×16-core VMs, 30GB RAM each
+
+**Split-Merge Options**: Advanced users can control distributed processing via task options:
+- `split`: Number of images per submodel (auto-determined by default)
+- `split-overlap`: Overlap between submodels in meters (default: 150m)
+- `sm-cluster`: Cluster coordinator URL (automatically set)
+
 If you don't need the default "node-odm-1" node, simply pass `--default-nodes 0` flag when starting WebODM:
 
 `./webodm.sh restart --default-nodes 0`.
@@ -129,16 +147,17 @@ If you don't need the default "node-odm-1" node, simply pass `--default-nodes 0`
 Then from the web interface simply manually remove the "node-odm-1" node.
 
 ## Distributed Installation Using NAS (Qnap)
-If you use lightning or another processor node the requirements for WebODM are low enough for it to run on a fairly low power device such as a NAS. Testing has been done on a Qnap-TS264 with 32Gb of RAM (Celeron  N5095 processor)
-To install WebODM on a Qnap NAS:-
+When using ClusterODM-Tapis for HPC processing, the requirements for WebODM are low enough for it to run on a fairly low power device such as a NAS. Testing has been done on a Qnap-TS264 with 32Gb of RAM (Celeron N5095 processor)
+
+To install WebODM on a Qnap NAS:
 1) Enable ssh access to the NAS in control panel
 2) Install git. This might be easily achieved using the [qgit qkpg](https://www.myqnap.org/product/qgit/)
-3) Now follow the “Installation with Docker” instructions above.
+3) Now follow the "Installation with Docker" instructions above.
 4) A new "webodm" application should appear in container station along with four individual containers for the app.
 5) Webodm should be available at port 8000 of the NAS.
-6) Setup a lightning account online and configure it within "processing nodes". It's also possible to setup a more powerful computer to run processing tasks instead of lightning.
-   
-This method of working may be useful if using the WebODM Lightning PAYG model as it offers somewhere to host your models outwith the three day window offered as part of PAYG
+6) Connect ClusterODM-Tapis as a processing node to leverage TACC supercomputing resources.
+
+This method is useful for the TACC HPC integration as it provides a lightweight WebODM frontend while all heavy processing occurs on Lonestar6.
 
 ### Enable MicMac
 
@@ -215,23 +234,6 @@ Cannot start WebODM via `./webodm.sh start`, error messages are different at eac
 While running WebODM with Docker Toolbox (VirtualBox) you cannot access WebODM from another computer in the same network. | As Administrator, run `cmd.exe` and then type `"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" controlvm "default" natpf1 "rule-name,tcp,,8000,,8000"`
 On Windows, the storage space shown on the WebODM diagnostic page is not the same as what is actually set in Docker's settings. | From Hyper-V Manager, right-click “DockerDesktopVM”, go to Edit Disk, then choose to expand the disk and match the maximum size to the settings specified in the docker settings. Upon making the changes, restart docker.
 On Linux or WSL, Warning: `GPU use was requested, but no GPU has been found` | Run `nvidia-smi` (natively) or `docker run --rm --gpus all nvidia/cuda:11.2.2-devel-ubuntu20.04 nvidia-smi` (docker) to check with [NVIDIA driver](https://www.nvidia.com/drivers/unix/) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-
-#### Images Missing from Lightning Assets
-
-When you use Lightning to process your task, you will need to download all assets to your local instance of WebODM. The all assets zip does *not* contain the images which were used to create the orthomosaic. This means that, although you can visualise the cameras layer in your local WebODM, when you click on a particular camera icon the image will not be shown.
-
-The fix if you are using WebODM with Docker is as follows (instructions are for MacOS host):
-
-1. Ensure that you have a directory which contains all of the images for the task and only the images;
-2. Open Docker Desktop and navigate to Containers. Identify your WebODM instance and navigate to the container that is named `worker`. You will need the Container ID. This is a hash which is listed under the container name. Click to copy the Container ID using the copy icon next to it.
-3. Open Terminal and enter `docker cp <sourcedirectory>/. <dockercontainerID>:/webodm/app/media/project/<projectID>/task/<taskID>`. Paste the Container ID to replace the location titled `<dockercontainerID>`. Enter the full directory path for your images to replace `<sourcedirectory>`;
-4. Go back to Docker Desktop and navigate to Volumes in the side bar. Click on the volume called `webodm_appmedia`, click on `project`, identify the correct project and click on it, click on `task` and identify the correct task.
-5. From Docker Desktop substitute the correct `<projectID>` and `<taskID>` into the command in Terminal;
-6. Execute the newly edited command in Terminal. You will see a series of progress messages and your images will be copied to Docker;
-7. Navigate to your project in your local instance of WebODM;
-8. Open the Map and turn on the Cameras layer (top left);
-9. Click on a Camera icon and the relevant image will be shown
-
 
 Have you had other issues? Please [report them](https://github.com/OpenDroneMap/WebODM/issues/new) so that we can include them in this document.
 
