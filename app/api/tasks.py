@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shutil
@@ -38,6 +39,8 @@ from django.utils.translation import gettext_lazy as _
 from .fields import PolygonGeometryField
 from app.geoutils import geom_transform_wkt_bbox
 from webodm import settings
+
+logger = logging.getLogger(__name__)
 
 def flatten_files(request_files):
     # MultiValueDict in, flat array of files out
@@ -173,6 +176,8 @@ class TaskViewSet(viewsets.ViewSet):
         except (ObjectDoesNotExist, ValidationError):
             raise exceptions.NotFound()
 
+        logger.info("Task output requested for project=%s task=%s with params %s", project_pk, pk, dict(request.query_params))
+
         try:
             line_num = max(0, int(request.query_params.get('line', 0)))
             limit = int(request.query_params.get('limit', 0)) or None
@@ -193,6 +198,9 @@ class TaskViewSet(viewsets.ViewSet):
             else:
                 line_start = line_start if count - line_start <= abs(limit) else count - abs(limit) 
                 line_end = None 
+
+        logger.info("Returning task output project=%s task=%s format=%s lines(start=%s end=%s count=%s total=%s)",
+                    project_pk, pk, fmt, line_start, line_end, len(lines[line_start:line_end]), count)
 
         if fmt == 'text':
             return Response('\n'.join(lines[line_start:line_end]))
