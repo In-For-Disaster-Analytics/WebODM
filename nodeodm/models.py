@@ -204,36 +204,36 @@ class ProcessingNode(models.Model):
         task = api_client.get_task(uuid)
         return task.output(line)
 
-    def cancel_task(self, uuid):
+    def cancel_task(self, uuid, jwt_token=None):
         """
         Cancels a task (stops its execution, or prevents it from being executed)
         """
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         return task.cancel()
 
-    def remove_task(self, uuid):
+    def remove_task(self, uuid, jwt_token=None):
         """
         Removes a task and deletes all of its assets
         """
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         return task.remove()
 
-    def download_task_assets(self, uuid, destination, progress_callback, parallel_downloads=16):
+    def download_task_assets(self, uuid, destination, progress_callback, parallel_downloads=16, jwt_token=None):
         """
         Downloads a task asset
         """
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         return task.download_zip(destination, progress_callback, parallel_downloads=parallel_downloads)
 
-    def restart_task(self, uuid, options = None):
+    def restart_task(self, uuid, options=None, jwt_token=None):
         """
         Restarts a task that was previously canceled or that had failed to process
         """
 
-        api_client = self.api_client()
+        api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
         return task.restart(self.options_list_to_dict(options))
 

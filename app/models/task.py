@@ -779,7 +779,8 @@ class Task(models.Model):
                         # Attempt to cancel the task on the processing node
                         # We don't care if this fails (we tried)
                         try:
-                            self.processing_node.cancel_task(self.uuid)
+                            jwt_token = self._get_tapis_jwt_token()
+                            self.processing_node.cancel_task(self.uuid, jwt_token=jwt_token)
                         except OdmError:
                             logger.warning("Could not cancel {} on processing node. We'll proceed anyway...".format(self))
 
@@ -796,13 +797,14 @@ class Task(models.Model):
                     logger.info("Restarting {}".format(self))
                     if self.processing_node:
 
+                        jwt_token = self._get_tapis_jwt_token()
+
                         # Check if the UUID is still valid, as processing nodes purge
                         # results after a set amount of time, the UUID might have been eliminated.
                         uuid_still_exists = False
 
                         if self.uuid:
                             try:
-                                jwt_token = self._get_tapis_jwt_token()
                                 try:
                                     info = self.processing_node.get_task_info(self.uuid, jwt_token=jwt_token)
                                 except Exception as e:
@@ -823,7 +825,7 @@ class Task(models.Model):
                         if uuid_still_exists:
                             # Good to go
                             try:
-                                self.processing_node.restart_task(self.uuid, self.options)
+                                self.processing_node.restart_task(self.uuid, self.options, jwt_token=jwt_token)
                             except (NodeServerError, NodeResponseError) as e:
                                 # Something went wrong
                                 logger.warning("Could not restart {}, will start a new one".format(self))
@@ -861,7 +863,8 @@ class Task(models.Model):
                         # We don't care if this fails, as resources on processing nodes
                         # Are expected to be purged on their own after a set amount of time anyway
                         try:
-                            self.processing_node.remove_task(self.uuid)
+                            jwt_token = self._get_tapis_jwt_token()
+                            self.processing_node.remove_task(self.uuid, jwt_token=jwt_token)
                         except OdmError:
                             pass
 
@@ -938,7 +941,13 @@ class Task(models.Model):
                                 logger.info("Downloading all.zip for {}".format(self))
 
                                 # Download all assets
-                                zip_path = self.processing_node.download_task_assets(self.uuid, assets_dir, progress_callback=callback, parallel_downloads=max(1, int(16 / (2 ** retry_num))))
+                                zip_path = self.processing_node.download_task_assets(
+                                    self.uuid,
+                                    assets_dir,
+                                    progress_callback=callback,
+                                    parallel_downloads=max(1, int(16 / (2 ** retry_num))),
+                                    jwt_token=jwt_token
+                                )
 
                                 # Rename to all.zip
                                 all_zip_path = self.assets_path("all.zip")

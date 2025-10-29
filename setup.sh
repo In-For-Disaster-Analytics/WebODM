@@ -51,10 +51,22 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if Docker Compose is installed
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose is not installed. Please install Docker Compose first."
-        exit 1
+    # Ensure Docker Compose plugin is available
+    if ! docker compose version &> /dev/null; then
+        log_warning "Docker Compose plugin not found, attempting installation..."
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y docker-compose-plugin
+        else
+            log_warning "apt-get not available, please install the Docker Compose plugin manually"
+        fi
+
+        if ! docker compose version &> /dev/null; then
+            log_error "Docker Compose plugin is not installed. Please install docker-compose-plugin and rerun this script."
+            exit 1
+        fi
+
+        log_success "Docker Compose plugin installed"
     fi
     
     # Check if Node.js is installed, install if not
@@ -207,7 +219,7 @@ build_images() {
         # Use build instead of rebuild to avoid hanging on stop
         timeout 1800 ./webodm.sh build || {
             log_warning "WebODM build timed out or failed, trying alternative build method"
-            timeout 1800 docker-compose build --no-cache || log_error "WebODM build failed completely"
+            timeout 1800 docker compose build --no-cache || log_error "WebODM build failed completely"
         }
     fi
     
@@ -216,7 +228,7 @@ build_images() {
         cd "$REPO_BASE/nodeodm-ls6"
         if [[ -f docker-compose.yml ]]; then
             log_info "Building NodeODM-LS6 Docker image..."
-            docker-compose build --no-cache
+            docker compose build --no-cache
         fi
     fi
     
@@ -402,7 +414,7 @@ setup_nodeodm() {
         
         # Start NodeODM
         if [[ -f docker-compose.yml ]]; then
-            docker-compose up -d
+            docker compose up -d
             log_success "NodeODM-LS6 started"
         else
             log_warning "NodeODM-LS6 docker-compose.yml not found"
@@ -734,7 +746,7 @@ print_summary() {
     echo "  Stop:    cd $REPO_BASE/WebODM && ./webodm.sh stop"
     echo "  Status:  cd $REPO_BASE/WebODM && ./webodm.sh status"
     echo "  Backup:  sudo /usr/local/bin/webodm-backup.sh"
-    echo "  Logs:    docker-compose logs"
+    echo "  Logs:    docker compose logs"
     echo ""
 }
 
@@ -754,7 +766,7 @@ full_update() {
         log_warning "ClusterODM PID file not found, trying to kill by name"
         pkill -f "node index.js.*tapis-config.json" || log_warning "No ClusterODM process found"
     fi
-    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
+    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down || log_warning "NodeODM stop failed"
     
     # Update repositories and rebuild images
     update_repos
@@ -766,7 +778,7 @@ full_update() {
     cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
     echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
     cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
-    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
+    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose up -d
     
     if health_check; then
         log_success "Update completed successfully!"
@@ -828,7 +840,7 @@ case "${1:-}" in
         else
             log_warning "ClusterODM PID file not found"
         fi
-        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose down || log_warning "NodeODM stop failed"
+        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down || log_warning "NodeODM stop failed"
         log_success "All services stopped"
         ;;
     "start")
@@ -837,7 +849,7 @@ case "${1:-}" in
         cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
         echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
         cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
-        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker-compose up -d
+        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose up -d
         log_success "All services started"
         ;;
     "restart")
