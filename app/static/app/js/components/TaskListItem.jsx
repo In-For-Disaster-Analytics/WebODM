@@ -534,9 +534,7 @@ class TaskListItem extends React.Component {
             !task.compacted){
           // By default restart reruns every pipeline
           // step from the beginning
-          const rerunFrom = task.can_rerun_from.length > 1 ?
-                              task.can_rerun_from[1] :
-                              null;
+          const rerunFrom = null;
 
           addActionButton(_("Restart"), "btn-primary", "glyphicon glyphicon-repeat", this.genRestartAction(rerunFrom, {confirm: _("Are you sure you want to restart this task?")}), {
             subItems: this.getRestartSubmenuItems()
