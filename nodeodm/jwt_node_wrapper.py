@@ -7,10 +7,12 @@ for ClusterODM integration with Tapis authentication.
 
 import logging
 import os
-from pyodm import Node
-from pyodm.types import TaskStatus
 from urllib.parse import urlencode
+
 import requests
+from pyodm import Node
+from pyodm.exceptions import NodeServerError
+from pyodm.types import TaskStatus
 
 logger = logging.getLogger('app.logger')
 
@@ -327,6 +329,61 @@ class JWTNodeWrapper:
                             logger.warning(f"Exception while retrieving task output: {str(e)}")
                             logger.info(f"============================================")
                             return f"Error retrieving output for task {self.uuid}\n\nException: {str(e)}\n\nPlease check the logs for more details."
+
+                    def download_zip(self, destination, progress_callback=None, parallel_downloads=1):
+                        zip_endpoint = f"{self.base_url}/task/{self.uuid}/download/all.zip"
+                        params = {}
+                        if self.jwt_token:
+                            params['token'] = self.jwt_token
+                        if params:
+                            zip_endpoint += "?" + urlencode(params)
+
+                        logger.info(f"[JWTNodeWrapper] Downloading task assets from {zip_endpoint}")
+
+                        try:
+                            with requests.get(zip_endpoint, stream=True, timeout=self.timeout) as response:
+                                if response.status_code != 200:
+                                    error_text = response.text[:500]
+                                    logger.error(f"[JWTNodeWrapper] Failed to download assets for {self.uuid}: "
+                                                 f"{response.status_code} - {error_text}")
+                                    raise NodeServerError(
+                                        f"ClusterODM download failed with status {response.status_code}: {error_text}"
+                                    )
+
+                                total_size = int(response.headers.get('content-length', 0))
+                                downloaded = 0
+                                chunk_size = 1024 * 1024
+
+                                os.makedirs(destination, exist_ok=True)
+                                temp_path = os.path.join(destination, f"{self.uuid}_all.zip.download")
+                                final_path = os.path.join(destination, f"{self.uuid}_all.zip")
+
+                                with open(temp_path, 'wb') as file_handle:
+                                    for chunk in response.iter_content(chunk_size=chunk_size):
+                                        if not chunk:
+                                            continue
+                                        file_handle.write(chunk)
+                                        downloaded += len(chunk)
+
+                                        if progress_callback:
+                                            try:
+                                                if total_size > 0:
+                                                    progress = (downloaded / total_size) * 100.0
+                                                else:
+                                                    progress = 0.0
+                                                progress_callback(progress)
+                                            except Exception as progress_error:
+                                                logger.debug(f"[JWTNodeWrapper] Progress callback raised: {progress_error}")
+
+                                os.replace(temp_path, final_path)
+                                logger.info(f"[JWTNodeWrapper] Assets downloaded for task {self.uuid} -> {final_path}")
+                                return final_path
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"[JWTNodeWrapper] Error downloading assets: {str(e)}")
+                            raise NodeServerError(f"Error downloading assets from ClusterODM: {str(e)}")
+                        except Exception as e:
+                            logger.error(f"[JWTNodeWrapper] Unexpected error downloading assets: {str(e)}")
+                            raise
 
                     def restart(self, options=None):
                         # For task restart, we need to make a POST request to restart endpoint
