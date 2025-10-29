@@ -181,7 +181,7 @@ class TaskListItem extends React.Component {
       url += `&line=${line}&limit=-502`;
     }
 
-    console.debug(`[Console] Requesting task output from WebODM API: ${url}`);
+    console.log(`[Console] Requesting task output from WebODM API: ${url}`);
 
     return url;
   }
