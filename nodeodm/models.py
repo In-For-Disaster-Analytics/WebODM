@@ -210,7 +210,15 @@ class ProcessingNode(models.Model):
         """
         api_client = self.api_client(jwt_token=jwt_token)
         task = api_client.get_task(uuid)
-        return task.cancel()
+        cancel_callable = getattr(task, 'cancel', None)
+        if callable(cancel_callable):
+            return cancel_callable()
+
+        direct_cancel = getattr(api_client, 'cancel_task', None)
+        if callable(direct_cancel):
+            return direct_cancel(uuid)
+
+        raise AttributeError("Task object does not support cancellation and api_client has no cancel_task method")
 
     def remove_task(self, uuid, jwt_token=None):
         """

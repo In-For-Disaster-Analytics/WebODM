@@ -257,12 +257,13 @@ class JWTNodeWrapper:
                 
                 # Create a task-like object that works with WebODM
                 class TaskWrapper:
-                    def __init__(self, uuid, task_info_data, base_url, jwt_token, timeout):
+                    def __init__(self, uuid, task_info_data, base_url, jwt_token, timeout, wrapper=None):
                         self.uuid = uuid
                         self._info_data = task_info_data
                         self.base_url = base_url
                         self.jwt_token = jwt_token
                         self.timeout = timeout
+                        self._wrapper = wrapper
                     
                     def info(self, with_output=True):
                         # Import TaskInfo here to avoid circular imports
@@ -475,7 +476,10 @@ class JWTNodeWrapper:
                             return {"success": True, "message": f"WebODM cleanup completed (ClusterODM error: {str(e)})"}
 
                     def cancel(self):
-                        # Cancel the task on ClusterODM to stop processing
+                        if self._wrapper:
+                            return self._wrapper.cancel_task(self.uuid)
+
+                        # Fallback path if wrapper reference isn't available
                         cancel_endpoint = f"{self.base_url}/task/{self.uuid}/cancel"
                         params = {}
                         if self.jwt_token:
@@ -532,7 +536,7 @@ class JWTNodeWrapper:
                             logger.info(f"============================================")
                             return {"success": False, "message": f"ClusterODM cancel error: {str(e)}"}
                 
-                return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout)
+                return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout, wrapper=self)
             else:
                 error_msg = f"Failed to get task info: {response.status_code} - {response.text}"
                 logger.error(error_msg)
@@ -542,6 +546,66 @@ class JWTNodeWrapper:
             logger.error(f"Error getting task info with JWT token: {str(e)}")
             # Fall back to regular node for compatibility
             return self._node.get_task(uuid)
+    
+    def cancel_task(self, uuid):
+        """
+        Cancel a task directly using the JWT-enabled endpoint.
+        """
+        cancel_endpoint = f"{self.base_url}/task/{uuid}/cancel"
+        params = {}
+        if self.jwt_token:
+            params['token'] = self.jwt_token
+        if params:
+            cancel_endpoint += "?" + urlencode(params)
+
+        logger.info(f"=== HTTP REQUEST DETAILS (Task Cancel - Direct) ===")
+        logger.info(f"Method: POST")
+        logger.info(f"URL: {cancel_endpoint}")
+        logger.info(f"Query Parameters: {params}")
+        logger.info(f"==========================================")
+
+        try:
+            cancel_response = requests.post(cancel_endpoint, timeout=self.timeout)
+
+            logger.info(f"=== HTTP RESPONSE DETAILS (Task Cancel - Direct) ===")
+            logger.info(f"Status Code: {cancel_response.status_code}")
+            logger.info(f"Response Headers: {dict(cancel_response.headers)}")
+            logger.info(f"Response Content Length: {len(cancel_response.content)} bytes")
+
+            if cancel_response.status_code == 200:
+                try:
+                    result = cancel_response.json()
+                    logger.info(f"Task cancel response: {result}")
+                    logger.info(f"============================================")
+                    return result
+                except ValueError:
+                    logger.info(f"Task cancel response (text): {cancel_response.text}")
+                    logger.info(f"============================================")
+                    return {"success": True, "message": cancel_response.text}
+            else:
+                error_text = cancel_response.text
+                logger.warning(f"Failed to cancel task on ClusterODM. Status: {cancel_response.status_code}")
+                logger.warning(f"Error Response: {error_text}")
+
+                if ("no task table entry" in error_text.lower() or
+                    "invalid route" in error_text.lower() or
+                    cancel_response.status_code == 404):
+                    logger.info(f"Task {uuid} not found on ClusterODM, considering cancel successful")
+                    logger.info(f"============================================")
+                    return {"success": True, "message": "Task not found on ClusterODM, considered canceled"}
+
+                logger.info(f"============================================")
+                return {"success": False, "message": f"ClusterODM cancel failed: {error_text}"}
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Request error when canceling task from ClusterODM: {str(e)}")
+            logger.warning(f"Continuing with WebODM cancel despite ClusterODM error")
+            logger.info(f"============================================")
+            return {"success": False, "message": f"ClusterODM cancel request failed: {str(e)}"}
+        except Exception as e:
+            logger.warning(f"Exception while canceling task from ClusterODM: {str(e)}")
+            logger.warning(f"Continuing with WebODM cancel despite ClusterODM error")
+            logger.info(f"============================================")
+            return {"success": False, "message": f"ClusterODM cancel error: {str(e)}"}
     
     def __getattr__(self, name):
         """
