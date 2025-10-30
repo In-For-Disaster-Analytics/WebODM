@@ -210,13 +210,15 @@ class JWTNodeWrapper:
         params = {}
         self._apply_auth_token(params)
 
-        if with_output is not None and with_output is not True:
-            try:
-                params['with_output'] = int(with_output)
-            except (TypeError, ValueError):
-                pass
-        elif with_output is True:
-            params['with_output'] = 0
+        if with_output is not None:
+            if isinstance(with_output, bool):
+                if with_output:
+                    params['with_output'] = 0
+            else:
+                try:
+                    params['with_output'] = max(0, int(with_output))
+                except (TypeError, ValueError):
+                    logger.warning(f"[JWTNodeWrapper] Invalid with_output value '{with_output}', ignoring")
 
         endpoint = f"{self.base_url}/task/{uuid}/info"
         if params:
@@ -267,6 +269,11 @@ class JWTNodeWrapper:
             logger.warning("ClusterODM response missing 'options' field, adding empty options")
             data['options'] = []
 
+        if 'output' not in data or data['output'] is None:
+            data['output'] = []
+        elif isinstance(data['output'], str):
+            data['output'] = data['output'].splitlines()
+
         return data
     
     def get_task(self, uuid):
@@ -292,6 +299,10 @@ class JWTNodeWrapper:
                             self._info_data = fetched
                         except Exception as e:
                             logger.warning(f"[JWTNodeWrapper] Failed to fetch task info with output: {str(e)}")
+                    if 'output' not in self._info_data or self._info_data['output'] is None:
+                        self._info_data['output'] = []
+                    elif isinstance(self._info_data['output'], str):
+                        self._info_data['output'] = self._info_data['output'].splitlines()
                     from pyodm.types import TaskInfo
                     return TaskInfo(self._info_data)
 
