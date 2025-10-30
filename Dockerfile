@@ -40,6 +40,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     <<EOT
     # Build-time dependencies
+    rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*
     apt-get -qq update
     apt-get install -y --no-install-recommends curl ca-certificates gnupg
     # Python 3.9 support
@@ -51,13 +52,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Update package list
     apt-get update
     # Install common deps, starting with NodeJS
-    apt-get -qq install -y nodejs
+    apt-get -qq install -y -o APT::Keep-Downloaded-Packages=false nodejs
     # Python3.9, GDAL, PDAL, nginx, letsencrypt, psql
-    apt-get install -y --no-install-recommends \
+    apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
         python$PYTHON_VERSION python$PYTHON_VERSION-venv python$PYTHON_VERSION-dev libpq-dev build-essential git libproj-dev gdal-bin pdal \
         libgdal-dev nginx certbot gettext-base cron postgresql-client gettext tzdata
     # Create virtualenv
     python$PYTHON_VERSION -m venv $WORKDIR/venv
+    # Clean up apt caches to keep cache mount small
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
 EOT
 
 # Modify PATH to prioritize venv, effectively activating venv
@@ -145,6 +149,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm \
     <<EOT
     # Run-time dependencies
+    rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*
     apt-get -qq update
     apt-get install -y --no-install-recommends curl ca-certificates gnupg
     # Legacy Python support
@@ -156,9 +161,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Update package list
     apt-get update
     # Install common deps, starting with NodeJS
-    apt-get -qq install -y nodejs
+    apt-get -qq install -y -o APT::Keep-Downloaded-Packages=false nodejs
     # Python, GDAL, PDAL, nginx, letsencrypt, psql, git
-    apt-get install -y --no-install-recommends \
+    apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
         python$PYTHON_VERSION python$PYTHON_VERSION-distutils gdal-bin pdal \
         nginx certbot gettext-base cron postgresql-client gettext tzdata git
     # Install webpack, webpack CLI
