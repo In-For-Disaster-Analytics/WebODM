@@ -13,11 +13,46 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+clusterodm_auth_token() {
+    local candidate
+    for candidate in \
+        "$CLUSTERODM_HEALTHCHECK_TOKEN" \
+        "$TAPIS_HEALTHCHECK_TOKEN" \
+        "$TAPIS_ACCESS_TOKEN" \
+        "$TAPIS_TOKEN"
+    do
+        if [[ -n "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    if [[ -n "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE" && -f "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE" ]]; then
+        tr -d '\r\n' < "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE"
+        return 0
+    fi
+
+    return 1
+}
+
+clusterodm_auth_curl() {
+    local url="$1"
+    shift || true
+    local token
+    token=$(clusterodm_auth_token 2>/dev/null || true)
+
+    if [[ -n "$token" ]]; then
+        curl -s -H "Authorization: Bearer $token" "$url" "$@"
+    else
+        curl -s "$url" "$@"
+    fi
+}
+
 # Connect ClusterODM to WebODM
 log_info "Connecting ClusterODM to WebODM..."
 
 # Check if ClusterODM is responding
-if ! curl -s "https://clusterodm.tacc.utexas.edu/info" > /dev/null; then
+if ! clusterodm_auth_curl "https://clusterodm.tacc.utexas.edu/info" > /dev/null; then
     log_error "ClusterODM is not responding at clusterodm.tacc.utexas.edu"
     exit 1
 fi

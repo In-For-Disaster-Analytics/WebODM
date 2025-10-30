@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import requests
 from pyodm import Node
-from pyodm.exceptions import NodeServerError
+from pyodm.exceptions import NodeServerError, NodeConnectionError
 from pyodm.types import TaskStatus
 
 logger = logging.getLogger('app.logger')
@@ -45,6 +45,7 @@ class JWTNodeWrapper:
         self.token = token
         self.timeout = timeout
         self.jwt_token = jwt_token
+        self.auth_token = jwt_token if jwt_token else token
         # Use HTTPS for port 443, HTTP for others
         protocol = "https" if port == 443 else "http"
         self.base_url = f"{protocol}://{hostname}:{port}"
@@ -52,7 +53,16 @@ class JWTNodeWrapper:
         # Create underlying Node instance for fallback operations
         self._node = Node(hostname, port, token, timeout)
         
-        logger.info(f"Created JWTNodeWrapper for {hostname}:{port} with JWT token")
+        if self.jwt_token:
+            logger.info(f"Created JWTNodeWrapper for {hostname}:{port} with JWT token")
+        elif self.token:
+            logger.info(f"Created JWTNodeWrapper for {hostname}:{port} using node token")
+        else:
+            logger.info(f"Created JWTNodeWrapper for {hostname}:{port} without authentication token")
+    
+    def _apply_auth_token(self, params):
+        if self.auth_token:
+            params['token'] = self.auth_token
     
     def create_task(self, images, options, name=None, progress_callback=None):
         """
@@ -71,14 +81,13 @@ class JWTNodeWrapper:
             # Build the URL with JWT token as query parameter
             endpoint = f"{self.base_url}/task/new"
             params = {}
-            
-            if self.jwt_token:
-                params['token'] = self.jwt_token
+            self._apply_auth_token(params)
                 
             if params:
                 endpoint += "?" + urlencode(params)
             
-            logger.info(f"Creating task with JWT token at: {endpoint}")
+            token_label = "JWT token" if self.jwt_token else ("node token" if self.token else "no token")
+            logger.info(f"Creating task via ClusterODM at: {endpoint} (auth={token_label})")
             logger.info(f"Number of images provided: {len(images)}")
             if len(images) > 0:
                 logger.info(f"First image path: {images[0]}")
@@ -205,17 +214,17 @@ class JWTNodeWrapper:
             # Build the URL with JWT token for task info
             endpoint = f"{self.base_url}/task/{uuid}/info"
             params = {}
-            
-            if self.jwt_token:
-                params['token'] = self.jwt_token
+            self._apply_auth_token(params)
                 
             if params:
                 endpoint += "?" + urlencode(params)
             
+            token_label = "JWT token" if self.jwt_token else ("node token" if self.token else "no token")
             logger.info(f"=== HTTP REQUEST DETAILS (Task Info) ===")
             logger.info(f"Method: GET")
             logger.info(f"URL: {endpoint}")
             logger.info(f"Query Parameters: {params}")
+            logger.info(f"Auth: {token_label}")
             logger.info(f"Timeout: {self.timeout}s")
             logger.info(f"=========================================")
             
@@ -257,11 +266,11 @@ class JWTNodeWrapper:
                 
                 # Create a task-like object that works with WebODM
                 class TaskWrapper:
-                    def __init__(self, uuid, task_info_data, base_url, jwt_token, timeout, wrapper=None):
+                    def __init__(self, uuid, task_info_data, base_url, auth_token, timeout, wrapper=None):
                         self.uuid = uuid
                         self._info_data = task_info_data
                         self.base_url = base_url
-                        self.jwt_token = jwt_token
+                        self.auth_token = auth_token
                         self.timeout = timeout
                         self._wrapper = wrapper
                     
@@ -274,10 +283,8 @@ class JWTNodeWrapper:
                         # For console output, we need to make another request
                         output_endpoint = f"{self.base_url}/task/{self.uuid}/output"
                         params = {'line': line}
-                        if self.jwt_token:
-                            params['token'] = self.jwt_token
-                        else:
-                            logger.warning(f"No JWT token available for task {self.uuid} output request")
+                        if self.auth_token:
+                            params['token'] = self.auth_token
 
                         if params:
                             output_endpoint += "?" + urlencode(params)
@@ -332,66 +339,108 @@ class JWTNodeWrapper:
                             return f"Error retrieving output for task {self.uuid}\n\nException: {str(e)}\n\nPlease check the logs for more details."
 
                     def download_zip(self, destination, progress_callback=None, parallel_downloads=1):
-                        zip_endpoint = f"{self.base_url}/task/{self.uuid}/download/all.zip"
-                        params = {}
-                        if self.jwt_token:
-                            params['token'] = self.jwt_token
-                        if params:
-                            zip_endpoint += "?" + urlencode(params)
+                        tokens_to_try = []
+                        if self.auth_token:
+                            tokens_to_try.append(self.auth_token)
+                        if self._wrapper and self._wrapper.token and self._wrapper.token not in tokens_to_try:
+                            tokens_to_try.append(self._wrapper.token)
+                        tokens_to_try.append(None)  # final attempt without token for backwards compat
 
-                        logger.info(f"[JWTNodeWrapper] Downloading task assets from {zip_endpoint}")
+                        last_error = None
 
-                        try:
-                            with requests.get(zip_endpoint, stream=True, timeout=self.timeout) as response:
-                                if response.status_code != 200:
-                                    error_text = response.text[:500]
-                                    logger.error(f"[JWTNodeWrapper] Failed to download assets for {self.uuid}: "
-                                                 f"{response.status_code} - {error_text}")
-                                    raise NodeServerError(
-                                        f"ClusterODM download failed with status {response.status_code}: {error_text}"
-                                    )
+                        for idx, token in enumerate(tokens_to_try):
+                            params = {}
+                            if token:
+                                params['token'] = token
 
-                                total_size = int(response.headers.get('content-length', 0))
-                                downloaded = 0
-                                chunk_size = 1024 * 1024
+                            zip_endpoint = f"{self.base_url}/task/{self.uuid}/download/all.zip"
+                            if params:
+                                zip_endpoint += "?" + urlencode(params)
 
-                                os.makedirs(destination, exist_ok=True)
-                                temp_path = os.path.join(destination, f"{self.uuid}_all.zip.download")
-                                final_path = os.path.join(destination, f"{self.uuid}_all.zip")
+                            if token:
+                                if token == self.auth_token and token == getattr(self._wrapper, 'jwt_token', None):
+                                    token_label = "jwt"
+                                elif self._wrapper and token == getattr(self._wrapper, 'token', None):
+                                    token_label = "node"
+                                else:
+                                    token_label = "custom"
+                            else:
+                                token_label = "none"
+                            attempt_info = f"[attempt {idx + 1}/{len(tokens_to_try)} | token={token_label}]"
+                            logger.info(f"[JWTNodeWrapper] Downloading task assets from {zip_endpoint} {attempt_info}")
 
-                                with open(temp_path, 'wb') as file_handle:
-                                    for chunk in response.iter_content(chunk_size=chunk_size):
-                                        if not chunk:
+                            try:
+                                with requests.get(zip_endpoint, stream=True, timeout=self.timeout) as response:
+                                    if response.status_code != 200:
+                                        error_text = response.text[:500]
+                                        logger.warning(f"[JWTNodeWrapper] Download attempt failed for {self.uuid} {attempt_info}: "
+                                                        f"{response.status_code} - {error_text}")
+
+                                        # If we have more tokens to try, continue loop
+                                        if idx + 1 < len(tokens_to_try):
+                                            last_error = (response.status_code, error_text)
                                             continue
-                                        file_handle.write(chunk)
-                                        downloaded += len(chunk)
 
-                                        if progress_callback:
-                                            try:
-                                                if total_size > 0:
-                                                    progress = (downloaded / total_size) * 100.0
-                                                else:
-                                                    progress = 0.0
-                                                progress_callback(progress)
-                                            except Exception as progress_error:
-                                                logger.debug(f"[JWTNodeWrapper] Progress callback raised: {progress_error}")
+                                        raise NodeServerError(
+                                            f"ClusterODM download failed with status {response.status_code}: {error_text}"
+                                        )
 
-                                os.replace(temp_path, final_path)
-                                logger.info(f"[JWTNodeWrapper] Assets downloaded for task {self.uuid} -> {final_path}")
-                                return final_path
-                        except requests.exceptions.RequestException as e:
-                            logger.error(f"[JWTNodeWrapper] Error downloading assets: {str(e)}")
-                            raise NodeServerError(f"Error downloading assets from ClusterODM: {str(e)}")
-                        except Exception as e:
-                            logger.error(f"[JWTNodeWrapper] Unexpected error downloading assets: {str(e)}")
-                            raise
+                                    total_size = int(response.headers.get('content-length', 0))
+                                    downloaded = 0
+                                    chunk_size = 1024 * 1024
+
+                                    os.makedirs(destination, exist_ok=True)
+                                    temp_path = os.path.join(destination, f"{self.uuid}_all.zip.download")
+                                    final_path = os.path.join(destination, f"{self.uuid}_all.zip")
+
+                                    with open(temp_path, 'wb') as file_handle:
+                                        for chunk in response.iter_content(chunk_size=chunk_size):
+                                            if not chunk:
+                                                continue
+                                            file_handle.write(chunk)
+                                            downloaded += len(chunk)
+
+                                            if progress_callback:
+                                                try:
+                                                    if total_size > 0:
+                                                        progress = (downloaded / total_size) * 100.0
+                                                    else:
+                                                        progress = 0.0
+                                                    progress_callback(progress)
+                                                except Exception as progress_error:
+                                                    logger.debug(f"[JWTNodeWrapper] Progress callback raised: {progress_error}")
+
+                                    os.replace(temp_path, final_path)
+                                    logger.info(f"[JWTNodeWrapper] Assets downloaded for task {self.uuid} -> {final_path}")
+                                    return final_path
+                            except requests.exceptions.RequestException as e:
+                                logger.warning(f"[JWTNodeWrapper] Request error downloading assets {attempt_info}: {str(e)}")
+                                last_error = (None, str(e))
+                                if idx + 1 < len(tokens_to_try):
+                                    continue
+                                raise NodeServerError(f"Error downloading assets from ClusterODM: {str(e)}")
+                            except NodeServerError:
+                                raise
+                            except Exception as e:
+                                logger.warning(f"[JWTNodeWrapper] Unexpected error downloading assets {attempt_info}: {str(e)}")
+                                last_error = (None, str(e))
+                                if idx + 1 < len(tokens_to_try):
+                                    continue
+                                raise
+
+                        if last_error:
+                            status, message = last_error
+                            if status is not None:
+                                raise NodeServerError(f"ClusterODM download failed with status {status}: {message}")
+                            else:
+                                raise NodeServerError(f"ClusterODM download failed: {message}")
 
                     def restart(self, options=None):
                         # For task restart, we need to make a POST request to restart endpoint
                         restart_endpoint = f"{self.base_url}/task/{self.uuid}/restart"
                         params = {}
-                        if self.jwt_token:
-                            params['token'] = self.jwt_token
+                        if self.auth_token:
+                            params['token'] = self.auth_token
                         if params:
                             restart_endpoint += "?" + urlencode(params)
 
@@ -416,8 +465,8 @@ class JWTNodeWrapper:
                         # For task removal, we need to make a POST request to remove endpoint
                         remove_endpoint = f"{self.base_url}/task/{self.uuid}/remove"
                         params = {}
-                        if self.jwt_token:
-                            params['token'] = self.jwt_token
+                        if self.auth_token:
+                            params['token'] = self.auth_token
                         if params:
                             remove_endpoint += "?" + urlencode(params)
 
@@ -482,8 +531,8 @@ class JWTNodeWrapper:
                         # Fallback path if wrapper reference isn't available
                         cancel_endpoint = f"{self.base_url}/task/{self.uuid}/cancel"
                         params = {}
-                        if self.jwt_token:
-                            params['token'] = self.jwt_token
+                        if self.auth_token:
+                            params['token'] = self.auth_token
                         if params:
                             cancel_endpoint += "?" + urlencode(params)
 
@@ -536,10 +585,14 @@ class JWTNodeWrapper:
                             logger.info(f"============================================")
                             return {"success": False, "message": f"ClusterODM cancel error: {str(e)}"}
                 
-                return TaskWrapper(uuid, task_info_data, self.base_url, self.jwt_token, self.timeout, wrapper=self)
+                return TaskWrapper(uuid, task_info_data, self.base_url, self.auth_token, self.timeout, wrapper=self)
             else:
                 error_msg = f"Failed to get task info: {response.status_code} - {response.text}"
                 logger.error(error_msg)
+
+                if response.status_code in (502, 503, 504):
+                    raise NodeConnectionError(error_msg)
+
                 raise Exception(error_msg)
                 
         except Exception as e:
@@ -553,8 +606,8 @@ class JWTNodeWrapper:
         """
         cancel_endpoint = f"{self.base_url}/task/{uuid}/cancel"
         params = {}
-        if self.jwt_token:
-            params['token'] = self.jwt_token
+        if self.auth_token:
+            params['token'] = self.auth_token
         if params:
             cancel_endpoint += "?" + urlencode(params)
 

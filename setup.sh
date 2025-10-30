@@ -33,6 +33,43 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# JWT helper for ClusterODM probes
+clusterodm_probe_token() {
+    local candidate
+    for candidate in \
+        "$CLUSTERODM_HEALTHCHECK_TOKEN" \
+        "$TAPIS_HEALTHCHECK_TOKEN" \
+        "$TAPIS_ACCESS_TOKEN" \
+        "$TAPIS_TOKEN"
+    do
+        if [[ -n "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    if [[ -n "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE" && -f "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE" ]]; then
+        tr -d '\r\n' < "$CLUSTERODM_HEALTHCHECK_TOKEN_FILE"
+        return 0
+    fi
+
+    return 1
+}
+
+clusterodm_probe_curl() {
+    local url="$1"
+    shift || true
+
+    local token
+    token=$(clusterodm_probe_token 2>/dev/null || true)
+
+    if [[ -n "$token" ]]; then
+        curl -s -H "Authorization: Bearer $token" "$url" "$@"
+    else
+        curl -s "$url" "$@"
+    fi
+}
+
 # Check if running as root
 check_root() {
     if [[ $EUID -eq 0 ]]; then
@@ -270,7 +307,7 @@ EOF
     log_info "Waiting for ClusterODM to be ready..."
     clusterodm_ready=false
     for i in {1..30}; do
-        if curl -s "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
+        if clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
             log_success "ClusterODM is ready"
             clusterodm_ready=true
             break
@@ -350,7 +387,7 @@ connect_clusterodm() {
     sleep 10
     
     # Check if ClusterODM is responding
-    if ! curl -s "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
+    if ! clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
         log_error "ClusterODM is not responding, cannot connect to WebODM"
         return 1
     fi
@@ -690,7 +727,7 @@ health_check() {
     fi
     
     # Check ClusterODM
-    if curl -s "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
+    if clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
         log_success "ClusterODM is responding"
     else
         log_error "ClusterODM is not responding"
@@ -698,7 +735,7 @@ health_check() {
     fi
 
     # Check ClusterODM admin web interface
-    if curl -s "http://localhost:10000/r/info" > /dev/null; then
+    if clusterodm_probe_curl "http://localhost:10000/r/info" > /dev/null; then
         log_success "ClusterODM admin interface is responding"
     else
         log_warning "ClusterODM admin interface is not responding (webhook registration may not work)"

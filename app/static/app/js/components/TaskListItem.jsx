@@ -639,6 +639,11 @@ class TaskListItem extends React.Component {
                       <td><strong>{_("Task ID:")}</strong></td>
                       <td>{task.id}</td>
                     </tr>
+                    {task.uuid ?
+                    <tr>
+                      <td><strong>{_("Processing UUID:")}</strong></td>
+                      <td><span className="task-uuid">{task.uuid}</span></td>
+                    </tr> : ""}
                     <tr>
                         <td><strong>{_("Task Output:")}</strong></td>
                         <td><div className="btn-group btn-toggle"> 
