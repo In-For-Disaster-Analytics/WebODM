@@ -1,8 +1,16 @@
-from django.db import models
+import ast
+import json
+import logging
+from datetime import timedelta
+
+import requests
 from django.contrib.auth.models import User
+from django.db import models
 from django.utils import timezone
 import secrets
 import string
+
+logger = logging.getLogger('app.logger')
 
 
 class TapisOAuth2Client(models.Model):
@@ -91,7 +99,145 @@ class TapisOAuth2Token(models.Model):
     @property
     def is_valid(self):
         """Check if the token is valid (exists and not expired)"""
-        return self.access_token and not self.is_expired
+        return bool(self.get_access_token_value()) and not self.is_expired
+
+    @staticmethod
+    def _extract_access_token(payload):
+        """
+        Recursively extract the raw JWT string from a payload.
+        """
+        if not payload:
+            return None
+
+        # If payload is already a JWT string, return as-is
+        if isinstance(payload, str):
+            stripped = payload.strip()
+            if stripped.startswith('{') and stripped.endswith('}'):
+                # Try to decode JSON or literal dict representation
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    try:
+                        payload = ast.literal_eval(stripped)
+                    except (SyntaxError, ValueError):
+                        return stripped
+                else:
+                    return TapisOAuth2Token._extract_access_token(payload)
+            else:
+                return stripped
+
+        if isinstance(payload, dict):
+            # Common Tapis structures wrap the actual token in nested objects
+            if 'access_token' in payload:
+                return TapisOAuth2Token._extract_access_token(payload['access_token'])
+            if 'result' in payload:
+                return TapisOAuth2Token._extract_access_token(payload['result'])
+
+        return None
+
+    @classmethod
+    def extract_access_token_value(cls, payload):
+        """Public helper for extracting JWT strings from payloads."""
+        return cls._extract_access_token(payload)
+
+    def get_access_token_value(self):
+        """
+        Return the usable JWT string for this token, handling any stored payload structure.
+        """
+        value = self._extract_access_token(self.access_token)
+        if value:
+            return value
+        # Fallback to raw value for backwards compatibility
+        if isinstance(self.access_token, str):
+            return self.access_token.strip()
+        return None
+
+    def refresh(self):
+        """
+        Refresh the access token using the stored refresh token.
+        """
+        if not self.refresh_token:
+            raise ValueError("No refresh token available for this Tapis token.")
+
+        token_data = {
+            'grant_type': 'refresh_token',
+            'client_id': self.client.client_id,
+            'client_secret': self.client.client_secret,
+            'refresh_token': self.refresh_token
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Tapis-Tenant': self.client.tenant_id,
+            'Accept': 'application/json'
+        }
+
+        try:
+            response = requests.post(
+                self.client.token_url,
+                data=token_data,
+                headers=headers,
+                timeout=30
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.error(f"Tapis token refresh failed: {exc}")
+            raise
+
+        try:
+            refreshed = response.json()
+        except ValueError as exc:
+            logger.error(f"Tapis token refresh returned non-JSON response: {exc}")
+            raise
+
+        if isinstance(refreshed, dict) and refreshed.get('status') == 'success' and 'result' in refreshed:
+            refreshed = refreshed['result']
+
+        new_access_token = self._extract_access_token(refreshed.get('access_token'))
+        if not new_access_token:
+            logger.error("Tapis refresh response did not include a usable access token.")
+            raise ValueError("No access token in Tapis refresh response.")
+
+        expires_in = refreshed.get('expires_in')
+        expires_at = None
+        if expires_in:
+            try:
+                expires_at = timezone.now() + timedelta(seconds=int(expires_in))
+            except (TypeError, ValueError):
+                logger.warning("Invalid expires_in value in Tapis refresh response.")
+
+        # Persist refreshed values
+        self.access_token = new_access_token
+        if refreshed.get('refresh_token'):
+            self.refresh_token = refreshed['refresh_token']
+        if refreshed.get('token_type'):
+            self.token_type = refreshed['token_type']
+        if refreshed.get('scope'):
+            self.scope = refreshed['scope']
+        self.expires_at = expires_at
+        self.save()
+
+        logger.info(f"Refreshed Tapis token for user {self.user.username}")
+        return self.access_token
+
+    def get_or_refresh_access_token(self):
+        """
+        Return a valid access token, refreshing when necessary.
+        """
+        access_token = self.get_access_token_value()
+        if access_token and not self.is_expired:
+            return access_token
+
+        if access_token and not self.refresh_token:
+            # Token string present but cannot refresh; return the stale token as last resort
+            logger.warning("Tapis token is expired but no refresh token is available.")
+            return access_token
+
+        try:
+            return self.refresh()
+        except Exception as exc:
+            logger.error(f"Unable to refresh Tapis token for {self.user.username}: {exc}")
+            return access_token
 
 
 class TapisOAuth2State(models.Model):

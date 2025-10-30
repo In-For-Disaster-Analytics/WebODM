@@ -210,12 +210,17 @@ class TapisOAuth2CallbackView(View):
             if expires_in:
                 expires_at = timezone.now() + timedelta(seconds=int(expires_in))
             
+            access_token_value = TapisOAuth2Token.extract_access_token_value(token_data.get('access_token'))
+            if not access_token_value:
+                logger.warning("Failed to extract JWT from Tapis token response; storing raw access_token payload.")
+                access_token_value = token_data.get('access_token')
+
             # Create or update token
             token, created = TapisOAuth2Token.objects.update_or_create(
                 user=user,
                 client=client,
                 defaults={
-                    'access_token': token_data.get('access_token'),
+                    'access_token': access_token_value,
                     'refresh_token': token_data.get('refresh_token', ''),
                     'token_type': token_data.get('token_type', 'Bearer'),
                     'scope': token_data.get('scope', ''),
@@ -307,7 +312,12 @@ class TapisOAuth2TokenRefreshView(APIView):
             if expires_in:
                 expires_at = timezone.now() + timedelta(seconds=int(expires_in))
             
-            token_obj.access_token = new_token_data.get('access_token')
+            refreshed_access_token = TapisOAuth2Token.extract_access_token_value(new_token_data.get('access_token'))
+            if not refreshed_access_token:
+                logger.warning("Token refresh response did not include a directly usable access token; storing raw payload.")
+                refreshed_access_token = new_token_data.get('access_token')
+
+            token_obj.access_token = refreshed_access_token
             token_obj.token_type = new_token_data.get('token_type', 'Bearer')
             token_obj.expires_at = expires_at
             
@@ -345,12 +355,21 @@ class TapisOAuth2TokenRefreshView(APIView):
             }
             
             response = requests.post(client.token_url, data=token_data, headers=headers)
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
+
+            if response.status_code != 200:
                 logger.error(f"Token refresh failed: {response.status_code} - {response.text}")
                 return None
+
+            try:
+                payload = response.json()
+            except ValueError:
+                logger.error("Token refresh failed: response not JSON")
+                return None
+
+            if isinstance(payload, dict) and payload.get('status') == 'success' and 'result' in payload:
+                return payload['result']
+
+            return payload
                 
         except Exception as e:
             logger.error(f"Error refreshing access token: {str(e)}")

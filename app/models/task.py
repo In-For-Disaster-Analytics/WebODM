@@ -1498,29 +1498,16 @@ class Task(models.Model):
                 access_token__exact=''
             ).order_by('-created_at').first()
             
-            if token and token.is_valid:
-                # Extract the JWT string from the token data
-                access_token = token.access_token
-                if isinstance(access_token, dict) and 'access_token' in access_token:
-                    return access_token['access_token']
-                elif isinstance(access_token, str):
-                    # Handle case where token is stored as string representation of dict
-                    if access_token.startswith("{'access_token'"):
-                        import ast
-                        try:
-                            token_dict = ast.literal_eval(access_token)
-                            return token_dict.get('access_token')
-                        except:
-                            logger.warning(f"Could not parse token string for user {self.project.owner.username}")
-                            return None
-                    else:
-                        return access_token
-                else:
-                    logger.warning(f"Invalid access token format for user {self.project.owner.username}")
-                    return None
-            else:
-                logger.info(f"No valid Tapis OAuth2 token found for user {self.project.owner.username}")
+            if not token:
+                logger.info(f"No Tapis OAuth2 token found for user {self.project.owner.username}")
                 return None
+
+            access_token = token.get_or_refresh_access_token()
+            if access_token:
+                return access_token
+
+            logger.warning(f"Could not obtain a valid JWT token for user {self.project.owner.username}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error getting Tapis JWT token for user {self.project.owner.username}: {str(e)}")

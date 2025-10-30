@@ -25,6 +25,9 @@ class TapisStorageService:
         self.user = user
         self.client = client
         self.token = self._get_valid_token()
+        self.access_token_value = self.token.get_or_refresh_access_token()
+        if not self.access_token_value:
+            raise ValueError(f"Unable to obtain Tapis access token for user {self.user.username}")
         self.base_url = client.base_url.rstrip('/')
         
     def _get_valid_token(self) -> TapisOAuth2Token:
@@ -32,7 +35,9 @@ class TapisStorageService:
         try:
             token = TapisOAuth2Token.objects.get(user=self.user, client=self.client)
             if not token.is_valid:
-                raise ValueError("Token is expired or invalid")
+                refreshed = token.get_or_refresh_access_token()
+                if not refreshed:
+                    raise ValueError("Token is expired or invalid")
             return token
         except TapisOAuth2Token.DoesNotExist:
             raise ValueError(f"No Tapis token found for user {self.user.username}")
@@ -40,8 +45,15 @@ class TapisStorageService:
     def _make_request(self, endpoint: str, method: str = 'GET', **kwargs) -> Dict:
         """Make authenticated request to Tapis API"""
         url = urljoin(self.base_url + '/', endpoint)
+
+        token_value = self.token.get_or_refresh_access_token()
+        if token_value:
+            self.access_token_value = token_value
+        else:
+            raise ValueError("Failed to retrieve Tapis access token while making API request.")
+
         headers = {
-            'Authorization': f'Bearer {self.token.access_token}',
+            'Authorization': f'Bearer {self.access_token_value}',
             'Content-Type': 'application/json',
             'X-Tapis-Tenant': self.client.tenant_id
         }
@@ -258,8 +270,14 @@ class TapisStorageService:
         try:
             # Use Tapis Files API to download the file
             url = f"{self.base_url}/v3/files/content/{system_id}/{remote_path}"
+            token_value = self.token.get_or_refresh_access_token()
+            if token_value:
+                self.access_token_value = token_value
+            else:
+                raise ValueError("Failed to retrieve Tapis access token for file download.")
+
             headers = {
-                'Authorization': f'Bearer {self.token.access_token}',
+                'Authorization': f'Bearer {self.access_token_value}',
                 'X-Tapis-Tenant': self.client.tenant_id
             }
             
