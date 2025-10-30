@@ -19,6 +19,7 @@ CLUSTERODM_PORT="3000"
 NODEODM_PORT="3001"
 CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
+LOG_FILE="$REPO_BASE/setup.sh.log"
 
 # Colors for output
 RED='\033[0;31m'
@@ -27,11 +28,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Ensure log file directory exists and initialize log file
+mkdir -p "$(dirname "$LOG_FILE")"
+if [[ -z "${APPEND_SETUP_LOG:-}" ]]; then
+    : > "$LOG_FILE"
+fi
+
+timestamp() {
+    date +"%Y-%m-%d %H:%M:%S"
+}
+
+log_write() {
+    local level="$1"
+    local color="$2"
+    local message="$3"
+
+    echo -e "${color}[${level}]${NC} $message"
+    echo "$(timestamp) [${level}] $message" >> "$LOG_FILE"
+}
+
 # Logging functions
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_info() { log_write "INFO" "$BLUE" "$1"; }
+log_success() { log_write "SUCCESS" "$GREEN" "$1"; }
+log_warning() { log_write "WARNING" "$YELLOW" "$1"; }
+log_error() { log_write "ERROR" "$RED" "$1"; }
 
 # JWT helper for ClusterODM probes
 clusterodm_probe_token() {
@@ -252,12 +272,17 @@ build_images() {
     # Build WebODM
     if [[ -d "$REPO_BASE/WebODM" ]]; then
         cd "$REPO_BASE/WebODM"
-        log_info "Building WebODM Docker images..."
-        # Use build instead of rebuild to avoid hanging on stop
-        timeout 1800 ./webodm.sh build || {
-            log_warning "WebODM build timed out or failed, trying alternative build method"
-            timeout 1800 docker compose build --no-cache || log_error "WebODM build failed completely"
-        }
+        log_info "Installing WebODM npm dependencies..."
+        npm install || log_error "WebODM npm install failed"
+
+        log_info "Building WebODM frontend bundle..."
+        npx webpack --mode production || log_error "WebODM frontend bundle build failed"
+
+        log_info "Building WebODM Docker images (webapp, worker)..."
+        docker compose build --no-cache webapp worker || log_error "WebODM docker compose build failed"
+
+        log_info "Recreating WebODM containers..."
+        docker compose up -d --force-recreate webapp worker || log_error "WebODM docker compose up failed"
     fi
     
     # Build NodeODM-LS6
@@ -838,6 +863,7 @@ main() {
     # Stop any existing services before building to avoid conflicts
     log_info "Stopping any existing services before setup..."
     cd "$REPO_BASE/WebODM" && ./webodm.sh stop 2>/dev/null || log_warning "No WebODM services to stop"
+    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down 2>/dev/null || log_warning "No NodeODM services to stop"
     pkill -f "node index.js.*tapis-config.json" 2>/dev/null || log_warning "No ClusterODM process to stop"
 
     build_images  # Build images during initial setup
