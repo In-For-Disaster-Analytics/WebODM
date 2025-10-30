@@ -5,13 +5,6 @@
 
 set -e  # Exit on any error
 
-# Handle signals properly
-cleanup() {
-    log_error "Script interrupted"
-    exit 1
-}
-trap cleanup SIGINT SIGTERM
-
 # Configuration
 HOSTNAME="webodm.tacc.utexas.edu"
 WEBODM_PORT="8000"
@@ -21,17 +14,18 @@ CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
 LOG_FILE="$REPO_BASE/setup.sh.log"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
 # Ensure log file directory exists and initialize log file
 mkdir -p "$(dirname "$LOG_FILE")"
 if [[ -z "${APPEND_SETUP_LOG:-}" ]]; then
     : > "$LOG_FILE"
+fi
+
+if [[ "${SETUP_VERBOSE:-0}" -eq 1 ]]; then
+    exec > >(tee -a "$LOG_FILE")
+    exec 2>&1
+else
+    exec >> "$LOG_FILE"
+    exec 2>&1
 fi
 
 timestamp() {
@@ -40,18 +34,23 @@ timestamp() {
 
 log_write() {
     local level="$1"
-    local color="$2"
-    local message="$3"
+    local message="$2"
 
-    echo -e "${color}[${level}]${NC} $message"
-    echo "$(timestamp) [${level}] $message" >> "$LOG_FILE"
+    printf '%s [%s] %s\n' "$(timestamp)" "$level" "$message"
 }
 
 # Logging functions
-log_info() { log_write "INFO" "$BLUE" "$1"; }
-log_success() { log_write "SUCCESS" "$GREEN" "$1"; }
-log_warning() { log_write "WARNING" "$YELLOW" "$1"; }
-log_error() { log_write "ERROR" "$RED" "$1"; }
+log_info() { log_write "INFO" "$1"; }
+log_success() { log_write "SUCCESS" "$1"; }
+log_warning() { log_write "WARNING" "$1"; }
+log_error() { log_write "ERROR" "$1"; }
+
+# Handle signals properly
+cleanup() {
+    log_error "Script interrupted"
+    exit 1
+}
+trap cleanup SIGINT SIGTERM
 
 # JWT helper for ClusterODM probes
 clusterodm_probe_token() {
