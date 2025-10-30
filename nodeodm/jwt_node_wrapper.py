@@ -595,21 +595,20 @@ class JWTNodeWrapper:
                                 raise NodeServerError(f"ClusterODM download failed: {message}")
 
                 def restart(self, options=None):
-                        # For task restart, we need to make a POST request to restart endpoint
-                        restart_endpoint = f"{self.base_url}/task/{self.uuid}/restart"
+                        restart_endpoint = f"{self.base_url}/task/restart"
                         params = {}
                         if self.auth_token:
                             params['token'] = self.auth_token
                         if params:
                             restart_endpoint += "?" + urlencode(params)
 
-                        data = {}
+                        payload = {'uuid': self.uuid}
                         if options:
                             import json
-                            data['options'] = json.dumps([{'name': k, 'value': v} for k, v in options.items()])
+                            payload['options'] = json.dumps([{'name': k, 'value': v} for k, v in options.items()])
 
                         try:
-                            restart_response = requests.post(restart_endpoint, data=data, timeout=self.timeout)
+                            restart_response = requests.post(restart_endpoint, json=payload, timeout=self.timeout)
                             if restart_response.status_code == 200:
                                 return restart_response.json()
                             else:
@@ -621,8 +620,7 @@ class JWTNodeWrapper:
                             raise
 
                 def remove(self):
-                        # For task removal, we need to make a POST request to remove endpoint
-                        remove_endpoint = f"{self.base_url}/task/{self.uuid}/remove"
+                        remove_endpoint = f"{self.base_url}/task/remove"
                         params = {}
                         if self.auth_token:
                             params['token'] = self.auth_token
@@ -633,10 +631,13 @@ class JWTNodeWrapper:
                         logger.info(f"Method: POST")
                         logger.info(f"URL: {remove_endpoint}")
                         logger.info(f"Query Parameters: {params}")
+                        logger.info(f"Payload Keys: {['uuid']}")
                         logger.info(f"==========================================")
 
+                        payload = {'uuid': self.uuid}
+
                         try:
-                            remove_response = requests.post(remove_endpoint, timeout=self.timeout)
+                            remove_response = requests.post(remove_endpoint, json=payload, timeout=self.timeout)
 
                             logger.info(f"=== HTTP RESPONSE DETAILS (Task Remove) ===")
                             logger.info(f"Status Code: {remove_response.status_code}")
@@ -688,7 +689,7 @@ class JWTNodeWrapper:
                             return self._wrapper.cancel_task(self.uuid)
 
                         # Fallback path if wrapper reference isn't available
-                        cancel_endpoint = f"{self.base_url}/task/{self.uuid}/cancel"
+                        cancel_endpoint = f"{self.base_url}/task/cancel"
                         params = {}
                         if self.auth_token:
                             params['token'] = self.auth_token
@@ -699,10 +700,13 @@ class JWTNodeWrapper:
                         logger.info(f"Method: POST")
                         logger.info(f"URL: {cancel_endpoint}")
                         logger.info(f"Query Parameters: {params}")
+                        logger.info(f"Payload Keys: {['uuid']}")
                         logger.info(f"==========================================")
 
+                        payload = {'uuid': self.uuid}
+
                         try:
-                            cancel_response = requests.post(cancel_endpoint, timeout=self.timeout)
+                            cancel_response = requests.post(cancel_endpoint, json=payload, timeout=self.timeout)
 
                             logger.info(f"=== HTTP RESPONSE DETAILS (Task Cancel) ===")
                             logger.info(f"Status Code: {cancel_response.status_code}")
@@ -755,7 +759,7 @@ class JWTNodeWrapper:
         """
         Cancel a task directly using the JWT-enabled endpoint.
         """
-        cancel_endpoint = f"{self.base_url}/task/{uuid}/cancel"
+        cancel_endpoint = f"{self.base_url}/task/cancel"
         params = {}
         if self.auth_token:
             params['token'] = self.auth_token
@@ -766,10 +770,13 @@ class JWTNodeWrapper:
         logger.info(f"Method: POST")
         logger.info(f"URL: {cancel_endpoint}")
         logger.info(f"Query Parameters: {params}")
+        logger.info(f"Payload Keys: {['uuid']}")
         logger.info(f"==========================================")
 
+        payload = {'uuid': uuid}
+
         try:
-            cancel_response = requests.post(cancel_endpoint, timeout=self.timeout)
+            cancel_response = requests.post(cancel_endpoint, json=payload, timeout=self.timeout)
 
             logger.info(f"=== HTTP RESPONSE DETAILS (Task Cancel - Direct) ===")
             logger.info(f"Status Code: {cancel_response.status_code}")
