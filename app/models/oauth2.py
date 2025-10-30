@@ -128,8 +128,9 @@ class TapisOAuth2Token(models.Model):
 
         if isinstance(payload, dict):
             # Common Tapis structures wrap the actual token in nested objects
-            if 'access_token' in payload:
-                return TapisOAuth2Token._extract_access_token(payload['access_token'])
+            for key in ('access_token', 'token', 'value', 'jwt', 'jwt_token'):
+                if key in payload:
+                    return TapisOAuth2Token._extract_access_token(payload[key])
             if 'result' in payload:
                 return TapisOAuth2Token._extract_access_token(payload['result'])
 
@@ -225,19 +226,27 @@ class TapisOAuth2Token(models.Model):
         Return a valid access token, refreshing when necessary.
         """
         access_token = self.get_access_token_value()
+        raw_fallback = None
+        if isinstance(self.access_token, str):
+            raw_fallback = self.access_token.strip() or None
+        elif self.access_token:
+            raw_fallback = str(self.access_token)
+
         if access_token and not self.is_expired:
             return access_token
 
         if access_token and not self.refresh_token:
-            # Token string present but cannot refresh; return the stale token as last resort
             logger.warning("Tapis token is expired but no refresh token is available.")
             return access_token
+
+        if not access_token and raw_fallback:
+            logger.debug("Using raw stored Tapis token as fallback while attempting refresh.")
 
         try:
             return self.refresh()
         except Exception as exc:
             logger.error(f"Unable to refresh Tapis token for {self.user.username}: {exc}")
-            return access_token
+            return access_token or raw_fallback
 
 
 class TapisOAuth2State(models.Model):
