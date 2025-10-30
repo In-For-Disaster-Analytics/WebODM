@@ -206,80 +206,96 @@ class JWTNodeWrapper:
             logger.error(f"Error creating task with JWT token: {str(e)}")
             raise
     
+    def _fetch_task_info(self, uuid, with_output=None):
+        params = {}
+        self._apply_auth_token(params)
+
+        if with_output is not None and with_output is not True:
+            try:
+                params['with_output'] = int(with_output)
+            except (TypeError, ValueError):
+                pass
+        elif with_output is True:
+            params['with_output'] = 0
+
+        endpoint = f"{self.base_url}/task/{uuid}/info"
+        if params:
+            endpoint += "?" + urlencode(params)
+
+        logger.info(f"=== HTTP REQUEST DETAILS (Task Info) ===")
+        logger.info(f"Method: GET")
+        logger.info(f"URL: {endpoint}")
+        logger.info(f"Query Parameters: {params}")
+        logger.info(f"Auth: {'jwt' if self.jwt_token else ('node' if self.token else 'none')}")
+        logger.info(f"Timeout: {self.timeout}s")
+        logger.info(f"=========================================")
+
+        response = requests.get(endpoint, timeout=self.timeout)
+
+        logger.info(f"=== HTTP RESPONSE DETAILS (Task Info) ===")
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.info(f"Response Content Length: {len(response.content)} bytes")
+        if response.headers.get('content-type', '').startswith('application/json'):
+            try:
+                response_json = response.json()
+                logger.info(f"Response JSON: {response_json}")
+            except Exception:
+                logger.info(f"Response Text: {response.text[:1000]}...")
+        else:
+            logger.info(f"Response Text: {response.text[:1000]}...")
+        logger.info(f"==========================================")
+
+        if response.status_code != 200:
+            error_msg = f"Failed to get task info: HTTP {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            if response.status_code in (502, 503, 504):
+                raise NodeConnectionError(error_msg)
+            raise Exception(error_msg)
+
+        data = response.json()
+
+        if 'error' in data:
+            logger.error(f"ClusterODM returned error: {data['error']}")
+            raise NodeServerError(f"ClusterODM error: {data['error']}")
+
+        if 'uuid' not in data:
+            logger.error("ClusterODM response missing required 'uuid' field")
+            raise NodeServerError("ClusterODM response missing required 'uuid' field")
+
+        if 'options' not in data:
+            logger.warning("ClusterODM response missing 'options' field, adding empty options")
+            data['options'] = []
+
+        return data
+    
     def get_task(self, uuid):
         """
         Get task with JWT token support for task info queries.
         """
         try:
-            # Build the URL with JWT token for task info
-            endpoint = f"{self.base_url}/task/{uuid}/info"
-            params = {}
-            self._apply_auth_token(params)
-                
-            if params:
-                endpoint += "?" + urlencode(params)
-            
-            token_label = "JWT token" if self.jwt_token else ("node token" if self.token else "no token")
-            logger.info(f"=== HTTP REQUEST DETAILS (Task Info) ===")
-            logger.info(f"Method: GET")
-            logger.info(f"URL: {endpoint}")
-            logger.info(f"Query Parameters: {params}")
-            logger.info(f"Auth: {token_label}")
-            logger.info(f"Timeout: {self.timeout}s")
-            logger.info(f"=========================================")
-            
-            # Make the request
-            response = requests.get(endpoint, timeout=self.timeout)
-            
-            # Log detailed response information
-            logger.info(f"=== HTTP RESPONSE DETAILS (Task Info) ===")
-            logger.info(f"Status Code: {response.status_code}")
-            logger.info(f"Response Headers: {dict(response.headers)}")
-            logger.info(f"Response Content Length: {len(response.content)} bytes")
-            if response.headers.get('content-type', '').startswith('application/json'):
-                try:
-                    response_json = response.json()
-                    logger.info(f"Response JSON: {response_json}")
-                except:
-                    logger.info(f"Response Text: {response.text[:1000]}...")
-            else:
-                logger.info(f"Response Text: {response.text[:1000]}...")
-            logger.info(f"==========================================")
-            
-            if response.status_code == 200:
-                task_info_data = response.json()
+            task_info_data = self._fetch_task_info(uuid)
 
-                # Check if response contains an error instead of task data
-                if 'error' in task_info_data:
-                    logger.error(f"ClusterODM returned error: {task_info_data['error']}")
-                    raise NodeServerError(f"ClusterODM error: {task_info_data['error']}")
+            class TaskWrapper:
+                def __init__(self, uuid, task_info_data, wrapper, auth_token, timeout):
+                    self.uuid = uuid
+                    self._info_data = task_info_data
+                    self._wrapper = wrapper
+                    self.base_url = wrapper.base_url
+                    self.auth_token = auth_token
+                    self.timeout = timeout
 
-                # Ensure required fields exist to prevent KeyError in TaskInfo
-                if 'uuid' not in task_info_data:
-                    logger.error(f"ClusterODM response missing required 'uuid' field")
-                    raise NodeServerError("ClusterODM response missing required 'uuid' field")
+                def info(self, with_output=True):
+                    if self._wrapper:
+                        try:
+                            fetched = self._wrapper._fetch_task_info(self.uuid, with_output)
+                            self._info_data = fetched
+                        except Exception as e:
+                            logger.warning(f"[JWTNodeWrapper] Failed to fetch task info with output: {str(e)}")
+                    from pyodm.types import TaskInfo
+                    return TaskInfo(self._info_data)
 
-                # Ensure 'options' field exists to prevent KeyError
-                if 'options' not in task_info_data:
-                    logger.warning(f"ClusterODM response missing 'options' field, adding empty options")
-                    task_info_data['options'] = []
-                
-                # Create a task-like object that works with WebODM
-                class TaskWrapper:
-                    def __init__(self, uuid, task_info_data, base_url, auth_token, timeout, wrapper=None):
-                        self.uuid = uuid
-                        self._info_data = task_info_data
-                        self.base_url = base_url
-                        self.auth_token = auth_token
-                        self.timeout = timeout
-                        self._wrapper = wrapper
-                    
-                    def info(self, with_output=True):
-                        # Import TaskInfo here to avoid circular imports
-                        from pyodm.types import TaskInfo
-                        return TaskInfo(self._info_data)
-                    
-                    def output(self, line=0):
+                def output(self, line=0):
                         # For console output, we need to make another request
                         output_endpoint = f"{self.base_url}/task/{self.uuid}/output"
                         params = {'line': line}
@@ -585,7 +601,7 @@ class JWTNodeWrapper:
                             logger.info(f"============================================")
                             return {"success": False, "message": f"ClusterODM cancel error: {str(e)}"}
                 
-                return TaskWrapper(uuid, task_info_data, self.base_url, self.auth_token, self.timeout, wrapper=self)
+                return TaskWrapper(uuid, task_info_data, self, self.auth_token, self.timeout)
             else:
                 error_msg = f"Failed to get task info: {response.status_code} - {response.text}"
                 logger.error(error_msg)
