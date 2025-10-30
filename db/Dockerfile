@@ -21,16 +21,18 @@ COPY docker-entrypoint.sh /usr/local/bin/
 RUN ln -s /usr/local/bin/docker-entrypoint.sh / # backwards compat
 
 # Setup system
-RUN apt-get update; \
-    set -eux; \
+RUN set -eux; \
+	rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*; \
+    apt-get update; \
 	groupadd -r postgres --gid=999; \
 	useradd -r -g postgres --uid=999 --home-dir=/var/lib/postgresql --shell=/bin/bash postgres; \
 	mkdir -p /var/lib/postgresql; \
 	chown -R postgres:postgres /var/lib/postgresql; \
     # grab gosu for easy step-down from root
     # https://github.com/tianon/gosu/releases
+	rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends wget; \
+	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false wget; \
 	rm -rf /var/lib/apt/lists/*; \
 	dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
 	wget --no-check-certificate -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
@@ -38,13 +40,17 @@ RUN apt-get update; \
 	gosu --version; \
 	gosu nobody true; \
     # make the "en_US.UTF-8" locale so postgres will be utf-8 enabled by default
+	rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends locales; \
+	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false locales; \
+	rm -rf /var/lib/apt/lists/*; \
 	localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8; \
     # Build Postgres from source
 	mkdir /staging; \
+	rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends wget gcc build-essential libproj-dev libgeos-dev libxml2-dev zlib1g-dev libreadline-dev; \ 
+	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false wget gcc build-essential libproj-dev libgeos-dev libxml2-dev zlib1g-dev libreadline-dev; \ 
+	rm -rf /var/lib/apt/lists/*; \
 	cd /staging; \
 	wget --no-check-certificate -q https://github.com/OpenDroneMap/WebODM/releases/download/v1.9.2/postgresql-$PG_VERSION.tar.gz; \
 	cd /staging; \
@@ -69,8 +75,10 @@ RUN apt-get update; \
     # this 777 will be replaced by 700 at runtime (allows semi-arbitrary "--user" values)
     mkdir -p "$PGDATA" && chown -R postgres:postgres "$PGDATA" && chmod 777 "$PGDATA"; \
     # Build PostGIS from source
+	rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends libgdal-dev libjson-c-dev; \
+	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false libgdal-dev libjson-c-dev; \
+	rm -rf /var/lib/apt/lists/*; \
 	cd /staging; \
 	wget --no-check-certificate -q https://github.com/OpenDroneMap/WebODM/releases/download/v1.9.2/postgis-$POSTGIS_VERSION.tar.gz; \
 	wget --no-check-certificate -q -O /usr/include/json-c/json_object_private.h https://raw.githubusercontent.com/json-c/json-c/json-c-0.13/json_object_private.h; \
@@ -81,10 +89,10 @@ RUN apt-get update; \
 	make; \
 	make install; \
 	sed -i '1d' /usr/local/pgsql/share/extension/postgis--$POSTGIS_VERSION.sql; \
-	apt-get remove -y gcc build-essential wget; \
+	apt-get remove -y gcc build-essential wget || true; \
 	apt-get autoremove -y; \
 	apt-get clean; \
-	rm -fr /var/lib/apt/lists/* /staging /usr/include;
+	rm -fr /var/lib/apt/lists/* /var/cache/apt/archives /var/cache/apt/archives/partial /staging /usr/include;
 
 VOLUME /var/lib/postgresql/data
 ENTRYPOINT ["docker-entrypoint.sh"]
