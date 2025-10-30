@@ -744,7 +744,7 @@ class JWTNodeWrapper:
                             logger.info(f"============================================")
                             return {"success": False, "message": f"ClusterODM cancel error: {str(e)}"}
                 
-                return TaskWrapper(uuid, task_info_data, self, self.auth_token, self.timeout)
+            return TaskWrapper(uuid, task_info_data, self, self.auth_token, self.timeout)
                 
         except Exception as e:
             logger.error(f"Error getting task info with JWT token: {str(e)}")
