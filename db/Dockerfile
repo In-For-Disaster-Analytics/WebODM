@@ -92,7 +92,7 @@ RUN set -eux; \
 	apt-get remove -y gcc build-essential wget || true; \
 	apt-get autoremove -y; \
 	apt-get clean; \
-	rm -fr /var/lib/apt/lists/* /var/cache/apt/archives /var/cache/apt/archives/partial /staging /usr/include;
+	rm -fr /var/lib/apt/lists/* /var/cache/apt/archives /var/cache/apt/archives/partial /staging;
 
 VOLUME /var/lib/postgresql/data
 ENTRYPOINT ["docker-entrypoint.sh"]
