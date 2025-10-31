@@ -81,6 +81,8 @@ COPY package.json ./
 RUN --mount=type=cache,target=/root/.npm \
     <<EOT
     npm install --quiet
+    # Clear npm cache to avoid filling the build cache volume (prevents ENOSPC)
+    npm cache clean --force
     # Install webpack, webpack CLI
     npm install --quiet -g webpack@5.89.0
     npm install --quiet -g webpack-cli@5.1.4
