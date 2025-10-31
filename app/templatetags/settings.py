@@ -8,6 +8,19 @@ from django.utils.translation import gettext as _
 
 register = template.Library()
 logger = logging.getLogger('app.logger')
+_HEX_DIGITS = set('0123456789abcdefABCDEF')
+
+def _normalize_hexcolor(value):
+    if not value:
+        return None
+    color = value.strip()
+    if color.startswith('#'):
+        color = color[1:]
+    if len(color) == 3 and all(ch in _HEX_DIGITS for ch in color):
+        color = ''.join(ch * 2 for ch in color)
+    if len(color) == 6 and all(ch in _HEX_DIGITS for ch in color):
+        return color
+    return None
 
 @register.simple_tag
 def task_options_docs_link():
@@ -127,23 +140,12 @@ def complementary(hexcolor):
     """Returns complementary RGB color
     Example: complementaryColor('#FFFFFF') --> '#000000'
     """
-    if not hexcolor:
+    normalized = _normalize_hexcolor(hexcolor)
+    if not normalized:
+        logger.warning("Invalid hex color '%s' passed to complementary(). Returning original value.", hexcolor)
         return hexcolor
 
-    original = hexcolor
-    hexcolor = hexcolor.strip()
-    if hexcolor.startswith('#'):
-        hexcolor = hexcolor[1:]
-
-    if len(hexcolor) == 3:
-        hexcolor = ''.join(c * 2 for c in hexcolor)
-
-    hexdigits = set('0123456789abcdefABCDEF')
-    if len(hexcolor) != 6 or any(ch not in hexdigits for ch in hexcolor):
-        logger.warning("Invalid hex color '%s' passed to complementary(). Returning original value.", original)
-        return original
-
-    rgb = (hexcolor[0:2], hexcolor[2:4], hexcolor[4:6])
+    rgb = (normalized[0:2], normalized[2:4], normalized[4:6])
     comp = ['%02X' % (255 - int(a, 16)) for a in rgb]
     return '#' + ''.join(comp)
 
@@ -190,8 +192,12 @@ def scaleby(hexcolor, scalefactor, ignore_value = False):
 
         return "#%02x%02x%02x" % (r, g, b)
 
+    normalized = _normalize_hexcolor(hexcolor)
+    if not normalized:
+        logger.warning("Invalid hex color '%s' passed to scaleby(). Returning original value.", hexcolor)
+        return hexcolor
 
-    hexcolor = hexcolor.strip('#')
+    hexcolor = normalized
     scalefactor = abs(float(scalefactor))
     scalefactor = min(1.0, max(0, scalefactor))
 
