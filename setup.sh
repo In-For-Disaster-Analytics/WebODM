@@ -83,57 +83,6 @@ ensure_dir_ownership() {
     fi
 }
 
-# Ensure a repository path is symlinked into /corral storage, migrating data if needed
-link_corral_dir() {
-    local target="$1"
-    local link_path="$2"
-
-    mkdir -p "$(dirname "$link_path")"
-
-    if [[ ! -d "$target" ]]; then
-        if ! mkdir -p "$target"; then
-            log_warning "Failed to create $target; leaving $link_path unchanged"
-            return 1
-        fi
-    fi
-
-    if [[ -L "$link_path" ]]; then
-        local current
-        current=$(readlink "$link_path")
-        if [[ "$current" == "$target" ]]; then
-            return 0
-        fi
-        rm "$link_path"
-    elif [[ -e "$link_path" ]]; then
-        log_info "Migrating contents from $link_path to $target"
-        local migrated=false
-        if [[ -d "$link_path" ]]; then
-            if cp -a "$link_path"/. "$target"/ 2>/dev/null; then
-                migrated=true
-            else
-                log_warning "Copy from $link_path to $target failed"
-                return 1
-            fi
-        else
-            if mv "$link_path" "$target"/; then
-                migrated=true
-            else
-                log_warning "Move from $link_path to $target failed"
-                return 1
-            fi
-        fi
-        if [[ "$migrated" == true ]]; then
-            rm -rf "$link_path"
-        fi
-    fi
-
-    if ln -s "$target" "$link_path"; then
-        log_info "Linked $link_path -> $target"
-    else
-        log_warning "Failed to create symlink $link_path -> $target"
-    fi
-}
-
 # Handle signals properly
 cleanup() {
     log_error "Script interrupted"
@@ -268,15 +217,9 @@ setup_storage() {
     # Create ClusterODM storage
     sudo mkdir -p "$CORRAL_BASE/clusterodm/data"
     
-    # Set permissions
+    # Set permissions (best effort; may be skipped on root-squashed exports)
     ensure_dir_ownership "$CORRAL_BASE/webodm"
     ensure_dir_ownership "$CORRAL_BASE/clusterodm"
-
-    # Link heavy working directories into /corral storage
-    link_corral_dir "$CORRAL_BASE/webodm/media" "$REPO_BASE/WebODM/corral/media" || true
-    link_corral_dir "$CORRAL_BASE/webodm/db" "$REPO_BASE/WebODM/corral/db" || true
-    link_corral_dir "$CORRAL_BASE/webodm/build" "$REPO_BASE/WebODM/build" || true
-    link_corral_dir "$CORRAL_BASE/webodm/node_modules" "$REPO_BASE/WebODM/node_modules" || true
     
     log_success "Storage directories created"
 }
