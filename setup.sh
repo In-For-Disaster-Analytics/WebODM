@@ -12,6 +12,7 @@ CLUSTERODM_PORT="3000"
 NODEODM_PORT="3001"
 CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
+LOCAL_DB_DIR="$REPO_BASE/postgres-data"
 LOG_FILE="$REPO_BASE/setup.sh.log"
 
 # Ensure log file directory exists, initialize the log and always mirror output to stdout
@@ -211,8 +212,8 @@ setup_storage() {
     
     # Create WebODM storage
     mkdir -p "$CORRAL_BASE/webodm/media"
-    mkdir -p "$CORRAL_BASE/webodm/db"
     mkdir -p "$CORRAL_BASE/webodm/backups"
+    mkdir -p "$LOCAL_DB_DIR"
     
     # Create ClusterODM storage
     sudo mkdir -p "$CORRAL_BASE/clusterodm/data"
@@ -220,6 +221,11 @@ setup_storage() {
     # Set permissions (best effort; may be skipped on root-squashed exports)
     ensure_dir_ownership "$CORRAL_BASE/webodm"
     ensure_dir_ownership "$CORRAL_BASE/clusterodm"
+    if sudo chown -R 999:999 "$LOCAL_DB_DIR"; then
+        log_info "Database directory owner set to postgres (999:999)"
+    else
+        log_warning "Could not set ownership on $LOCAL_DB_DIR (postgres container may fail)"
+    fi
     
     log_success "Storage directories created"
 }
@@ -394,16 +400,33 @@ setup_webodm() {
         exit 1
     }
     
-    # Verify .env file has correct corral paths
+    # Verify .env file has correct storage paths
     if [[ -f .env ]]; then
-        # Update .env with corral paths if not already set
-        if ! grep -q "$CORRAL_BASE/webodm" .env; then
-            log_info "Updating WebODM .env for corral storage..."
-            sed -i "s|WO_MEDIA_DIR=.*|WO_MEDIA_DIR=$CORRAL_BASE/webodm/media|" .env
-            sed -i "s|WO_DB_DIR=.*|WO_DB_DIR=$CORRAL_BASE/webodm/db|" .env
-            sed -i "s|WO_HOST=.*|WO_HOST=$HOSTNAME|" .env
-            sed -i "s|WO_PORT=.*|WO_PORT=$WEBODM_PORT|" .env
-            sed -i "s|WO_DEBUG=.*|WO_DEBUG=NO|" .env
+        log_info "Ensuring WebODM .env paths and settings are up to date..."
+        if grep -q '^WO_MEDIA_DIR=' .env; then
+            sed -i "s|^WO_MEDIA_DIR=.*|WO_MEDIA_DIR=$CORRAL_BASE/webodm/media|" .env
+        else
+            echo "WO_MEDIA_DIR=$CORRAL_BASE/webodm/media" >> .env
+        fi
+        if grep -q '^WO_DB_DIR=' .env; then
+            sed -i "s|^WO_DB_DIR=.*|WO_DB_DIR=$LOCAL_DB_DIR|" .env
+        else
+            echo "WO_DB_DIR=$LOCAL_DB_DIR" >> .env
+        fi
+        if grep -q '^WO_HOST=' .env; then
+            sed -i "s|^WO_HOST=.*|WO_HOST=$HOSTNAME|" .env
+        else
+            echo "WO_HOST=$HOSTNAME" >> .env
+        fi
+        if grep -q '^WO_PORT=' .env; then
+            sed -i "s|^WO_PORT=.*|WO_PORT=$WEBODM_PORT|" .env
+        else
+            echo "WO_PORT=$WEBODM_PORT" >> .env
+        fi
+        if grep -q '^WO_DEBUG=' .env; then
+            sed -i "s|^WO_DEBUG=.*|WO_DEBUG=NO|" .env
+        else
+            echo "WO_DEBUG=NO" >> .env
         fi
     else
         log_error ".env file not found in WebODM directory"
@@ -836,7 +859,7 @@ print_summary() {
     echo "WebODM URL: http://$HOSTNAME:$WEBODM_PORT"
     echo "ClusterODM URL: http://$HOSTNAME:$CLUSTERODM_PORT"
     echo "Media Storage: $CORRAL_BASE/webodm/media"
-    echo "Database Storage: $CORRAL_BASE/webodm/db"
+    echo "Database Storage: $LOCAL_DB_DIR"
     echo "Backups: $CORRAL_BASE/webodm/backups"
     echo "==========================================="
     echo ""
