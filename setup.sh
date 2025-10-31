@@ -40,6 +40,49 @@ log_success() { log_write "SUCCESS" "$1"; }
 log_warning() { log_write "WARNING" "$1"; }
 log_error() { log_write "ERROR" "$1"; }
 
+# Cross-platform stat helpers
+stat_owner() {
+    local path="$1"
+    if stat --format %U "$path" &>/dev/null; then
+        stat --format %U "$path"
+    else
+        stat -f %Su "$path"
+    fi
+}
+
+stat_group() {
+    local path="$1"
+    if stat --format %G "$path" &>/dev/null; then
+        stat --format %G "$path"
+    else
+        stat -f %Sg "$path"
+    fi
+}
+
+# Ensure ownership of corral directories when possible
+ensure_dir_ownership() {
+    local path="$1"
+    local desired_user="$USER"
+    local desired_group
+    desired_group=$(id -gn)
+
+    [[ -e "$path" ]] || return 0
+
+    local current_owner current_group
+    current_owner=$(stat_owner "$path" 2>/dev/null || echo "")
+    current_group=$(stat_group "$path" 2>/dev/null || echo "")
+
+    if [[ "$current_owner" == "$desired_user" && "$current_group" == "$desired_group" ]]; then
+        return 0
+    fi
+
+    if sudo chown -R "$desired_user:$desired_group" "$path"; then
+        log_info "Adjusted ownership for $path"
+    else
+        log_warning "Could not change ownership of $path; continuing (root-squash?)"
+    fi
+}
+
 # Ensure a repository path is symlinked into /corral storage, migrating data if needed
 link_corral_dir() {
     local target="$1"
@@ -226,8 +269,8 @@ setup_storage() {
     sudo mkdir -p "$CORRAL_BASE/clusterodm/data"
     
     # Set permissions
-    sudo chown -R "$USER:$(id -gn)" "$CORRAL_BASE/webodm"
-    sudo chown -R "$USER:$(id -gn)" "$CORRAL_BASE/clusterodm"
+    ensure_dir_ownership "$CORRAL_BASE/webodm"
+    ensure_dir_ownership "$CORRAL_BASE/clusterodm"
 
     # Link heavy working directories into /corral storage
     link_corral_dir "$CORRAL_BASE/webodm/media" "$REPO_BASE/WebODM/corral/media" || true
