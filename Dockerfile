@@ -136,7 +136,7 @@ RUN <<EOT
     # Remove stale temp files
     rm -rf /tmp/* /var/tmp/*
     # Remove auto-generated secret key (happens on import of settings when none is defined)
-    rm /webodm/webodm/secret_key.py
+    rm -f /webodm/webodm/secret_key.py
 EOT
 
 FROM common AS app
