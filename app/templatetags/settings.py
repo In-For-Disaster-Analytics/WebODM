@@ -127,8 +127,22 @@ def complementary(hexcolor):
     """Returns complementary RGB color
     Example: complementaryColor('#FFFFFF') --> '#000000'
     """
-    if hexcolor[0] == '#':
+    if not hexcolor:
+        return hexcolor
+
+    original = hexcolor
+    hexcolor = hexcolor.strip()
+    if hexcolor.startswith('#'):
         hexcolor = hexcolor[1:]
+
+    if len(hexcolor) == 3:
+        hexcolor = ''.join(c * 2 for c in hexcolor)
+
+    hexdigits = set('0123456789abcdefABCDEF')
+    if len(hexcolor) != 6 or any(ch not in hexdigits for ch in hexcolor):
+        logger.warning("Invalid hex color '%s' passed to complementary(). Returning original value.", original)
+        return original
+
     rgb = (hexcolor[0:2], hexcolor[2:4], hexcolor[4:6])
     comp = ['%02X' % (255 - int(a, 16)) for a in rgb]
     return '#' + ''.join(comp)
