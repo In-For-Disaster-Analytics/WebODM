@@ -14,19 +14,14 @@ CORRAL_BASE="/corral"
 REPO_BASE="$HOME/ODM-SUITE"
 LOG_FILE="$REPO_BASE/setup.sh.log"
 
-# Ensure log file directory exists and initialize log file
+# Ensure log file directory exists, initialize the log and always mirror output to stdout
 mkdir -p "$(dirname "$LOG_FILE")"
 if [[ -z "${APPEND_SETUP_LOG:-}" ]]; then
     : > "$LOG_FILE"
 fi
 
-if [[ "${SETUP_VERBOSE:-0}" -eq 1 ]]; then
-    exec > >(tee -a "$LOG_FILE")
-    exec 2>&1
-else
-    exec >> "$LOG_FILE"
-    exec 2>&1
-fi
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
 
 timestamp() {
     date +"%Y-%m-%d %H:%M:%S"
