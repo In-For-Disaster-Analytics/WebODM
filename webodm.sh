@@ -499,6 +499,7 @@ down(){
 
 rebuild(){
 	run "$docker_compose down --remove-orphans"
+	run "docker builder prune -f"
 	run "rm -fr node_modules/ || sudo rm -fr node_modules/"
 	run "rm -fr nodeodm/external/NodeODM || sudo rm -fr nodeodm/external/NodeODM"
 	run "$docker_compose -f docker-compose.yml -f docker-compose.build.yml build --no-cache"
