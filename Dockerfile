@@ -129,9 +129,7 @@ RUN <<EOT
     # Run webpack build, Django setup and final cleanup
     webpack --mode production
     # Django setup
-    if [ -e /webodm/build ] && [ ! -d /webodm/build ]; then
-        rm -f /webodm/build
-    fi
+    rm -rf /webodm/build
     mkdir -p /webodm/build/static
     python manage.py collectstatic --noinput
     python manage.py rebuildplugins
