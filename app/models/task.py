@@ -617,6 +617,16 @@ class Task(models.Model):
                     checked_path_to_file = path_traversal_check(unsafe_path_to_import_file, imports_folder_path)
                     if os.path.isfile(checked_path_to_file):
                         copyfile(checked_path_to_file, zip_path)
+                    elif os.path.isdir(checked_path_to_file):
+                        logger.info("Creating zip archive from directory %s for %s", checked_path_to_file, self)
+                        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_h:
+                            for root, _, files in os.walk(checked_path_to_file):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    arcname = os.path.relpath(file_path, checked_path_to_file)
+                                    zip_h.write(file_path, arcname)
+                    else:
+                        raise NodeServerError(gettext("Selected import path is not a file or directory."))
                 except SuspiciousFileOperation as e:
                     logger.error("Error due importing assets from {} for {} in cause of path checking error".format(self.import_url, self))
                     raise NodeServerError(e)

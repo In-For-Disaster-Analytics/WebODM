@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 
 import io
@@ -223,6 +224,45 @@ class TestApiTask(BootTransactionTestCase):
 
             self.assertEqual(file_import_task.import_url, "file://all.zip")
             self.assertEqual(file_import_task.images_count, 1)
+
+            # Prepare staged dataset in media/imports
+            imports_dir = os.path.join(settings.MEDIA_ROOT, "imports")
+            os.makedirs(imports_dir, exist_ok=True)
+            staged_dir = os.path.join(imports_dir, "staged_dataset")
+            os.makedirs(staged_dir, exist_ok=True)
+            shutil.copy("app/fixtures/tiny_drone_image.jpg", os.path.join(staged_dir, "image1.jpg"))
+            shutil.copy("app/fixtures/tiny_drone_image_2.jpg", os.path.join(staged_dir, "image2.jpg"))
+
+            # List staged imports
+            res = client.get(f"/api/projects/{project.id}/tasks/import")
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            names = [entry['name'] for entry in res.data['entries']]
+            self.assertIn("staged_dataset", names)
+
+            # Drill down into staged directory listing
+            res = client.get(f"/api/projects/{project.id}/tasks/import", {'path': 'staged_dataset'})
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            staged_entries = [entry['name'] for entry in res.data['entries']]
+            self.assertIn("image1.jpg", staged_entries)
+
+            # Import from staged directory via file:// URL
+            res = client.post(f"/api/projects/{project.id}/tasks/import", {
+                'url': 'file://staged_dataset'
+            })
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+            staged_task = Task.objects.get(id=res.data['id'])
+            c = 0
+            while c < 10:
+                worker.tasks.process_pending_tasks()
+                staged_task.refresh_from_db()
+                if staged_task.status == status_codes.COMPLETED:
+                    break
+                c += 1
+                time.sleep(1)
+
+            self.assertEqual(staged_task.import_url, "file://staged_dataset")
+            self.assertTrue(os.path.exists(staged_task.assets_path("image1.jpg")))
 
     def test_backup(self):
         client = APIClient()

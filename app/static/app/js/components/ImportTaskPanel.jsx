@@ -26,10 +26,27 @@ class ImportTaskPanel extends React.Component {
       typeUrl: false,
       uploading: false,
       importingFromUrl: false,
+      importingFromLocal: false,
       progress: 0,
       bytesSent: 0,
-      importUrl: ""
+      importUrl: "",
+      localBrowserVisible: false,
+      localEntries: [],
+      localPath: "",
+      localParent: "",
+      localLoading: false,
+      localError: "",
+      selectedLocalPath: ""
     };
+  }
+
+  formatBytes = bytes => {
+    if (typeof bytes !== 'number' || isNaN(bytes)) return "";
+    if (bytes === 0) return "0 B";
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.floor(Math.log(bytes) / Math.log(1024));
+    const size = bytes / Math.pow(1024, Math.min(index, units.length - 1));
+    return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[Math.min(index, units.length - 1)]}`;
   }
 
   defaultTaskName = () => {
@@ -150,6 +167,170 @@ class ImportTaskPanel extends React.Component {
     });
   }
 
+  handleOpenLocalBrowser = () => {
+    this.setState({
+      localBrowserVisible: true,
+      localEntries: [],
+      localError: "",
+      selectedLocalPath: "",
+      localPath: "",
+      localParent: ""
+    }, () => this.fetchLocalEntries(""));
+  }
+
+  handleCloseLocalBrowser = () => {
+    this.setState({
+      localBrowserVisible: false,
+      localEntries: [],
+      localError: "",
+      selectedLocalPath: "",
+      localLoading: false
+    });
+  }
+
+  fetchLocalEntries = (path = "") => {
+    this.setState({localLoading: true, localError: ""});
+
+    const query = path ? { path } : {};
+    $.get(`/api/projects/${this.props.projectId}/tasks/import`, query)
+      .done(data => {
+        this.setState({
+          localEntries: data.entries || [],
+          localPath: data.path || "",
+          localParent: data.parent || "",
+          localLoading: false,
+          selectedLocalPath: ""
+        });
+      })
+      .fail(err => {
+        let error = _("Cannot read imports directory.");
+        if (err && err.responseJSON){
+          if (Array.isArray(err.responseJSON) && err.responseJSON.length && typeof err.responseJSON[0] === 'string'){
+            error = err.responseJSON[0];
+          }else if (err.responseJSON.detail){
+            error = err.responseJSON.detail;
+          }
+        }
+        this.setState({localLoading: false, localError: error});
+      });
+  }
+
+  handleSelectLocalEntry = (path) => {
+    this.setState({selectedLocalPath: path});
+  }
+
+  handleConfirmLocalImport = () => {
+    if (!this.state.selectedLocalPath) return;
+    this.setState({importingFromLocal: true, localError: ""});
+
+    $.post(`/api/projects/${this.props.projectId}/tasks/import`,
+      {
+        url: `file://${this.state.selectedLocalPath}`,
+        name: this.defaultTaskName()
+      }
+    ).done(json => {
+      this.setState({importingFromLocal: false});
+
+      if (json.id){
+        this.setState({localBrowserVisible: false});
+        this.props.onImported();
+      }else{
+        const error = json.error || interpolate(_("Invalid JSON response: %(error)s"), {error: JSON.stringify(json)});
+        this.setState({localError: error});
+      }
+    })
+    .fail((e) => {
+      let error = _("Cannot import from local path.");
+      if (e && e.responseJSON){
+        if (Array.isArray(e.responseJSON) && e.responseJSON.length && typeof e.responseJSON[0] === 'string'){
+          error = e.responseJSON[0];
+        }else if (e.responseJSON.detail){
+          error = e.responseJSON.detail;
+        }
+      }
+      this.setState({importingFromLocal: false, localError: error});
+    });
+  }
+
+  handleNavigateParent = () => {
+    if (this.state.localParent !== undefined && this.state.localParent !== null){
+      this.fetchLocalEntries(this.state.localParent);
+    }
+  }
+
+  renderLocalBrowser(){
+    if (!this.state.localBrowserVisible) return null;
+
+    const { localEntries, localLoading, localPath, localParent, selectedLocalPath, importingFromLocal, localError } = this.state;
+
+    return (
+      <div className="panel panel-default local-import-browser">
+        <div className="panel-heading clearfix">
+          <strong>{_("Server Import Browser")}</strong>
+          <button type="button" className="close" onClick={this.handleCloseLocalBrowser}><span aria-hidden="true">&times;</span></button>
+        </div>
+        <div className="panel-body">
+          <p>{_("Select a folder or ZIP located under media/imports.")}</p>
+          <p><strong>{_("Current path:")}</strong> {localPath ? `/${localPath}` : "/"}</p>
+          {localError ? <div className="alert alert-danger">{localError}</div> : ""}
+          {localLoading ? <p>{_("Loading...")}</p> :
+            <div className="table-responsive">
+              <table className="table table-condensed table-hover">
+                <tbody>
+                  {localPath ?
+                    <tr key="..">
+                      <td colSpan="3">
+                        <button type="button" className="btn btn-link btn-sm" onClick={this.handleNavigateParent}>
+                          <i className="glyphicon glyphicon-level-up"></i> {_("Parent Directory")}
+                        </button>
+                      </td>
+                    </tr> : null}
+                  {localEntries.length === 0 ?
+                    <tr><td colSpan="3"><em>{_("Directory is empty.")}</em></td></tr> :
+                    localEntries.map(entry => (
+                      <tr key={entry.path} className={selectedLocalPath === entry.path ? "info" : ""}>
+                        <td>
+                          <i className={`glyphicon ${entry.is_dir ? "glyphicon-folder-open" : "glyphicon-file"}`}></i>&nbsp;
+                          {entry.name}
+                        </td>
+                        <td>{entry.is_dir ? "" : this.formatBytes(entry.size)}</td>
+                        <td className="text-right">
+                          {entry.is_dir ?
+                            <button type="button" className="btn btn-link btn-xs" onClick={() => this.fetchLocalEntries(entry.path)}>
+                              {_("Open")}
+                            </button> : null}
+                          <button type="button" className="btn btn-link btn-xs" onClick={() => this.handleSelectLocalEntry(entry.path)}>
+                            {_("Select")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+        <div className="panel-footer clearfix">
+          <span><strong>{_("Selected:")}</strong> {selectedLocalPath || _("None")}</span>
+          <div className="pull-right">
+            <button type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={!selectedLocalPath || importingFromLocal}
+                    onClick={this.handleConfirmLocalImport}>
+              <i className="glyphicon glyphicon-cloud-download"></i> {importingFromLocal ? _("Importing...") : _("Import Selected")}
+            </button>
+            <button type="button"
+                    className="btn btn-default btn-sm"
+                    onClick={this.handleCloseLocalBrowser}>
+              {_("Close")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   setRef = (prop) => {
     return (domNode) => {
       if (domNode != null) this[prop] = domNode;
@@ -181,6 +362,13 @@ class ImportTaskPanel extends React.Component {
             <i className="glyphicon glyphicon-cloud-download"></i>
             {_("Import From URL")}
           </button>
+          <button disabled={this.state.uploading}
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={this.handleOpenLocalBrowser}>
+            <i className="glyphicon glyphicon-folder-open"></i>
+            {_("Import From Server")}
+          </button>
 
           {this.state.typeUrl ? 
             <div className="form-inline">
@@ -201,6 +389,8 @@ class ImportTaskPanel extends React.Component {
               {_("Cancel Upload")}
             </button> 
           </div> : ""}
+
+          {this.renderLocalBrowser()}
         </div>
       </div>
     );

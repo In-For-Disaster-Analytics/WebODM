@@ -1,7 +1,9 @@
 import logging
 import os
+import posixpath
 import re
 import shutil
+from datetime import datetime
 from wsgiref.util import FileWrapper
 
 import mimetypes
@@ -20,6 +22,7 @@ from django.http import FileResponse
 from django.http import HttpResponse
 from django.http import StreamingHttpResponse
 from django.contrib.gis.geos import Polygon
+from django.utils import timezone
 from zipstream.ng import ZipStream
 from rest_framework import status, serializers, viewsets, filters, exceptions, permissions, parsers
 from rest_framework.decorators import action
@@ -678,6 +681,71 @@ class TaskAssetsImport(APIView):
     permission_classes = (permissions.AllowAny,)
     parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
 
+    def _imports_base_dir(self):
+        return os.path.join(settings.MEDIA_ROOT, "imports")
+
+    def _normalize_relative_path(self, rel_path):
+        rel_path = (rel_path or "").replace("\\", "/")
+        rel_path = rel_path.strip("/")
+        if not rel_path:
+            return ""
+        normalized = posixpath.normpath(rel_path)
+        return "" if normalized == "." else normalized
+
+    def _resolve_import_path(self, rel_path):
+        base_dir = self._imports_base_dir()
+        target_path = os.path.join(base_dir, rel_path)
+        return path_traversal_check(target_path, base_dir)
+
+    def get(self, request, project_pk=None):
+        project = get_and_check_project(request, project_pk, ('change_project',))
+
+        rel_path = self._normalize_relative_path(request.query_params.get('path', ''))
+        base_dir = self._imports_base_dir()
+
+        if not os.path.isdir(base_dir):
+            entries = []
+        else:
+            try:
+                target_path = self._resolve_import_path(rel_path)
+            except SuspiciousFileOperation:
+                raise exceptions.ValidationError(detail=_("Invalid import path."))
+
+            if not os.path.isdir(target_path):
+                raise exceptions.NotFound(_("Path does not exist."))
+
+            entries = []
+            with os.scandir(target_path) as it:
+                for entry in it:
+                    try:
+                        stat = entry.stat()
+                    except FileNotFoundError:
+                        continue
+
+                    entry_rel_path = entry.name if not rel_path else posixpath.join(rel_path, entry.name)
+                    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    entries.append({
+                        'name': entry.name,
+                        'path': entry_rel_path,
+                        'is_dir': entry.is_dir(),
+                        'size': stat.st_size if entry.is_file() else None,
+                        'modified': modified.isoformat()
+                    })
+
+            # Sort directories first, then files alphabetically
+            entries.sort(key=lambda e: (not e['is_dir'], e['name'].lower()))
+
+        parent_path = posixpath.dirname(rel_path) if rel_path else ""
+        if parent_path == ".":
+            parent_path = ""
+
+        return Response({
+            'project': project.id,
+            'path': rel_path,
+            'parent': parent_path,
+            'entries': entries
+        })
+
     def post(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project',))
 
@@ -691,7 +759,22 @@ class TaskAssetsImport(APIView):
         if import_url:
             if len(files) > 0:
                 raise exceptions.ValidationError(detail=_("Cannot create task, either specify a URL or upload 1 file."))
-            if re.match(r"^https?:\/\/.+$", import_url.lower()) is None:
+            if import_url.lower().startswith("file://"):
+                rel_import_path = self._normalize_relative_path(import_url[7:])
+                base_dir = self._imports_base_dir()
+                if not os.path.isdir(base_dir):
+                    raise exceptions.ValidationError(detail=_("Local import directory is not configured."))
+                try:
+                    resolved_path = self._resolve_import_path(rel_import_path)
+                except SuspiciousFileOperation:
+                    raise exceptions.ValidationError(detail=_("Invalid local import path."))
+
+                if not os.path.exists(resolved_path):
+                    raise exceptions.ValidationError(detail=_("Selected file does not exist."))
+
+                # Normalize import_url to avoid duplicate path styles
+                import_url = f"file://{rel_import_path}"
+            elif re.match(r"^https?:\/\/.+$", import_url.lower()) is None:
                 raise exceptions.ValidationError(detail=_("Invalid URL. Did you mean %(hint)s ?") % { 'hint': f'http://{import_url}'})
 
         chunk_index = request.data.get('dzchunkindex')
