@@ -27,6 +27,7 @@ class ImportTaskPanel extends React.Component {
       uploading: false,
       importingFromUrl: false,
       importingFromLocal: false,
+      processingLocal: false,
       progress: 0,
       bytesSent: 0,
       importUrl: "",
@@ -36,7 +37,8 @@ class ImportTaskPanel extends React.Component {
       localParent: "",
       localLoading: false,
       localError: "",
-      selectedLocalPath: ""
+      selectedLocalPath: "",
+      selectedLocalEntry: null
     };
   }
 
@@ -174,7 +176,9 @@ class ImportTaskPanel extends React.Component {
       localError: "",
       selectedLocalPath: "",
       localPath: "",
-      localParent: ""
+      localParent: "",
+      processingLocal: false,
+      selectedLocalEntry: null
     }, () => this.fetchLocalEntries(""));
   }
 
@@ -184,7 +188,9 @@ class ImportTaskPanel extends React.Component {
       localEntries: [],
       localError: "",
       selectedLocalPath: "",
-      localLoading: false
+      localLoading: false,
+      processingLocal: false,
+      selectedLocalEntry: null
     });
   }
 
@@ -199,7 +205,8 @@ class ImportTaskPanel extends React.Component {
           localPath: data.path || "",
           localParent: data.parent || "",
           localLoading: false,
-          selectedLocalPath: ""
+          selectedLocalPath: "",
+          selectedLocalEntry: null
         });
       })
       .fail(err => {
@@ -215,17 +222,18 @@ class ImportTaskPanel extends React.Component {
       });
   }
 
-  handleSelectLocalEntry = (path) => {
-    this.setState({selectedLocalPath: path});
+  handleSelectLocalEntry = (entry) => {
+    this.setState({selectedLocalPath: entry.path, selectedLocalEntry: entry});
   }
 
   handleConfirmLocalImport = () => {
-    if (!this.state.selectedLocalPath) return;
+    const { selectedLocalEntry } = this.state;
+    if (!selectedLocalEntry) return;
     this.setState({importingFromLocal: true, localError: ""});
 
     $.post(`/api/projects/${this.props.projectId}/tasks/import`,
       {
-        url: `file://${this.state.selectedLocalPath}`,
+        url: `file://${selectedLocalEntry.path}`,
         name: this.defaultTaskName()
       }
     ).done(json => {
@@ -252,6 +260,42 @@ class ImportTaskPanel extends React.Component {
     });
   }
 
+  handleProcessLocalDirectory = () => {
+    const { selectedLocalEntry } = this.state;
+    if (!selectedLocalEntry || !selectedLocalEntry.is_dir) return;
+
+    this.setState({processingLocal: true, localError: ""});
+
+    $.post(`/api/projects/${this.props.projectId}/tasks/import`,
+      {
+        url: `file://${selectedLocalEntry.path}`,
+        name: this.defaultTaskName(),
+        process_directory: true
+      }
+    ).done(json => {
+      this.setState({processingLocal: false});
+
+      if (json.id){
+        this.setState({localBrowserVisible: false});
+        this.props.onImported();
+      }else{
+        const error = json.error || interpolate(_("Invalid JSON response: %(error)s"), {error: JSON.stringify(json)});
+        this.setState({localError: error});
+      }
+    })
+    .fail((e) => {
+      let error = _("Cannot import from local path.");
+      if (e && e.responseJSON){
+        if (Array.isArray(e.responseJSON) && e.responseJSON.length && typeof e.responseJSON[0] === 'string'){
+          error = e.responseJSON[0];
+        }else if (e.responseJSON.detail){
+          error = e.responseJSON.detail;
+        }
+      }
+      this.setState({processingLocal: false, localError: error});
+    });
+  }
+
   handleNavigateParent = () => {
     if (this.state.localParent !== undefined && this.state.localParent !== null){
       this.fetchLocalEntries(this.state.localParent);
@@ -261,7 +305,7 @@ class ImportTaskPanel extends React.Component {
   renderLocalBrowser(){
     if (!this.state.localBrowserVisible) return null;
 
-    const { localEntries, localLoading, localPath, localParent, selectedLocalPath, importingFromLocal, localError } = this.state;
+    const { localEntries, localLoading, localPath, localParent, selectedLocalPath, selectedLocalEntry, importingFromLocal, processingLocal, localError } = this.state;
 
     return (
       <div className="panel panel-default local-import-browser">
@@ -299,7 +343,7 @@ class ImportTaskPanel extends React.Component {
                             <button type="button" className="btn btn-link btn-xs" onClick={() => this.fetchLocalEntries(entry.path)}>
                               {_("Open")}
                             </button> : null}
-                          <button type="button" className="btn btn-link btn-xs" onClick={() => this.handleSelectLocalEntry(entry.path)}>
+                          <button type="button" className="btn btn-link btn-xs" onClick={() => this.handleSelectLocalEntry(entry)}>
                             {_("Select")}
                           </button>
                         </td>
@@ -315,8 +359,14 @@ class ImportTaskPanel extends React.Component {
           <span><strong>{_("Selected:")}</strong> {selectedLocalPath || _("None")}</span>
           <div className="pull-right">
             <button type="button"
+                    className="btn btn-success btn-sm"
+                    disabled={!selectedLocalEntry || !selectedLocalEntry.is_dir || processingLocal || importingFromLocal}
+                    onClick={this.handleProcessLocalDirectory}>
+              <i className="glyphicon glyphicon-play-circle"></i> {processingLocal ? _("Starting...") : _("Process Images")}
+            </button>
+            <button type="button"
                     className="btn btn-primary btn-sm"
-                    disabled={!selectedLocalPath || importingFromLocal}
+                    disabled={!selectedLocalPath || importingFromLocal || processingLocal}
                     onClick={this.handleConfirmLocalImport}>
               <i className="glyphicon glyphicon-cloud-download"></i> {importingFromLocal ? _("Importing...") : _("Import Selected")}
             </button>

@@ -680,6 +680,8 @@ Task assets import
 class TaskAssetsImport(APIView):
     permission_classes = (permissions.AllowAny,)
     parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
+    IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
+    GCP_FILENAMES = ('gcp_list.txt', 'gcp_list.csv')
 
     def _imports_base_dir(self):
         return os.path.join(settings.MEDIA_ROOT, "imports")
@@ -696,6 +698,71 @@ class TaskAssetsImport(APIView):
         base_dir = self._imports_base_dir()
         target_path = os.path.join(base_dir, rel_path)
         return path_traversal_check(target_path, base_dir)
+
+    def _parse_bool(self, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ['true', '1', 'yes', 'on']
+        return False
+
+    def _collect_image_files(self, directory):
+        image_paths = []
+        for root, _, files in os.walk(directory):
+            for file_name in files:
+                ext = os.path.splitext(file_name)[1].lower()
+                if ext in self.IMAGE_EXTENSIONS:
+                    image_paths.append(os.path.join(root, file_name))
+        image_paths.sort()
+        return image_paths
+
+    def _copy_file(self, src, dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+
+    def _create_task_from_directory(self, project, directory, task_name):
+        images = self._collect_image_files(directory)
+        if len(images) < 2:
+            raise exceptions.ValidationError(detail=_("Cannot create task, you need at least 2 images in the selected directory."))
+
+        with transaction.atomic():
+            task = models.Task.objects.create(project=project)
+            dst_dir = task.task_path()
+            os.makedirs(dst_dir, exist_ok=True)
+
+            used_names = set(name.lower() for name in os.listdir(dst_dir))
+            for image_path in images:
+                base_name = os.path.basename(image_path)
+                name, ext = os.path.splitext(base_name)
+                candidate = base_name
+                suffix = 1
+                candidate_lower = candidate.lower()
+                while candidate_lower in used_names:
+                    candidate = f"{name}_{suffix}{ext}"
+                    suffix += 1
+                    candidate_lower = candidate.lower()
+                used_names.add(candidate_lower)
+                dst_path = task.get_image_path(candidate)
+                self._copy_file(image_path, dst_path)
+
+            # Copy optional support files
+            for filename in self.GCP_FILENAMES:
+                src = os.path.join(directory, filename)
+                if os.path.isfile(src):
+                    dst = task.task_path(filename)
+                    self._copy_file(src, dst)
+
+            task.name = task_name
+            task.import_url = ""
+            task.images_count = len(images)
+            task.save()
+
+        worker_tasks.process_task.delay(task.id)
+        serializer = TaskSerializer(task)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def get(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project',))
@@ -752,6 +819,7 @@ class TaskAssetsImport(APIView):
         files = flatten_files(request.FILES)
         import_url = request.data.get('url', None)
         task_name = request.data.get('name', _('Imported Task'))
+        process_directory = self._parse_bool(request.data.get('process_directory', False))
 
         if not import_url and len(files) != 1:
             raise exceptions.ValidationError(detail=_("Cannot create task, you need to upload 1 file"))
@@ -774,6 +842,11 @@ class TaskAssetsImport(APIView):
 
                 # Normalize import_url to avoid duplicate path styles
                 import_url = f"file://{rel_import_path}"
+
+                if process_directory:
+                    if not os.path.isdir(resolved_path):
+                        raise exceptions.ValidationError(detail=_("Selected path is not a directory."))
+                    return self._create_task_from_directory(project, resolved_path, task_name)
             elif re.match(r"^https?:\/\/.+$", import_url.lower()) is None:
                 raise exceptions.ValidationError(detail=_("Invalid URL. Did you mean %(hint)s ?") % { 'hint': f'http://{import_url}'})
 

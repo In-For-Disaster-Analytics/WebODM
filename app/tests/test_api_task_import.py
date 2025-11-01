@@ -245,9 +245,11 @@ class TestApiTask(BootTransactionTestCase):
             staged_entries = [entry['name'] for entry in res.data['entries']]
             self.assertIn("image1.jpg", staged_entries)
 
-            # Import from staged directory via file:// URL
+            # Import from staged directory via file:// URL and start processing
             res = client.post(f"/api/projects/{project.id}/tasks/import", {
-                'url': 'file://staged_dataset'
+                'url': 'file://staged_dataset',
+                'process_directory': True,
+                'name': 'Staged Dataset Task'
             })
             self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 
@@ -261,8 +263,10 @@ class TestApiTask(BootTransactionTestCase):
                 c += 1
                 time.sleep(1)
 
-            self.assertEqual(staged_task.import_url, "file://staged_dataset")
-            self.assertTrue(os.path.exists(staged_task.assets_path("image1.jpg")))
+            self.assertEqual(staged_task.import_url, "")
+            self.assertEqual(staged_task.name, "Staged Dataset Task")
+            self.assertEqual(staged_task.images_count, 2)
+            self.assertTrue(os.path.exists(staged_task.task_path("image1.jpg")))
 
     def test_backup(self):
         client = APIClient()
