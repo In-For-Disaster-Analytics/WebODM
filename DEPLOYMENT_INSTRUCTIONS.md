@@ -44,6 +44,25 @@ All necessary files have been created/modified in your WebODM installation:
 
 Set the following environment variables:
 
+#### Required Group Access
+
+All host users that build or run the WebODM/ClusterODM containers must belong to the shared storage group `G-820466`. This membership grants access to `/corral/webodm/media` and is now enforced by the automated setup script and Docker configuration. Verify membership before continuing:
+
+```bash
+id -nG "$USER" | tr ' ' '\n' | grep -Fx G-820466
+```
+
+If no output is returned, request that an administrator adds your account (for example: `sudo usermod -a -G G-820466 $USER`) and re-login before running `setup.sh`.
+
+The `.env` file must also contain the group metadata so Docker can pass it through to the containers:
+
+```ini
+WO_CORRAL_GROUP=G-820466
+WO_CORRAL_GROUP_ID=<gid returned by getent group G-820466>
+```
+
+The setup script now manages these values automatically; update your existing deployments accordingly.
+
 #### For Docker Deployment:
 ```bash
 # Add to docker-compose.yml or .env file

@@ -11,6 +11,8 @@ WEBODM_PORT="8000"
 CLUSTERODM_PORT="3000"
 NODEODM_PORT="3001"
 CORRAL_BASE="/corral"
+CORRAL_GROUP="G-820466"
+CORRAL_GROUP_ID=""
 REPO_BASE="$HOME/ODM-SUITE"
 LOCAL_DB_DIR="$REPO_BASE/postgres-data"
 LOG_FILE="$REPO_BASE/setup.sh.log"
@@ -60,12 +62,40 @@ stat_group() {
     fi
 }
 
+resolve_corral_group() {
+    if getent group "$CORRAL_GROUP" &>/dev/null; then
+        CORRAL_GROUP_ID=$(getent group "$CORRAL_GROUP" | cut -d: -f3)
+    else
+        CORRAL_GROUP_ID=""
+    fi
+}
+
+require_corral_group_membership() {
+    resolve_corral_group
+
+    if [[ -z "$CORRAL_GROUP_ID" ]]; then
+        log_error "Required group $CORRAL_GROUP is not defined on this system. Please create it or mount the shared storage before continuing."
+        exit 1
+    fi
+
+    if ! id -nG "$USER" | tr ' ' '\n' | grep -Fxq "$CORRAL_GROUP"; then
+        log_error "User $USER is not a member of $CORRAL_GROUP. Please run 'sudo usermod -a -G $CORRAL_GROUP $USER' (or equivalent) and re-login."
+        exit 1
+    fi
+}
+
 # Ensure ownership of corral directories when possible
 ensure_dir_ownership() {
     local path="$1"
     local desired_user="$USER"
     local desired_group
-    desired_group=$(id -gn)
+
+    resolve_corral_group
+    if [[ -n "$CORRAL_GROUP_ID" ]]; then
+        desired_group="$CORRAL_GROUP"
+    else
+        desired_group=$(id -gn)
+    fi
 
     [[ -e "$path" ]] || return 0
 
@@ -79,6 +109,9 @@ ensure_dir_ownership() {
 
     if sudo chown -R "$desired_user:$desired_group" "$path"; then
         log_info "Adjusted ownership for $path"
+        if [[ "$desired_group" == "$CORRAL_GROUP" ]]; then
+            sudo chmod g+rwXs "$path" 2>/dev/null || true
+        fi
     else
         log_warning "Could not change ownership of $path; continuing (root-squash?)"
     fi
@@ -185,6 +218,8 @@ check_prerequisites() {
         log_error "User is not in docker group. Please add user to docker group and re-login."
         exit 1
     fi
+
+    require_corral_group_membership
     
     # Create corral base directory if it doesn't exist
     if [[ ! -d "$CORRAL_BASE" ]]; then
@@ -399,6 +434,8 @@ setup_webodm() {
         log_error "WebODM directory not found"
         exit 1
     }
+
+    resolve_corral_group
     
     # Verify .env file has correct storage paths
     if [[ -f .env ]]; then
@@ -407,6 +444,18 @@ setup_webodm() {
             sed -i "s|^WO_MEDIA_DIR=.*|WO_MEDIA_DIR=$CORRAL_BASE/webodm/media|" .env
         else
             echo "WO_MEDIA_DIR=$CORRAL_BASE/webodm/media" >> .env
+        fi
+        if grep -q '^WO_CORRAL_GROUP=' .env; then
+            sed -i "s|^WO_CORRAL_GROUP=.*|WO_CORRAL_GROUP=$CORRAL_GROUP|" .env
+        else
+            echo "WO_CORRAL_GROUP=$CORRAL_GROUP" >> .env
+        fi
+        if [[ -n "$CORRAL_GROUP_ID" ]]; then
+            if grep -q '^WO_CORRAL_GROUP_ID=' .env; then
+                sed -i "s|^WO_CORRAL_GROUP_ID=.*|WO_CORRAL_GROUP_ID=$CORRAL_GROUP_ID|" .env
+            else
+                echo "WO_CORRAL_GROUP_ID=$CORRAL_GROUP_ID" >> .env
+            fi
         fi
         if grep -q '^WO_DB_DIR=' .env; then
             sed -i "s|^WO_DB_DIR=.*|WO_DB_DIR=$LOCAL_DB_DIR|" .env

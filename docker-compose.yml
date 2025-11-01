@@ -21,6 +21,8 @@ services:
     volumes:
       - ${WO_MEDIA_DIR}:/webodm/app/media:z
       - ./scripts:/webodm/scripts:z
+    group_add:
+      - ${WO_CORRAL_GROUP_ID}
     ports:
       - "${WO_PORT}:8000"
     depends_on:
@@ -56,6 +58,8 @@ services:
     volumes:
       - ${WO_MEDIA_DIR}:/webodm/app/media:z
       - ./scripts:/webodm/scripts:z
+    group_add:
+      - ${WO_CORRAL_GROUP_ID}
     depends_on:
       - db
       - broker
