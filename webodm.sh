@@ -572,16 +572,6 @@ update(){
 
 	command="$docker_compose -f docker-compose.yml"
 
-	if [[ $WO_DEFAULT_NODES -gt 0 ]]; then
-		if [ "${GPU_NVIDIA}" = true ]; then
-			command+=" -f docker-compose.nodeodm.gpu.nvidia.yml"
-		elif [ "${GPU_INTEL}" = true ]; then
-			command+=" -f docker-compose.nodeodm.gpu.intel.yml"
-		else
-			command+=" -f docker-compose.nodeodm.yml"
-		fi
-	fi
-
 	if [[ $load_micmac_node = true ]]; then
 		command+=" -f docker-compose.nodemicmac.yml"
 	fi
