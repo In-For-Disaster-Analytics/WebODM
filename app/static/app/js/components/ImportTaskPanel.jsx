@@ -28,6 +28,7 @@ class ImportTaskPanel extends React.Component {
       importingFromUrl: false,
       importingFromLocal: false,
       processingLocal: false,
+      startingStagedTask: false,
       progress: 0,
       bytesSent: 0,
       importUrl: "",
@@ -38,7 +39,9 @@ class ImportTaskPanel extends React.Component {
       localLoading: false,
       localError: "",
       selectedLocalPath: "",
-      selectedLocalEntry: null
+      selectedLocalEntry: null,
+      stagedTask: null,
+      stagedImagesCount: 0
     };
   }
 
@@ -178,7 +181,9 @@ class ImportTaskPanel extends React.Component {
       localPath: "",
       localParent: "",
       processingLocal: false,
-      selectedLocalEntry: null
+      selectedLocalEntry: null,
+      stagedTask: null,
+      stagedImagesCount: 0
     }, () => this.fetchLocalEntries(""));
   }
 
@@ -190,7 +195,10 @@ class ImportTaskPanel extends React.Component {
       selectedLocalPath: "",
       localLoading: false,
       processingLocal: false,
-      selectedLocalEntry: null
+      selectedLocalEntry: null,
+      startingStagedTask: false,
+      stagedTask: null,
+      stagedImagesCount: 0
     });
   }
 
@@ -275,8 +283,12 @@ class ImportTaskPanel extends React.Component {
     ).done(json => {
       this.setState({processingLocal: false});
 
-      if (json.id){
-        this.setState({localBrowserVisible: false});
+      if (json && json.task && json.task.id){
+        this.setState({
+          stagedTask: json.task,
+          stagedImagesCount: json.images || 0,
+          localBrowserVisible: false
+        });
         this.props.onImported();
       }else{
         const error = json.error || interpolate(_("Invalid JSON response: %(error)s"), {error: JSON.stringify(json)});
@@ -296,10 +308,94 @@ class ImportTaskPanel extends React.Component {
     });
   }
 
+  handleStartStagedTask = () => {
+    const { stagedTask } = this.state;
+    if (!stagedTask || !stagedTask.id) return;
+
+    this.setState({startingStagedTask: true, error: ""});
+
+    $.post(`/api/projects/${this.props.projectId}/tasks/${stagedTask.id}/commit/`)
+      .done(() => {
+        this.setState({
+          startingStagedTask: false,
+          stagedTask: null,
+          stagedImagesCount: 0
+        });
+        this.props.onImported();
+      })
+      .fail((e) => {
+        let error = _("Cannot start task.");
+        if (e && e.responseJSON){
+          if (Array.isArray(e.responseJSON) && e.responseJSON.length && typeof e.responseJSON[0] === 'string'){
+            error = e.responseJSON[0];
+          }else if (e.responseJSON.detail){
+            error = e.responseJSON.detail;
+          }
+        }
+        this.setState({startingStagedTask: false, error});
+      });
+  }
+
+  handleDiscardStagedTask = () => {
+    const { stagedTask } = this.state;
+    if (!stagedTask || !stagedTask.id) {
+      this.setState({stagedTask: null, stagedImagesCount: 0, startingStagedTask: false});
+      return;
+    }
+
+    $.ajax({
+      url: `/api/projects/${this.props.projectId}/tasks/${stagedTask.id}/`,
+      type: 'DELETE'
+    }).always(() => {
+      this.setState({
+        stagedTask: null,
+        stagedImagesCount: 0,
+        startingStagedTask: false
+      });
+      this.props.onImported();
+    });
+  }
+
   handleNavigateParent = () => {
     if (this.state.localParent !== undefined && this.state.localParent !== null){
       this.fetchLocalEntries(this.state.localParent);
     }
+  }
+
+  renderStagedTask(){
+    const { stagedTask, stagedImagesCount, startingStagedTask } = this.state;
+    if (!stagedTask) return null;
+
+    const taskName = stagedTask.name || _("Unnamed Task");
+
+    return (
+      <div className="panel panel-success staged-task-panel">
+        <div className="panel-heading">
+          <strong>{_("Images staged for processing")}</strong>
+        </div>
+        <div className="panel-body">
+          <p>{interpolate(_("Copied %(count)s images into task %(task)s. You can review task options and start processing when ready."), {
+            count: stagedImagesCount,
+            task: taskName
+          })}</p>
+        </div>
+        <div className="panel-footer clearfix">
+          <div className="pull-right">
+            <button type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={startingStagedTask}
+                    onClick={this.handleStartStagedTask}>
+              <i className="glyphicon glyphicon-play"></i> {startingStagedTask ? _("Starting...") : _("Start Task")}
+            </button>
+            <button type="button"
+                    className="btn btn-default btn-sm"
+                    onClick={this.handleDiscardStagedTask}>
+              {_("Dismiss")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   renderLocalBrowser(){
@@ -441,6 +537,7 @@ class ImportTaskPanel extends React.Component {
           </div> : ""}
 
           {this.renderLocalBrowser()}
+          {this.renderStagedTask()}
         </div>
       </div>
     );

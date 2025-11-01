@@ -429,6 +429,16 @@ class TaskViewSet(viewsets.ViewSet):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
 
+    def destroy(self, request, pk=None, project_pk=None):
+        get_and_check_project(request, project_pk, ('delete_project', ))
+        try:
+            task = self.queryset.get(pk=pk, project=project_pk)
+        except (ObjectDoesNotExist, ValidationError):
+            raise exceptions.NotFound()
+
+        task.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class TaskNestedView(APIView):
     queryset = models.Task.objects.all().defer('orthophoto_extent', 'dtm_extent', 'dsm_extent', )
@@ -723,13 +733,13 @@ class TaskAssetsImport(APIView):
         except OSError:
             shutil.copy2(src, dst)
 
-    def _create_task_from_directory(self, project, directory, task_name):
+    def _create_task_from_directory(self, project, directory, task_name, rel_path=None):
         images = self._collect_image_files(directory)
         if len(images) < 2:
             raise exceptions.ValidationError(detail=_("Cannot create task, you need at least 2 images in the selected directory."))
 
         with transaction.atomic():
-            task = models.Task.objects.create(project=project)
+            task = models.Task.objects.create(project=project, partial=True)
             dst_dir = task.task_path()
             os.makedirs(dst_dir, exist_ok=True)
 
@@ -756,13 +766,17 @@ class TaskAssetsImport(APIView):
                     self._copy_file(src, dst)
 
             task.name = task_name
-            task.import_url = ""
+            task.import_url = f"file://{rel_path}" if rel_path else ""
             task.images_count = len(images)
+            task.partial = True
+            task.update_size()
             task.save()
 
-        worker_tasks.process_task.delay(task.id)
         serializer = TaskSerializer(task)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({
+            'task': serializer.data,
+            'images': len(images)
+        }, status=status.HTTP_201_CREATED)
 
     def get(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project',))
@@ -846,7 +860,7 @@ class TaskAssetsImport(APIView):
                 if process_directory:
                     if not os.path.isdir(resolved_path):
                         raise exceptions.ValidationError(detail=_("Selected path is not a directory."))
-                    return self._create_task_from_directory(project, resolved_path, task_name)
+                    return self._create_task_from_directory(project, resolved_path, task_name, rel_import_path)
             elif re.match(r"^https?:\/\/.+$", import_url.lower()) is None:
                 raise exceptions.ValidationError(detail=_("Invalid URL. Did you mean %(hint)s ?") % { 'hint': f'http://{import_url}'})
 

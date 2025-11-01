@@ -245,15 +245,26 @@ class TestApiTask(BootTransactionTestCase):
             staged_entries = [entry['name'] for entry in res.data['entries']]
             self.assertIn("image1.jpg", staged_entries)
 
-            # Import from staged directory via file:// URL and start processing
+            # Import from staged directory via file:// URL and stage images
             res = client.post(f"/api/projects/{project.id}/tasks/import", {
                 'url': 'file://staged_dataset',
                 'process_directory': True,
                 'name': 'Staged Dataset Task'
             })
             self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+            self.assertIn('task', res.data)
+            self.assertEqual(res.data.get('images'), 2)
 
-            staged_task = Task.objects.get(id=res.data['id'])
+            staged_task_info = res.data['task']
+            staged_task = Task.objects.get(id=staged_task_info['id'])
+            self.assertTrue(staged_task.partial)
+            self.assertEqual(staged_task.import_url, "file://staged_dataset")
+            self.assertEqual(staged_task.name, "Staged Dataset Task")
+
+            # Start processing staged task
+            res = client.post(f"/api/projects/{project.id}/tasks/{staged_task.id}/commit/")
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+
             c = 0
             while c < 10:
                 worker.tasks.process_pending_tasks()
@@ -263,9 +274,8 @@ class TestApiTask(BootTransactionTestCase):
                 c += 1
                 time.sleep(1)
 
-            self.assertEqual(staged_task.import_url, "")
-            self.assertEqual(staged_task.name, "Staged Dataset Task")
             self.assertEqual(staged_task.images_count, 2)
+            self.assertFalse(staged_task.partial)
             self.assertTrue(os.path.exists(staged_task.task_path("image1.jpg")))
 
     def test_backup(self):
