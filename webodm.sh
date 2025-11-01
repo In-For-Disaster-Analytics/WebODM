@@ -392,16 +392,6 @@ start(){
 
 	command="$docker_compose -f docker-compose.yml"
 
-    if [[ $WO_DEFAULT_NODES -gt 0 ]]; then
-		if [ "${GPU_NVIDIA}" = true ]; then
-			command+=" -f docker-compose.nodeodm.gpu.nvidia.yml"
-		elif [ "${GPU_INTEL}" = true ]; then
-			command+=" -f docker-compose.nodeodm.gpu.intel.yml"
-		else
-			command+=" -f docker-compose.nodeodm.yml"
-		fi
-    fi
-
     if [[ $load_micmac_node = true ]]; then
         command+=" -f docker-compose.nodemicmac.yml"
     fi
@@ -474,25 +464,17 @@ start(){
 		command+=" -d"
 	fi
 
-	if [[ $WO_DEFAULT_NODES -gt 0 ]]; then
-		command+=" --scale node-odm=$WO_DEFAULT_NODES"
-	fi
-
 	run "$command"
 }
 
 down(){
 	command="$docker_compose -f docker-compose.yml"
 
-	if [ "${GPU_NVIDIA}" = true ]; then
-		command+=" -f docker-compose.nodeodm.gpu.nvidia.yml"
-	elif [ "${GPU_INTEL}" = true ]; then
-		command+=" -f docker-compose.nodeodm.gpu.intel.yml"
-	else
-		command+=" -f docker-compose.nodeodm.yml"
+	if [[ $load_micmac_node = true ]]; then
+		command+=" -f docker-compose.nodemicmac.yml"
 	fi
 
-	command+=" -f docker-compose.nodemicmac.yml down --remove-orphans"
+	command+=" down --remove-orphans"
 
 	run "${command}"
 }
@@ -501,7 +483,6 @@ rebuild(){
 	run "$docker_compose down --remove-orphans"
 	run "docker builder prune -f"
 	run "rm -fr node_modules/ || sudo rm -fr node_modules/"
-	run "rm -fr nodeodm/external/NodeODM || sudo rm -fr nodeodm/external/NodeODM"
 	run "$docker_compose -f docker-compose.yml -f docker-compose.build.yml build --no-cache"
 	#run "docker images --no-trunc -aqf \"dangling=true\" | xargs docker rmi"
 	echo -e "\033[1mDone!\033[0m You can now start WebODM by running $0 start"
@@ -589,15 +570,11 @@ elif [[ $1 = "stop" ]]; then
 
 	command="$docker_compose -f docker-compose.yml"
 
-	if [ "${GPU_NVIDIA}" = true ]; then
-		command+=" -f docker-compose.nodeodm.gpu.nvidia.yml"
-	elif [ "${GPU_INTEL}" = true ]; then
-		command+=" -f docker-compose.nodeodm.gpu.intel.yml"
-	else
-		command+=" -f docker-compose.nodeodm.yml"
+	if [[ $load_micmac_node = true ]]; then
+		command+=" -f docker-compose.nodemicmac.yml"
 	fi
- 
-	command+=" -f docker-compose.nodemicmac.yml stop"
+
+	command+=" stop"
 	run "${command}"
 elif [[ $1 = "restart" ]]; then
 	environment_check
