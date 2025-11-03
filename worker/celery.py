@@ -5,6 +5,22 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'webodm.settings')
 
 app = Celery('tasks')
 app.config_from_object('django.conf:settings', namespace='CELERY')
+# Ensure Celery discovers tasks defined in Django apps and explicit task modules
+try:
+    # autodiscover tasks from INSTALLED_APPS (will attempt to import '<app>.tasks')
+    app.autodiscover_tasks()
+except Exception:
+    # In case autodiscover is not available or fails for some reason, fall back
+    # to explicit imports of known task modules so the worker registers them.
+    pass
+
+# Explicitly import application-specific task modules so tasks like
+# 'app.tasks.tapis_storage.discover_and_create_flight_projects' are registered
+try:
+    import app.tasks.tapis_storage  # noqa: F401
+except Exception:
+    # Import failures should not prevent the worker from starting; log if needed
+    pass
 app.conf.result_backend_transport_options = {
     'retry_policy': {
        'timeout': 5.0
