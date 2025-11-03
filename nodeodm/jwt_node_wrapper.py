@@ -205,6 +205,72 @@ class JWTNodeWrapper:
         except Exception as e:
             logger.error(f"Error creating task with JWT token: {str(e)}")
             raise
+
+    def create_task_from_path(self, directory_path, options, name=None):
+        """
+        Create a new task on the processing node using a directory path on a shared filesystem
+
+        This avoids uploading image files over HTTP. The processing node (ClusterODM/NodeODM)
+        must have direct access to the provided path and be able to read images from it.
+
+        :param directory_path: absolute path on the shared filesystem accessible by the node
+        :param options: dict of options
+        :param name: optional task name
+        :returns: TaskResult-like object with .uuid
+        """
+        try:
+            endpoint = f"{self.base_url}/task/new"
+            params = {}
+            self._apply_auth_token(params)
+
+            if params:
+                endpoint += "?" + urlencode(params)
+
+            logger.info(f"Creating task from path via ClusterODM at: {endpoint}")
+            logger.info(f"Directory path: {directory_path}")
+
+            data = {'import_path': directory_path}
+            if name:
+                data['name'] = name
+
+            if options:
+                import json
+                data['options'] = json.dumps([{'name': k, 'value': v} for k, v in options.items()])
+            else:
+                data['options'] = '[]'
+
+            response = requests.post(endpoint, data=data, timeout=self.timeout)
+
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                except ValueError as e:
+                    logger.error(f"Invalid JSON response: {response.text}")
+                    raise Exception(f"Invalid JSON response from ClusterODM: {str(e)}")
+
+                if 'uuid' in result:
+                    class TaskResult:
+                        def __init__(self, uuid):
+                            self.uuid = uuid
+
+                    logger.info(f"Successfully created task from path with UUID: {result['uuid']}")
+                    return TaskResult(result['uuid'])
+                elif 'error' in result:
+                    error_msg = f"ClusterODM returned error: {result['error']}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                else:
+                    error_msg = f"No UUID in response: {result}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+            else:
+                error_msg = f"Failed to create task from path: HTTP {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
+        except Exception as e:
+            logger.error(f"Error creating task from path with JWT token: {str(e)}")
+            raise
     
     def _fetch_task_info(self, uuid, with_output=None):
         params = {}

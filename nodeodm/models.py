@@ -17,6 +17,7 @@ from pyodm import exceptions
 from django.db.models import signals
 from datetime import timedelta
 import logging
+import os
 
 logger = logging.getLogger('app.logger')
 
@@ -176,6 +177,32 @@ class ProcessingNode(models.Model):
 
         opts = self.options_list_to_dict(options)
 
+        # If images is a single directory path that is accessible by both
+        # WebODM and the processing node (shared filesystem), avoid uploading
+        # and instruct the node to process directly from that path.
+        if isinstance(images, (list, tuple)) and len(images) == 1 and isinstance(images[0], str) and os.path.isdir(images[0]):
+            # Verify the directory is within the configured MEDIA_ROOT (or shared media)
+            try:
+                from app.security import path_traversal_check
+                shared_root = os.path.abspath(settings.MEDIA_ROOT)
+                checked = path_traversal_check(images[0], shared_root)
+            except Exception:
+                # If path check fails, fall back to upload behavior
+                checked = None
+
+            if checked:
+                # Use the specialized API to create a task from a path
+                create_from_path = getattr(api_client, 'create_task_from_path', None)
+                if callable(create_from_path):
+                    task = api_client.create_task_from_path(checked, opts, name)
+                    return task.uuid
+                # If not supported by api_client, fall back to upload
+
+            # Fall back to standard create_task (will attempt upload)
+            task = api_client.create_task(images, opts, name, progress_callback)
+            return task.uuid
+
+        # Default behavior: upload files via HTTP
         task = api_client.create_task(images, opts, name, progress_callback)
         return task.uuid
 
