@@ -1,26 +1,29 @@
-from celery import Celery
 import os
-
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'webodm.settings')
 
+# Import Django and configure it first
+import django
+django.setup()
+
+from celery import Celery
+
+# Create Celery app with basic config first to allow imports
 app = Celery('tasks')
 app.config_from_object('django.conf:settings', namespace='CELERY')
-# Ensure Celery discovers tasks defined in Django apps and explicit task modules
-try:
-    # autodiscover tasks from INSTALLED_APPS (will attempt to import '<app>.tasks')
-    app.autodiscover_tasks()
-except Exception:
-    # In case autodiscover is not available or fails for some reason, fall back
-    # to explicit imports of known task modules so the worker registers them.
-    pass
 
-# Explicitly import application-specific task modules so tasks like
-# 'app.tasks.tapis_storage.discover_and_create_flight_projects' are registered
+# Now it's safe to import modules that may need the Celery app
+try:
+    app.autodiscover_tasks()
+except Exception as e:
+    print(f"Warning: Task autodiscovery failed: {e}")
+
+# Explicitly import app-specific task modules 
 try:
     import app.tasks.tapis_storage  # noqa: F401
-except Exception:
-    # Import failures should not prevent the worker from starting; log if needed
-    pass
+except Exception as e:
+    print(f"Warning: Failed to import tapis_storage tasks: {e}")
+
+# Configure Celery AFTER imports are done
 app.conf.result_backend_transport_options = {
     'retry_policy': {
        'timeout': 5.0
