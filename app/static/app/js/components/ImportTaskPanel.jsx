@@ -289,7 +289,6 @@ class ImportTaskPanel extends React.Component {
           stagedImagesCount: json.images || 0,
           localBrowserVisible: false
         });
-        this.props.onImported();
       }else{
         const error = json.error || interpolate(_("Invalid JSON response: %(error)s"), {error: JSON.stringify(json)});
         this.setState({localError: error});
