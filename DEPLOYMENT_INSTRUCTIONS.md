@@ -163,6 +163,7 @@ Navigate to your Tapis tenant dashboard and configure the OAuth2 client with the
    ```bash
       ./webodm.sh rebuild 
   ./webodm.sh start --default-nodes 0 > startup_webodm.log 2>&1 &
+  tail -f startup_webodm.log
    ```
 
 4. **Run Setup**:
