@@ -739,7 +739,12 @@ class Task(models.Model):
                     logger.info("Processing... {}".format(self))
 
                     images_path = self.task_path()
-                    images = [os.path.join(images_path, i) for i in self.scan_images()]
+                    image_files = self.scan_images()
+                    use_shared_submission = bool(getattr(settings, 'SHARED_VOLUME_ROOT', ''))
+                    if use_shared_submission:
+                        images = [images_path]
+                    else:
+                        images = [os.path.join(images_path, i) for i in image_files]
 
                     # Track upload progress, but limit the number of DB updates
                     # to every 2 seconds (and always record the 100% progress)

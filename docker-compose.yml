@@ -38,6 +38,7 @@ services:
       - WO_DEV_WATCH_PLUGINS
       - WO_SECRET_KEY
       - WEB_CONCURRENCY
+      - WO_SHARED_VOLUME_ROOT
       - WO_TAPIS_BASE_URL
       - WO_TAPIS_TENANT_ID
       - WO_TAPIS_CLIENT_ID
@@ -68,6 +69,7 @@ services:
       - WO_DEBUG
       - WO_SECRET_KEY
       - WEB_CONCURRENCY
+      - WO_SHARED_VOLUME_ROOT
       - WO_TAPIS_BASE_URL
       - WO_TAPIS_TENANT_ID
       - WO_TAPIS_CLIENT_ID

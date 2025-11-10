@@ -280,6 +280,11 @@ if TESTING:
     MEDIA_ROOT = os.path.join(BASE_DIR, 'app', 'media_test')
 MEDIA_TMP = os.path.join(MEDIA_ROOT, 'tmp')
 
+# Optional shared volume path (exposed to processing nodes)
+SHARED_VOLUME_ROOT = os.environ.get('WO_SHARED_VOLUME_ROOT', '').strip()
+if SHARED_VOLUME_ROOT:
+    SHARED_VOLUME_ROOT = os.path.normpath(os.path.abspath(SHARED_VOLUME_ROOT))
+
 FILE_UPLOAD_TEMP_DIR = MEDIA_TMP
 
 TEMPLATES = [

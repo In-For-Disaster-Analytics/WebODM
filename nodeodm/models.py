@@ -194,7 +194,19 @@ class ProcessingNode(models.Model):
                 # Use the specialized API to create a task from a path
                 create_from_path = getattr(api_client, 'create_task_from_path', None)
                 if callable(create_from_path):
-                    task = api_client.create_task_from_path(checked, opts, name)
+                    submission_path = checked
+                    shared_submission_root = getattr(settings, 'SHARED_VOLUME_ROOT', '').strip()
+                    if shared_submission_root:
+                        shared_submission_root = os.path.abspath(shared_submission_root)
+                        try:
+                            rel = os.path.relpath(checked, shared_root)
+                            candidate = os.path.normpath(os.path.join(shared_submission_root, rel))
+                            submission_path = path_traversal_check(candidate, shared_submission_root)
+                        except Exception as exc:
+                            logger.warning("Shared path submission fallback to local path %s due to %s", images[0], exc)
+                            submission_path = checked
+
+                    task = api_client.create_task_from_path(submission_path, opts, name)
                     return task.uuid
                 # If not supported by api_client, fall back to upload
 

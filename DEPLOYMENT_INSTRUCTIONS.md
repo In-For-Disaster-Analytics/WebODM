@@ -63,6 +63,12 @@ WO_CORRAL_GROUP_ID=<gid returned by getent group G-820466>
 
 The setup script now manages these values automatically; update your existing deployments accordingly.
 
+#### Shared Filesystem Submissions
+
+Set `WO_SHARED_VOLUME_ROOT` to the absolute path that ClusterODM and NodeODM can read (for example `/corral/webodm/media`). When this variable is present WebODM will stage task data in that location and submit jobs using `import_path` rather than uploading files. Ensure the directory structure under `WO_SHARED_VOLUME_ROOT` matches the contents of `/webodm/app/media` inside the containers (the default `WO_MEDIA_DIR` bind mount already satisfies this when both point to `/corral/webodm/media`).
+
+> **ClusterODM mapping**: configure `node_shared_path_mappings` so the path reported by WebODM (for example `/corral/webodm/media/...`) is translated to the path visible on each NodeODM host (for example `/corral-repl/.../webodm/media/...`). See `ClusterODM-Tapis/docs/PATH_MAPPING.md` for details.
+
 #### For Docker Deployment:
 ```bash
 # Add to docker-compose.yml or .env file
