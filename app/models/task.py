@@ -742,6 +742,7 @@ class Task(models.Model):
                     image_files = self.scan_images()
                     use_shared_submission = bool(getattr(settings, 'SHARED_VOLUME_ROOT', ''))
                     if use_shared_submission:
+                        logger.info("Using shared submission path for task %s -> %s", self.id, images_path)
                         images = [images_path]
                     else:
                         images = [os.path.join(images_path, i) for i in image_files]

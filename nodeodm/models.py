@@ -202,6 +202,7 @@ class ProcessingNode(models.Model):
                             rel = os.path.relpath(checked, shared_root)
                             candidate = os.path.normpath(os.path.join(shared_submission_root, rel))
                             submission_path = path_traversal_check(candidate, shared_submission_root)
+                            logger.info("Submitting task from shared path %s (container) -> %s (shared)", checked, submission_path)
                         except Exception as exc:
                             logger.warning("Shared path submission fallback to local path %s due to %s", images[0], exc)
                             submission_path = checked
