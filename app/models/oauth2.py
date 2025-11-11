@@ -1,9 +1,12 @@
 import ast
+import base64
+import binascii
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 import requests
+from django.conf import settings as django_settings
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
@@ -89,12 +92,31 @@ class TapisOAuth2Token(models.Model):
     def __str__(self):
         return f"Token for {self.user.username} ({self.client.name})"
     
+    def _get_effective_expiration(self):
+        """
+        Return the best-known expiration datetime for this token.
+        """
+        if self.expires_at:
+            return self.expires_at
+
+        if hasattr(self, '_cached_expires_at'):
+            return self._cached_expires_at
+
+        token_value = self.get_access_token_value()
+        derived = self._expires_at_from_token(token_value)
+        self._cached_expires_at = derived
+        if derived:
+            # Keep attribute up to date for template rendering; save later when convenient.
+            self.expires_at = derived
+        return derived
+
     @property
     def is_expired(self):
         """Check if the token is expired"""
-        if not self.expires_at:
+        expires_at = self._get_effective_expiration()
+        if not expires_at:
             return False
-        return timezone.now() > self.expires_at
+        return timezone.now() > expires_at
     
     @property
     def is_valid(self):
@@ -153,6 +175,72 @@ class TapisOAuth2Token(models.Model):
             return self.access_token.strip()
         return None
 
+    @staticmethod
+    def _decode_jwt_payload(token_value):
+        """
+        Decode the payload portion of a JWT without verifying the signature.
+        """
+        if not token_value or not isinstance(token_value, str):
+            return None
+
+        parts = token_value.split('.')
+        if len(parts) != 3:
+            return None
+
+        payload_b64 = parts[1]
+        padding = '=' * (-len(payload_b64) % 4)
+        try:
+            payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
+            return json.loads(payload_bytes.decode('utf-8'))
+        except (ValueError, json.JSONDecodeError, binascii.Error):
+            return None
+
+    @classmethod
+    def _expires_at_from_token(cls, token_value):
+        """
+        Derive expires_at datetime from the JWT's exp claim if possible.
+        """
+        payload = cls._decode_jwt_payload(token_value)
+        if not payload:
+            return None
+
+        exp = payload.get('exp')
+        if exp is None:
+            return None
+
+        try:
+            exp_int = int(exp)
+            return datetime.fromtimestamp(exp_int, tz=dt_timezone.utc)
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    @classmethod
+    def compute_expires_at(cls, expires_in=None, token_value=None):
+        """
+        Compute an aware datetime for when the token should expire.
+        """
+        forced_seconds = getattr(django_settings, 'TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS', None)
+        if forced_seconds:
+            try:
+                forced_seconds = int(forced_seconds)
+                if forced_seconds > 0:
+                    return timezone.now() + timedelta(seconds=forced_seconds)
+            except (TypeError, ValueError):
+                logger.warning("Invalid TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS value: %s", forced_seconds)
+
+        if expires_in is not None:
+            try:
+                return timezone.now() + timedelta(seconds=int(expires_in))
+            except (TypeError, ValueError):
+                logger.warning("Invalid expires_in value encountered while computing Tapis token expiry.")
+
+        if token_value:
+            derived = cls._expires_at_from_token(token_value)
+            if derived:
+                return derived
+
+        return None
+
     def refresh(self):
         """
         Refresh the access token using the stored refresh token.
@@ -200,12 +288,7 @@ class TapisOAuth2Token(models.Model):
             raise ValueError("No access token in Tapis refresh response.")
 
         expires_in = refreshed.get('expires_in')
-        expires_at = None
-        if expires_in:
-            try:
-                expires_at = timezone.now() + timedelta(seconds=int(expires_in))
-            except (TypeError, ValueError):
-                logger.warning("Invalid expires_in value in Tapis refresh response.")
+        expires_at = self.compute_expires_at(expires_in, new_access_token)
 
         # Persist refreshed values
         self.access_token = new_access_token

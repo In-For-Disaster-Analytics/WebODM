@@ -204,17 +204,14 @@ class TapisOAuth2CallbackView(View):
         Store OAuth2 tokens for the user
         """
         try:
-            # Calculate expiration time
-            expires_in = token_data.get('expires_in')
-            expires_at = None
-            if expires_in:
-                expires_at = timezone.now() + timedelta(seconds=int(expires_in))
-            
             access_token_value = TapisOAuth2Token.extract_access_token_value(token_data.get('access_token'))
             if not access_token_value:
                 logger.warning("Failed to extract JWT from Tapis token response; storing raw access_token payload.")
                 access_token_value = token_data.get('access_token')
 
+            expires_in = token_data.get('expires_in')
+            expires_at = TapisOAuth2Token.compute_expires_at(expires_in, access_token_value)
+            
             # Create or update token
             token, created = TapisOAuth2Token.objects.update_or_create(
                 user=user,
@@ -307,15 +304,13 @@ class TapisOAuth2TokenRefreshView(APIView):
                 return Response({'error': 'Failed to refresh token'}, status=500)
             
             # Update stored token
-            expires_in = new_token_data.get('expires_in')
-            expires_at = None
-            if expires_in:
-                expires_at = timezone.now() + timedelta(seconds=int(expires_in))
-            
             refreshed_access_token = TapisOAuth2Token.extract_access_token_value(new_token_data.get('access_token'))
             if not refreshed_access_token:
                 logger.warning("Token refresh response did not include a directly usable access token; storing raw payload.")
                 refreshed_access_token = new_token_data.get('access_token')
+
+            expires_in = new_token_data.get('expires_in')
+            expires_at = TapisOAuth2Token.compute_expires_at(expires_in, refreshed_access_token)
 
             token_obj.access_token = refreshed_access_token
             token_obj.token_type = new_token_data.get('token_type', 'Bearer')

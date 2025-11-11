@@ -382,6 +382,14 @@ EXTERNAL_AUTH_ENDPOINT = ''
 # Tapis OAuth2 Configuration
 TAPIS_BASE_URL = os.environ.get('WO_TAPIS_BASE_URL', '')
 TAPIS_TENANT_ID = os.environ.get('WO_TAPIS_TENANT_ID', '')
+_force_expiration = os.environ.get('WO_TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS')
+if _force_expiration:
+    try:
+        TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS = int(_force_expiration)
+    except (TypeError, ValueError):
+        TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS = None
+else:
+    TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS = None
 
 # Enable cluster mode for this instance by setting an integer ID >= 1
 CLUSTER_ID = None

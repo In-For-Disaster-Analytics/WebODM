@@ -265,6 +265,17 @@ LOGGING = {
 3. Verify redirect to WebODM with successful login
 4. Check `/api/oauth2/tapis/status/` for token information
 
+#### Simulating Short Token Expiration (Local Testing)
+
+When you need to test the warning banner or automatic logout without waiting hours, force a shorter expiry while running WebODM locally:
+
+```bash
+export WO_TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS=30
+./webodm.sh start
+```
+
+Any tokens created or refreshed while this variable is set will be treated as expiring in 30 seconds, so the UI should warn and log out accordingly. Remove the variable (or restart without it) to return to normal Tapis-provided expirations.
+
 ## Maintenance
 
 ### Token Cleanup
