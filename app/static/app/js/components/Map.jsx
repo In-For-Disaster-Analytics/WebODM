@@ -31,7 +31,7 @@ import '../vendor/leaflet/leaflet-markers-canvas';
 import '../vendor/leaflet/Leaflet.SideBySide/leaflet-side-by-side';
 import { _ } from '../classes/gettext';
 import UnitSelector from './UnitSelector';
-import { unitSystem, toMetric } from '../classes/Units';
+import { unitSystem, toMetric, onUnitSystemChanged, offUnitSystemChanged } from '../classes/Units';
 
 const IOU_THRESHOLD = 0.7;
 
@@ -70,7 +70,12 @@ class Map extends React.Component {
       imageryLayers: [],
       overlays: [],
       annotations: [],
-      rightLayers: []
+      rightLayers: [],
+      measurementActive: false,
+      measurementHasResult: false,
+      measurementMeters: 0,
+      measurementSegments: 0,
+      unitSystemVersion: 0
     };
 
     this.basemaps = {};
@@ -80,6 +85,15 @@ class Map extends React.Component {
     this.addedCameraShots = {};
     this.zIndexGroupMap = {};
     this.ious = {};
+
+    this.measureLayer = null;
+    this.measureLine = null;
+    this.measureLabel = null;
+    this.measurePoints = [];
+    this.measureControl = null;
+    this.measureControlButton = null;
+    this.measureClearButton = null;
+    this.isMeasuring = false;
 
     this.loadImageryLayers = this.loadImageryLayers.bind(this);
     this.updatePopupFor = this.updatePopupFor.bind(this);
@@ -602,6 +616,7 @@ class Map extends React.Component {
     // For some reason, in production this class is not added (but we need it)
     // leaflet bug?
     $(this.container).addClass("leaflet-touch");
+    this.measureLayer = Leaflet.layerGroup().addTo(this.map);
 
     PluginsAPI.Map.onAddAnnotation(this.handleAddAnnotation);
     PluginsAPI.Map.onAnnotationDeleted(this.handleDeleteAnnotation);
@@ -734,6 +749,8 @@ _('Example:'),
         }
     });
     new AddOverlayCtrl().addTo(this.map);
+    this.addMeasureControl();
+    onUnitSystemChanged(this.handleUnitSystemChanged);
 
     if (this.props.permissions.indexOf("change") !== -1){
       const updateCropArea = geojson => {
@@ -1011,6 +1028,19 @@ _('Example:'),
   }
 
   componentWillUnmount() {
+    this.detachMeasurementEvents();
+    if (this.measureControl){
+      this.measureControl.remove();
+      this.measureControl = null;
+      this.measureControlButton = null;
+      this.measureClearButton = null;
+    }
+    if (this.measureLayer){
+      this.measureLayer.remove();
+      this.measureLayer = null;
+    }
+    offUnitSystemChanged(this.handleUnitSystemChanged);
+
     this.map.remove();
     this.map.off('viewreset', this.layerVisibilityCheck);
     this.map.off('zoomstart', this.layerVisibilityCheck);
@@ -1031,6 +1061,296 @@ _('Example:'),
     if (this.shareButton) this.shareButton.hidePopup();
   }
 
+  handleUnitSystemChanged = () => {
+    this.setState(prev => ({unitSystemVersion: prev.unitSystemVersion + 1}), () => {
+      if (this.measureLabel && this.state.measurementHasResult && this.measurePoints.length > 0){
+        const lastPoint = this.measurePoints[this.measurePoints.length - 1];
+        this.updateMeasureLabel(lastPoint, this.state.measurementMeters);
+      }
+    });
+  }
+
+  addMeasureControl = () => {
+    if (this.measureControl) return;
+    const component = this;
+    const MeasureControl = Leaflet.Control.extend({
+      options: {
+        position: 'topright'
+      },
+      onAdd() {
+        const container = Leaflet.DomUtil.create('div', 'leaflet-control-measure leaflet-bar leaflet-control');
+        Leaflet.DomEvent.disableClickPropagation(container);
+
+        component.measureControlButton = Leaflet.DomUtil.create('a', 'leaflet-control-measure-toggle', container);
+        component.measureControlButton.href = '#';
+        component.measureControlButton.setAttribute('title', _("Measure distance"));
+        component.measureControlButton.innerHTML = '<i class="fa fa-ruler-combined" aria-hidden="true"></i>';
+        Leaflet.DomEvent.on(component.measureControlButton, 'click', Leaflet.DomEvent.preventDefault);
+        Leaflet.DomEvent.on(component.measureControlButton, 'click', component.toggleMeasureMode);
+
+        component.measureClearButton = Leaflet.DomUtil.create('a', 'leaflet-control-measure-clear disabled', container);
+        component.measureClearButton.href = '#';
+        component.measureClearButton.setAttribute('title', _("Clear measurement"));
+        component.measureClearButton.innerHTML = '<i class="fa fa-times" aria-hidden="true"></i>';
+        Leaflet.DomEvent.on(component.measureClearButton, 'click', Leaflet.DomEvent.preventDefault);
+        Leaflet.DomEvent.on(component.measureClearButton, 'click', component.handleMeasureClearClick);
+
+        component.updateMeasureControls();
+        return container;
+      },
+      onRemove() {
+        if (component.measureControlButton){
+          Leaflet.DomEvent.off(component.measureControlButton, 'click', Leaflet.DomEvent.preventDefault);
+          Leaflet.DomEvent.off(component.measureControlButton, 'click', component.toggleMeasureMode);
+          component.measureControlButton = null;
+        }
+        if (component.measureClearButton){
+          Leaflet.DomEvent.off(component.measureClearButton, 'click', Leaflet.DomEvent.preventDefault);
+          Leaflet.DomEvent.off(component.measureClearButton, 'click', component.handleMeasureClearClick);
+          component.measureClearButton = null;
+        }
+      }
+    });
+
+    this.measureControl = new MeasureControl().addTo(this.map);
+  }
+
+  updateMeasureControls = () => {
+    if (this.measureControlButton){
+      if (this.isMeasuring){
+        Leaflet.DomUtil.addClass(this.measureControlButton, 'active');
+      }else{
+        Leaflet.DomUtil.removeClass(this.measureControlButton, 'active');
+      }
+    }
+    if (this.measureClearButton){
+      const hasData = this.state.measurementHasResult || this.measurePoints.length > 0;
+      if (hasData){
+        Leaflet.DomUtil.removeClass(this.measureClearButton, 'disabled');
+      }else{
+        Leaflet.DomUtil.addClass(this.measureClearButton, 'disabled');
+      }
+    }
+  }
+
+  toggleMeasureMode = () => {
+    if (this.isMeasuring){
+      this.finishMeasurement();
+    }else{
+      this.startMeasurement();
+    }
+  }
+
+  startMeasurement = () => {
+    if (this.isMeasuring) return;
+    if (!this.measureLayer){
+      this.measureLayer = Leaflet.layerGroup().addTo(this.map);
+    }
+
+    this.resetMeasurementLayer();
+    this.measureLine = Leaflet.polyline([], {
+      color: '#ff6f00',
+      weight: 2,
+      dashArray: '6 4'
+    }).addTo(this.measureLayer);
+
+    this.isMeasuring = true;
+    this.map.getContainer().classList.add('is-measuring');
+    this.map.on('click', this.handleMeasureClick);
+    this.map.on('dblclick', this.handleMeasureDoubleClick);
+    document.addEventListener('keydown', this.handleMeasureKeyDown);
+
+    this.setState({
+      measurementActive: true,
+      measurementHasResult: false,
+      measurementMeters: 0,
+      measurementSegments: 0
+    }, this.updateMeasureControls);
+  }
+
+  finishMeasurement = () => {
+    if (!this.isMeasuring) return;
+    this.isMeasuring = false;
+    this.detachMeasurementEvents();
+    if (this.map && this.map.getContainer()){
+      this.map.getContainer().classList.remove('is-measuring');
+    }
+    this.setState({measurementActive: false}, this.updateMeasureControls);
+  }
+
+  cancelMeasurement = () => {
+    if (!this.isMeasuring && !this.state.measurementHasResult) return;
+    if (this.isMeasuring){
+      this.isMeasuring = false;
+      this.detachMeasurementEvents();
+      if (this.map && this.map.getContainer()){
+        this.map.getContainer().classList.remove('is-measuring');
+      }
+    }
+    this.clearMeasurement();
+    this.setState({measurementActive: false}, this.updateMeasureControls);
+  }
+
+  handleMeasureClearClick = () => {
+    this.cancelMeasurement();
+  }
+
+  detachMeasurementEvents = () => {
+    if (!this.map) return;
+    this.map.off('click', this.handleMeasureClick);
+    this.map.off('dblclick', this.handleMeasureDoubleClick);
+    document.removeEventListener('keydown', this.handleMeasureKeyDown);
+  }
+
+  handleMeasureClick = (e) => {
+    if (!this.isMeasuring || !this.measureLine) return;
+    if (e && e.originalEvent) Leaflet.DomEvent.stop(e.originalEvent);
+    this.measurePoints.push(e.latlng);
+    this.measureLine.addLatLng(e.latlng);
+    this.updateMeasurementData();
+  }
+
+  handleMeasureDoubleClick = (e) => {
+    if (!this.isMeasuring) return;
+    if (e && e.originalEvent) Leaflet.DomEvent.stop(e.originalEvent);
+
+    if (this.measurePoints.length >= 2){
+      const last = this.measurePoints[this.measurePoints.length - 1];
+      const prev = this.measurePoints[this.measurePoints.length - 2];
+      if (last && prev && last.equals && last.equals(prev)){
+        this.measurePoints.pop();
+        if (this.measureLine){
+          this.measureLine.setLatLngs(this.measurePoints);
+        }
+      }
+    }
+
+    this.updateMeasurementData();
+
+    if (this.measurePoints.length < 2){
+      this.cancelMeasurement();
+    }else{
+      this.finishMeasurement();
+    }
+  }
+
+  handleMeasureKeyDown = (e) => {
+    if (!this.isMeasuring) return;
+    if (e.key === 'Escape'){
+      e.preventDefault();
+      this.cancelMeasurement();
+    }
+  }
+
+  resetMeasurementLayer = () => {
+    if (this.measureLayer){
+      this.measureLayer.clearLayers();
+    }
+    this.measurePoints = [];
+    this.measureLine = null;
+    this.measureLabel = null;
+  }
+
+  clearMeasurement = () => {
+    this.resetMeasurementLayer();
+    this.setState({
+      measurementHasResult: false,
+      measurementMeters: 0,
+      measurementSegments: 0
+    }, this.updateMeasureControls);
+  }
+
+  updateMeasurementData = () => {
+    if (!this.map) return;
+    if (this.measurePoints.length < 2){
+      if (this.measureLabel && this.measureLayer){
+        this.measureLayer.removeLayer(this.measureLabel);
+        this.measureLabel = null;
+      }
+      this.setState({
+        measurementMeters: 0,
+        measurementSegments: 0,
+        measurementHasResult: false
+      }, this.updateMeasureControls);
+      return;
+    }
+
+    let total = 0;
+    for (let i = 1; i < this.measurePoints.length; i++){
+      total += this.map.distance(this.measurePoints[i - 1], this.measurePoints[i]);
+    }
+
+    const lastPoint = this.measurePoints[this.measurePoints.length - 1];
+    this.updateMeasureLabel(lastPoint, total);
+
+    this.setState({
+      measurementMeters: total,
+      measurementSegments: this.measurePoints.length - 1,
+      measurementHasResult: true
+    }, this.updateMeasureControls);
+  }
+
+  updateMeasureLabel = (latlng, distanceMeters) => {
+    if (!this.measureLayer || !latlng) return;
+    if (this.measureLabel){
+      this.measureLayer.removeLayer(this.measureLabel);
+      this.measureLabel = null;
+    }
+
+    const values = this.getMeasurementStrings(distanceMeters);
+    const html = `<div class="map-measure-label-value">${values.metric}${values.secondary ? `<div class="map-measure-label-alt">${values.secondary}</div>` : ''}</div>`;
+
+    this.measureLabel = Leaflet.marker(latlng, {
+      icon: Leaflet.divIcon({
+        className: 'map-measure-label',
+        html
+      }),
+      interactive: false
+    });
+
+    this.measureLayer.addLayer(this.measureLabel);
+  }
+
+  getMeasurementStrings = (meters = 0) => {
+    const safeMeters = isFinite(meters) ? meters : 0;
+    const decimals = safeMeters >= 100 ? 1 : 2;
+    const metricValue = `${safeMeters.toLocaleString(undefined, {
+      minimumFractionDigits: safeMeters === 0 ? 0 : decimals,
+      maximumFractionDigits: decimals
+    })} m`;
+
+    let secondary = '';
+    const system = unitSystem();
+    if (system && system.getKey && system.getKey() !== "metric"){
+      secondary = system.length(safeMeters).toString();
+    }
+
+    return {
+      metric: metricValue,
+      secondary
+    };
+  }
+
+  renderMeasurementSummary = () => {
+    const { measurementActive, measurementHasResult, measurementMeters } = this.state;
+    if (!measurementActive && !measurementHasResult) return null;
+
+    const values = this.getMeasurementStrings(measurementMeters);
+    const title = measurementActive ? _("Measuring distance") : _("Last measurement");
+    const hint = measurementActive ?
+      _("Click to add points. Double-click to finish, or press Esc to cancel.") :
+      _("Use the ruler button to start a new measurement or the clear button to remove it.");
+
+    return (
+      <div className={`map-measure-summary theme-secondary ${measurementActive ? 'is-active' : ''}`}>
+        <div className="map-measure-summary-title">{title}</div>
+        <div className="map-measure-summary-value">{values.metric}</div>
+        {values.secondary ? <div className="map-measure-summary-alt">{values.secondary}</div> : null}
+        <div className="map-measure-summary-hint">{hint}</div>
+      </div>
+    );
+  }
+
   render() {
     return (
       <div style={{height: "100%"}} className="map">
@@ -1045,6 +1365,8 @@ _('Example:'),
             message={_("Loading...")}
             show={this.state.showLoading}
             />
+        
+        {this.renderMeasurementSummary()}
             
         <div 
           style={{height: "100%"}}

@@ -56,6 +56,31 @@
         margin-right: 12px;
     }
 
+    .leaflet-control-measure{
+        a{
+            width: 30px;
+            height: 30px;
+            line-height: 30px;
+            text-align: center;
+            font-size: 14px;
+            color: #333;
+            i{
+                pointer-events: none;
+            }
+            &.active{
+                background: #2196f3;
+                color: #fff;
+            }
+            &.disabled{
+                opacity: 0.4;
+                pointer-events: none;
+            }
+        }
+        a + a{
+            border-top: 1px solid rgba(0,0,0,0.2);
+        }
+    }
+
     .popup-opacity-slider{
         margin-bottom: 6px;
     }
@@ -102,11 +127,67 @@
         width: 100%;
     }
 
+    & > .leaflet-container.is-measuring{
+        cursor: crosshair;
+    }
+
     & > .alert-warning{
         position: absolute;
         z-index: 10000;
         top: 8px;
         left: 8px;
         right: 8px;
+    }
+
+    .map-measure-summary{
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1200;
+        padding: 10px 16px;
+        border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        pointer-events: none;
+        text-align: center;
+        min-width: 220px;
+        .map-measure-summary-title{
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+        .map-measure-summary-value{
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .map-measure-summary-alt{
+            font-size: 13px;
+            opacity: 0.85;
+        }
+        .map-measure-summary-hint{
+            font-size: 11px;
+            margin-top: 6px;
+            opacity: 0.75;
+        }
+    }
+
+    .map-measure-label{
+        background: rgba(0,0,0,0.75);
+        color: #fff;
+        padding: 6px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        .map-measure-label-value{
+            font-weight: bold;
+        }
+        .map-measure-label-alt{
+            font-size: 11px;
+            font-weight: normal;
+            margin-top: 2px;
+            opacity: 0.85;
+        }
     }
 }
