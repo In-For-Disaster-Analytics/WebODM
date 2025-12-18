@@ -262,7 +262,7 @@ setup_storage() {
         log_warning "Could not set ownership on $LOCAL_DB_DIR (postgres container may fail)"
     fi
     
-    log_success "Storage directories created"
+    log_success "Storage directories created (existing contents preserved)"
 }
 
 # Update repositories
@@ -365,45 +365,19 @@ setup_clusterodm() {
         log_error "ClusterODM-Tapis directory not found"
         exit 1
     }
-    
-    # Create .env if it doesn't exist
-    if [[ ! -f .env ]]; then
-        log_info "Creating ClusterODM .env file..."
-        cat > .env << EOF
-NODE_ENV=production
-PORT=$CLUSTERODM_PORT
-ADMIN_WEB_PORT=10000
-CLUSTER_HOST=$HOSTNAME
-CLUSTER_PORT=$CLUSTERODM_PORT
-DATA_DIR=$CORRAL_BASE/clusterodm/data
-TAPIS_BASE_URL=https://portals.tapis.io
-TAPIS_TENANT_ID=portals
-SECRET_KEY=$(openssl rand -hex 32)
-EOF
+
+    # Update repo
+    if [[ -d ".git" ]]; then
+        log_info "Pulling latest ClusterODM-Tapis..."
+        git pull origin master || git pull origin main || log_warning "Failed to pull ClusterODM-Tapis"
     fi
-    
-    log_info "Starting ClusterODM-Tapis with Node.js..."
-    # Start ClusterODM-Tapis in background with nohup
-    # Use CLUSTERODM_PORT for consistency
-    nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
-    echo $! > clusterodm-tapis.pid
-    
-    # Wait for ClusterODM to be ready
-    log_info "Waiting for ClusterODM to be ready..."
-    clusterodm_ready=false
-    for i in {1..30}; do
-        if clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
-            log_success "ClusterODM is ready"
-            clusterodm_ready=true
-            break
-        fi
-        sleep 2
-    done
-    
-    if [ "$clusterodm_ready" = false ]; then
-        log_error "ClusterODM failed to start within timeout"
-        return 1
+
+    # Restart via helper script with desired ports
+    if [[ ! -x "./restart.sh" ]]; then
+        chmod +x ./restart.sh
     fi
+
+    PORT=$CLUSTERODM_PORT ADMIN_WEB_PORT=10000 ./restart.sh
     
     log_success "ClusterODM setup completed"
 }
@@ -422,11 +396,22 @@ setup_webodm() {
     # Verify .env file has correct storage paths
     if [[ -f .env ]]; then
         log_info "Ensuring WebODM .env paths and settings are up to date..."
-        if grep -q '^WO_MEDIA_DIR=' .env; then
-            sed -i "s|^WO_MEDIA_DIR=.*|WO_MEDIA_DIR=$CORRAL_BASE/webodm/media|" .env
-        else
+
+        # Only override media/db paths if missing; avoid silently switching to empty locations
+        current_media_dir=$(grep '^WO_MEDIA_DIR=' .env | cut -d'=' -f2- || true)
+        if [[ -z "$current_media_dir" ]]; then
             echo "WO_MEDIA_DIR=$CORRAL_BASE/webodm/media" >> .env
+        else
+            log_info "Keeping existing WO_MEDIA_DIR=$current_media_dir"
         fi
+
+        current_db_dir=$(grep '^WO_DB_DIR=' .env | cut -d'=' -f2- || true)
+        if [[ -z "$current_db_dir" ]]; then
+            echo "WO_DB_DIR=$LOCAL_DB_DIR" >> .env
+        else
+            log_info "Keeping existing WO_DB_DIR=$current_db_dir"
+        fi
+
         if grep -q '^WO_CORRAL_GROUP=' .env; then
             sed -i "s|^WO_CORRAL_GROUP=.*|WO_CORRAL_GROUP=$CORRAL_GROUP|" .env
         else
@@ -438,11 +423,6 @@ setup_webodm() {
             else
                 echo "WO_CORRAL_GROUP_ID=$CORRAL_GROUP_ID" >> .env
             fi
-        fi
-        if grep -q '^WO_DB_DIR=' .env; then
-            sed -i "s|^WO_DB_DIR=.*|WO_DB_DIR=$LOCAL_DB_DIR|" .env
-        else
-            echo "WO_DB_DIR=$LOCAL_DB_DIR" >> .env
         fi
         if grep -q '^WO_HOST=' .env; then
             sed -i "s|^WO_HOST=.*|WO_HOST=$HOSTNAME|" .env
@@ -522,13 +502,15 @@ PYCODE
 connect_clusterodm() {
     log_info "Connecting ClusterODM to WebODM..."
     
-    # Wait a bit for both services to be fully ready
-    sleep 10
-    
-    # Check if ClusterODM is responding
-    if ! clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
-        log_error "ClusterODM is not responding, cannot connect to WebODM"
-        return 1
+    clusterodm_hostname="clusterodm.tacc.utexas.edu"
+    clusterodm_port=443
+    clusterodm_scheme="https"
+
+    # Best effort reachability check (non-fatal)
+    if clusterodm_probe_curl "${clusterodm_scheme}://${clusterodm_hostname}:${clusterodm_port}/info" > /dev/null; then
+        log_success "ClusterODM endpoint is reachable"
+    else
+        log_warning "ClusterODM endpoint not reachable now; will still register processing node"
     fi
     
     # Add ClusterODM as a processing node in WebODM
@@ -561,14 +543,15 @@ else:
             available=True
         )
         print(f'Created ClusterODM processing node: {node.hostname}:{node.port}')
-        
-        # Test the connection
-        node.update_node_info()
-        if node.online:
-            print(f'✓ ClusterODM node is online and ready')
-        else:
-            print(f'⚠ ClusterODM node created but appears offline')
-            
+        try:
+            node.update_node_info()
+            if node.online:
+                print(f'✓ ClusterODM node is online and ready')
+            else:
+                print(f'⚠ ClusterODM node created but appears offline')
+        except Exception as e:
+            print(f'⚠ ClusterODM node created but update_node_info failed: {e}')
+
     except Exception as e:
         print(f'Error creating ClusterODM node: {e}')
 " || log_warning "Failed to register ClusterODM with WebODM"
@@ -841,19 +824,12 @@ health_check() {
         all_good=false
     fi
     
-    # Check ClusterODM
-    if clusterodm_probe_curl "http://localhost:$CLUSTERODM_PORT/info" > /dev/null; then
+    # Check ClusterODM (remote)
+    if clusterodm_probe_curl "https://clusterodm.tacc.utexas.edu:443/info" > /dev/null; then
         log_success "ClusterODM is responding"
     else
         log_error "ClusterODM is not responding"
         all_good=false
-    fi
-
-    # Check ClusterODM admin web interface
-    if clusterodm_probe_curl "http://localhost:10000/r/info" > /dev/null; then
-        log_success "ClusterODM admin interface is responding"
-    else
-        log_warning "ClusterODM admin interface is not responding (webhook registration may not work)"
     fi
     
     # Check Docker containers
