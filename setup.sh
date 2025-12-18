@@ -287,15 +287,6 @@ update_repos() {
         fi
     fi
     
-    # Update NodeODM-LS6
-    if [[ -d "$REPO_BASE/nodeodm-ls6" ]]; then
-        cd "$REPO_BASE/nodeodm-ls6"
-        if [[ -d ".git" ]]; then
-            log_info "Pulling latest NodeODM-LS6..."
-            git pull origin master || git pull origin main || log_warning "Failed to pull NodeODM-LS6"
-        fi
-    fi
-    
     log_success "Repository updates completed"
 }
 
@@ -361,15 +352,6 @@ build_images() {
 
         log_info "Recreating WebODM containers..."
         docker compose up -d --force-recreate webapp worker || log_error "WebODM docker compose up failed"
-    fi
-    
-    # Build NodeODM-LS6
-    if [[ -d "$REPO_BASE/nodeodm-ls6" ]]; then
-        cd "$REPO_BASE/nodeodm-ls6"
-        if [[ -f docker-compose.yml ]]; then
-            log_info "Building NodeODM-LS6 Docker image..."
-            docker compose build --no-cache
-        fi
     fi
     
     log_success "Docker image builds completed"
@@ -569,30 +551,6 @@ else:
 " || log_warning "Failed to register ClusterODM with WebODM"
     
     log_success "ClusterODM connection setup completed"
-}
-
-# Setup NodeODM-LS6 (optional)
-setup_nodeodm() {
-    log_info "Setting up NodeODM-LS6..."
-    
-    if [[ -d "$REPO_BASE/nodeodm-ls6" ]]; then
-        cd "$REPO_BASE/nodeodm-ls6"
-        
-        # Create config if it doesn't exist
-        if [[ ! -f config.json && -f config.example.json ]]; then
-            cp config.example.json config.json
-        fi
-        
-        # Start NodeODM
-        if [[ -f docker-compose.yml ]]; then
-            docker compose up -d
-            log_success "NodeODM-LS6 started"
-        else
-            log_warning "NodeODM-LS6 docker-compose.yml not found"
-        fi
-    else
-        log_warning "NodeODM-LS6 directory not found, skipping"
-    fi
 }
 
 # Setup nginx reverse proxy
@@ -937,8 +895,6 @@ full_update() {
         log_warning "ClusterODM PID file not found, trying to kill by name"
         pkill -f "node index.js.*tapis-config.json" || log_warning "No ClusterODM process found"
     fi
-    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down || log_warning "NodeODM stop failed"
-    
     # Update repositories and rebuild images
     update_repos
     build_images
@@ -949,8 +905,6 @@ full_update() {
     cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
     echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
     cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
-    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose up -d
-    
     if health_check; then
         log_success "Update completed successfully!"
     else
@@ -972,14 +926,12 @@ main() {
     # Stop any existing services before building to avoid conflicts
     log_info "Stopping any existing services before setup..."
     cd "$REPO_BASE/WebODM" && ./webodm.sh stop 2>/dev/null || log_warning "No WebODM services to stop"
-    [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down 2>/dev/null || log_warning "No NodeODM services to stop"
     pkill -f "node index.js.*tapis-config.json" 2>/dev/null || log_warning "No ClusterODM process to stop"
 
     build_images  # Build images during initial setup
     setup_clusterodm
     setup_webodm
     connect_clusterodm
-    setup_nodeodm
     setup_nginx
     setup_firewall
     setup_backup
@@ -1005,25 +957,23 @@ case "${1:-}" in
         log_info "Stopping all services..."
         cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
         # Stop ClusterODM-Tapis Node.js process
-        if [[ -f "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid" ]]; then
-            pid=$(cat "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid")
-            kill $pid 2>/dev/null || log_warning "ClusterODM process already stopped"
-            rm -f "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
-        else
-            log_warning "ClusterODM PID file not found"
-        fi
-        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose down || log_warning "NodeODM stop failed"
-        log_success "All services stopped"
-        ;;
-    "start")
-        log_info "Starting all services..."
-        # Start ClusterODM-Tapis with Node.js
-        cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
-        echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
-        cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
-        [[ -d "$REPO_BASE/nodeodm-ls6" ]] && cd "$REPO_BASE/nodeodm-ls6" && docker compose up -d
-        log_success "All services started"
-        ;;
+    if [[ -f "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid" ]]; then
+        pid=$(cat "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid")
+        kill $pid 2>/dev/null || log_warning "ClusterODM process already stopped"
+        rm -f "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
+    else
+        log_warning "ClusterODM PID file not found"
+    fi
+    log_success "All services stopped"
+    ;;
+"start")
+    log_info "Starting all services..."
+    # Start ClusterODM-Tapis with Node.js
+    cd "/home/wmobley/ODM-SUITE/ClusterODM" && nohup node index.js --asr tapis-config.json --port $CLUSTERODM_PORT --admin-web-port 10000 > clusterodm-tapis.log 2>&1 &
+    echo $! > "/home/wmobley/ODM-SUITE/ClusterODM/clusterodm-tapis.pid"
+    cd "$REPO_BASE/WebODM" && ./webodm.sh start --hostname "$HOSTNAME" --port "$WEBODM_PORT" --default-nodes 0
+    log_success "All services started"
+    ;;
     "restart")
         $0 stop
         sleep 5
