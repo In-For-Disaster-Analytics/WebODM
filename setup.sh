@@ -498,6 +498,30 @@ PYCODE
     log_success "WebODM setup completed"
 }
 
+# Promote default admin user if present
+promote_superuser() {
+    log_info "Ensuring wmobley is a Django superuser..."
+    ./webodm.sh exec webapp python manage.py shell << 'PYCODE'
+from django.contrib.auth.models import User
+try:
+    u = User.objects.get(username='wmobley')
+    changed = False
+    if not u.is_staff:
+        u.is_staff = True
+        changed = True
+    if not u.is_superuser:
+        u.is_superuser = True
+        changed = True
+    if changed:
+        u.save()
+        print("Updated wmobley to superuser/staff")
+    else:
+        print("wmobley already superuser/staff")
+except User.DoesNotExist:
+    print("User wmobley not found; skipping promotion")
+PYCODE
+}
+
 # Connect ClusterODM to WebODM
 connect_clusterodm() {
     log_info "Connecting ClusterODM to WebODM..."
@@ -522,7 +546,7 @@ import requests
 # ClusterODM connection details
 clusterodm_hostname = 'clusterodm.tacc.utexas.edu'
 clusterodm_port = 443
-node_name = 'ClusterODM (TACC)'
+node_name = 'sm-cluster'
 
 # Check if ClusterODM node already exists
 existing_node = ProcessingNode.objects.filter(hostname=clusterodm_hostname, port=clusterodm_port).first()
@@ -931,6 +955,7 @@ main() {
     setup_clusterodm
     setup_webodm
     connect_clusterodm
+    promote_superuser
     setup_nginx
     setup_firewall
     setup_backup
