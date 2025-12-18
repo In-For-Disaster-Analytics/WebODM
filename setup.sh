@@ -488,9 +488,32 @@ setup_webodm() {
         return 1
     fi
     
-    # Setup Tapis OAuth2 integration
+    # Setup Tapis OAuth2 integration (id/secret/callback preconfigured)
     log_info "Setting up Tapis OAuth2 integration..."
-    ./webodm.sh exec webapp python setup_tapis_oauth2.py || log_warning "Tapis OAuth2 setup failed"
+    ./webodm.sh exec webapp python manage.py shell << 'PYCODE' || log_warning "Tapis OAuth2 setup failed"
+from app.models import TapisOAuth2Client
+
+client_id = "webodm.tacc.utexas.edu"
+client_secret = "wOwGPBAd9Prn"
+callback_url = "https://webodm.tacc.utexas.edu/api/oauth2/tapis/callback"
+name = "WEBodm.tacc.utexas.edu"
+description = ""
+base_url = "https://portals.tapis.io"
+tenant_id = "portals"
+
+obj, created = TapisOAuth2Client.objects.update_or_create(
+    client_id=client_id,
+    defaults={
+        "client_secret": client_secret,
+        "callback_url": callback_url,
+        "name": name,
+        "description": description,
+        "base_url": base_url,
+        "tenant_id": tenant_id,
+    },
+)
+print(f"{'Created' if created else 'Updated'} TapisOAuth2Client: {obj}")
+PYCODE
     
     log_success "WebODM setup completed"
 }
