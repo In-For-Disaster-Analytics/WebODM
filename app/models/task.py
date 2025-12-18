@@ -1452,6 +1452,9 @@ class Task(models.Model):
                 os.makedirs(tp, exist_ok=True)
 
             if chunk_info is not None:
+                # Ensure the temp upload directory exists before writing chunk files
+                os.makedirs(os.path.dirname(chunk_info['tmp_upload_file']), exist_ok=True)
+
                 if os.path.isfile(chunk_info['tmp_upload_file']) and chunk_info['chunk_index'] == 0:
                     os.unlink(chunk_info['tmp_upload_file'])
                 

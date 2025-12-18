@@ -881,6 +881,8 @@ class TaskAssetsImport(APIView):
                 raise exceptions.ValidationError(detail="Some parameters are not integers")
             uuid = re.sub('[^0-9a-zA-Z-]+', "", uuid)
 
+            # Ensure temp directory exists to avoid FileNotFoundError when writing chunks
+            os.makedirs(settings.FILE_UPLOAD_TEMP_DIR, exist_ok=True)
             tmp_upload_file = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"{uuid}.upload")
             if os.path.isfile(tmp_upload_file) and chunk_index == 0:
                 os.unlink(tmp_upload_file)
