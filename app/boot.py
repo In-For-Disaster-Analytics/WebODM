@@ -80,13 +80,26 @@ def boot():
                 default_theme.css = settings.DEFAULT_THEME_CSS
                 default_theme.save()
 
-        if Setting.objects.all().count() == 0:
+        settings_qs = Setting.objects.all()
+        if settings_qs.count() == 0:
             s = Setting.objects.create(
                     app_name=settings.APP_NAME,
                     theme=default_theme)
-            s.app_logo.save(os.path.basename(settings.APP_DEFAULT_LOGO), File(open(settings.APP_DEFAULT_LOGO, 'rb')))
-
+            with open(settings.APP_DEFAULT_LOGO, 'rb') as f:
+                s.app_logo.save(os.path.basename(settings.APP_DEFAULT_LOGO), File(f))
             logger.info("Created settings")
+        else:
+            # Media volume might get wiped while the DB entry remains; restore the default logo if missing
+            s = settings_qs.first()
+            try:
+                logo_path = s.app_logo.path
+            except Exception:
+                logo_path = ""
+
+            if logo_path == "" or not os.path.exists(logo_path):
+                logger.warning("App logo missing from media, restoring default logo.")
+                with open(settings.APP_DEFAULT_LOGO, 'rb') as f:
+                    s.app_logo.save(os.path.basename(settings.APP_DEFAULT_LOGO), File(f))
         
         init_plugins()
 
