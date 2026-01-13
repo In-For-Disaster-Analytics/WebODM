@@ -224,8 +224,15 @@ class ModelView extends React.Component {
     const potreePointCloud = this.assetsPath() + '/potree_pointcloud/cloud.js';
 
     this.urlExists(entwinePointCloud, (exists) => {
-        if (exists) cb(entwinePointCloud);
-        else cb(potreePointCloud);
+        if (exists) {
+            cb(entwinePointCloud);
+            return;
+        }
+
+        this.urlExists(potreePointCloud, (potreeExists) => {
+            if (potreeExists) cb(potreePointCloud);
+            else cb(null);
+        });
     });
   }
 
@@ -358,6 +365,10 @@ class ModelView extends React.Component {
     viewer.scene.scene.add( directional );
 
     this.pointCloudFilePath(pointCloudPath =>{ 
+        if (!pointCloudPath){
+          this.setState({error: "Point cloud assets not found for this task. Try processing the task again."});
+          return;
+        }
         Potree.loadPointCloud(pointCloudPath, "Point Cloud", e => {
           if (e.type == "loading_failed"){
             this.setState({error: "Could not load point cloud. This task doesn't seem to have one. Try processing the task again."});
