@@ -2,11 +2,53 @@
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/OpenDroneMap/WebODM/build-and-publish.yml?branch=master) ![Version](https://img.shields.io/github/v/release/OpenDroneMap/WebODM) [![Translated](https://hosted.weblate.org/widgets/webodm/-/svg-badge.svg)](https://hosted.weblate.org/engage/webodm/) [![Download](https://img.shields.io/badge/Download-%E2%86%93-pink)](#getting-started) [![Purchase](https://img.shields.io/badge/Purchase-%F0%9F%9B%92-white)](https://opendronemap.org/webodm/download/)
 
+# WebODM CLI (webodm.sh)
+
+Manage the WebODM Docker stack with `WebODM/webodm.sh`.
+
+```bash
+./webodm.sh <command> [options]
+
+Commands:
+  start [options]                         Start WebODM containers
+  stop                                   Stop WebODM containers
+  down                                   Stop and remove WebODM containers
+  update                                 Update WebODM to the latest release
+  liveupdate                             Update WebODM without stopping it
+  rebuild                                Rebuild all docker containers and perform cleanups
+  checkenv                               Environment check and install missing components
+  test [frontend|backend] [args]         Run tests
+  resetadminpassword "<new password>"    Reset the administrator password
+
+Options:
+  --port <port>                           Bind port (default: 8000)
+  --hostname <hostname>                   Public hostname (default: localhost)
+  --media-dir <path>                      Processing results storage path
+  --db-dir <path>                         Postgres data path
+  --default-nodes                         Number of default NodeODM nodes
+  --with-micmac                           Start a NodeMICMAC node
+  --ssl                                  Enable SSL with LetsEncrypt
+  --ssl-key <path>                        Path to SSL private key (.pem)
+  --ssl-cert <path>                       Path to SSL certificate (.pem)
+  --ssl-insecure-port-redirect <port>     Redirect HTTP port when SSL enabled
+  --debug                                Enable debug mode
+  --dev                                  Development mode with live source edits
+  --dev-watch-plugins                     Auto-build plugins in dev mode
+  --broker                                Celery broker URL
+  --detached                             Run in background (headless)
+  --gpu                                  Use GPU NodeODM nodes (Linux only)
+  --settings <path>                       Custom settings.py path
+  --worker-memory                         Worker memory limit
+  --worker-cpus                           Worker CPU limit
+  --ipv6                                 Enable IPv6
+```
+
 A user-friendly, commercial grade software for drone image processing. Generate georeferenced maps, point clouds, elevation models and textured 3D models from aerial images. It supports multiple engines for processing, currently [ODM](https://github.com/OpenDroneMap/ODM) and [MicMac](https://github.com/OpenDroneMap/NodeMICMAC/).
 
 ![image](https://user-images.githubusercontent.com/1951843/174504753-6869e56e-7b65-4775-bb23-6c1dc256575c.png)
 
 
+- [WebODM CLI (webodm.sh)](#webodm-cli-webodmsh)
 - [Getting Started](#getting-started)
    * [Recommended Machine Specs](#recommended-machine-specs)
    * [Manual installation (Docker)](#manual-installation-docker)
