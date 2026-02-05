@@ -547,7 +547,8 @@ class ModelView extends React.Component {
 
       const resolveUrl = (u) => (u.startsWith('http') ? u : `${baseUrl}${u}`);
       console.log('[potree-v2] resolveUrl base:', baseUrl);
-      const pointcloud = await potree.loadPointCloud(metadataUrl, resolveUrl);
+      // potree-core expects "metadata.json" or "cloud.js" as the identifier
+      const pointcloud = await potree.loadPointCloud('metadata.json', resolveUrl);
       scene.add(pointcloud);
 
       const box = pointcloud.boundingBox;
