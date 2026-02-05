@@ -218,14 +218,14 @@ class ModelView extends React.Component {
   }
 
   pointCloudSource = (cb) => {
-    // Prefer Entwine EPT, then Potree v1 (cloud.js), then Potree v2 (metadata.json)
-    const entwinePointCloud = this.assetsPath() + '/entwine_pointcloud/ept.json';
-    const potreePointCloudV1 = this.assetsPath() + '/potree_pointcloud/cloud.js';
+    // Prefer Potree v2 (metadata.json), then Potree v1 (cloud.js), then Entwine EPT
     const potreePointCloudV2 = this.assetsPath() + '/potree_pointcloud/metadata.json';
+    const potreePointCloudV1 = this.assetsPath() + '/potree_pointcloud/cloud.js';
+    const entwinePointCloud = this.assetsPath() + '/entwine_pointcloud/ept.json';
 
-    this.urlExists(entwinePointCloud, (exists) => {
-        if (exists) {
-            cb({ type: 'entwine', url: entwinePointCloud });
+    this.urlExists(potreePointCloudV2, (potreeV2Exists) => {
+        if (potreeV2Exists) {
+            cb({ type: 'potree-v2', url: potreePointCloudV2 });
             return;
         }
 
@@ -235,8 +235,8 @@ class ModelView extends React.Component {
                 return;
             }
 
-            this.urlExists(potreePointCloudV2, (potreeV2Exists) => {
-                if (potreeV2Exists) cb({ type: 'potree-v2', url: potreePointCloudV2 });
+            this.urlExists(entwinePointCloud, (entwineExists) => {
+                if (entwineExists) cb({ type: 'entwine', url: entwinePointCloud });
                 else cb(null);
             });
         });
@@ -549,6 +549,7 @@ class ModelView extends React.Component {
       console.log('[potree-v2] resolveUrl base:', baseUrl);
       // potree-core expects "metadata.json" or "cloud.js" as the identifier
       const pointcloud = await potree.loadPointCloud('metadata.json', resolveUrl);
+      console.log('[potree-v2] pointcloud loaded:', pointcloud);
       scene.add(pointcloud);
 
       const box = pointcloud.boundingBox;

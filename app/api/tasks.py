@@ -463,6 +463,49 @@ def download_file_response(request, filePath, content_disposition, download_file
         download_filename = filename
     filesize = os.stat(filePath).st_size
     file = open(filePath, "rb")
+    range_header = request.META.get('HTTP_RANGE')
+
+    # Support HTTP Range requests (needed for Potree v2 streaming)
+    if range_header:
+        m = re.match(r'bytes=(\d*)-(\d*)', range_header)
+        if m:
+            start_str, end_str = m.groups()
+            if start_str == "" and end_str == "":
+                start = 0
+                end = filesize - 1
+            elif start_str == "":
+                # Suffix range: last N bytes
+                suffix_len = int(end_str)
+                start = max(filesize - suffix_len, 0)
+                end = filesize - 1
+            else:
+                start = int(start_str)
+                end = int(end_str) if end_str != "" else filesize - 1
+
+            if start < filesize:
+                end = min(end, filesize - 1)
+                length = end - start + 1
+
+                def file_iterator(f, offset, length, chunk_size=8192):
+                    f.seek(offset)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(chunk_size, remaining))
+                        if not chunk:
+                            break
+                        yield chunk
+                        remaining -= len(chunk)
+
+                response = StreamingHttpResponse(
+                    file_iterator(file, start, length),
+                    status=206,
+                    content_type=mimetypes.guess_type(filename)[0] or "application/zip"
+                )
+                response['Content-Range'] = f'bytes {start}-{end}/{filesize}'
+                response['Content-Length'] = length
+                response['Accept-Ranges'] = 'bytes'
+                response['Content-Disposition'] = "{}; filename={}".format(content_disposition, download_filename)
+                return response
 
     # More than 100mb, normal http response, otherwise stream
     # Django docs say to avoid streaming when possible
