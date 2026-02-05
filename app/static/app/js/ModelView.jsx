@@ -503,9 +503,9 @@ class ModelView extends React.Component {
     try{
       const baseUrl = metadataUrl.substring(0, metadataUrl.lastIndexOf('/') + 1);
       const [threeMod, controlsMod, potreeMod] = await Promise.all([
-        import(/* webpackIgnore: true */ 'https://esm.sh/three@0.182.0'),
-        import(/* webpackIgnore: true */ 'https://esm.sh/three@0.182.0/examples/jsm/controls/OrbitControls.js'),
-        import(/* webpackIgnore: true */ 'https://esm.sh/potree-core@2.0.7')
+        import(/* webpackIgnore: true */ '/static/app/js/vendor/three/three.module.js'),
+        import(/* webpackIgnore: true */ '/static/app/js/vendor/three/examples/jsm/controls/OrbitControls.js'),
+        import(/* webpackIgnore: true */ '/static/app/js/vendor/potree-core/potree-core.js')
       ]);
 
       const THREE = threeMod.default || threeMod;
