@@ -550,13 +550,23 @@ class ModelView extends React.Component {
       // potree-core expects "metadata.json" or "cloud.js" as the identifier
       const pointcloud = await potree.loadPointCloud('metadata.json', resolveUrl);
       console.log('[potree-v2] pointcloud loaded:', pointcloud);
+      console.log('[potree-v2] pointcloud position:', pointcloud.position);
       scene.add(pointcloud);
 
-      const box = pointcloud.boundingBox;
+      // If the point cloud is georeferenced far from origin, move to origin for viewing
+      if (typeof pointcloud.moveToOrigin === 'function') {
+        pointcloud.moveToOrigin();
+      }
+
+      const box = (typeof pointcloud.getBoundingBoxWorld === 'function')
+        ? pointcloud.getBoundingBoxWorld()
+        : pointcloud.boundingBox;
       if (box){
         const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        console.log('[potree-v2] box center:', center, 'size:', size);
         controls.target.copy(center);
-        camera.position.copy(center.clone().add(new THREE.Vector3(0, 0, box.getSize(new THREE.Vector3()).length())));
+        camera.position.copy(center.clone().add(new THREE.Vector3(0, 0, size.length())));
       }
 
       const onResize = () => {
