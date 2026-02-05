@@ -513,6 +513,17 @@ class ModelView extends React.Component {
       const PotreeCore = potreeMod.Potree || potreeMod.default || potreeMod;
       const potree = PotreeCore.Potree ? new PotreeCore.Potree() : new PotreeCore();
 
+      console.log('[potree-v2] metadataUrl:', metadataUrl);
+      try {
+        const resp = await fetch(metadataUrl, { credentials: 'include' });
+        const contentType = resp.headers.get('content-type');
+        const text = await resp.text();
+        console.log('[potree-v2] metadata status:', resp.status, 'content-type:', contentType);
+        console.log('[potree-v2] metadata head:', text.slice(0, 200));
+      } catch (e) {
+        console.warn('[potree-v2] metadata fetch failed', e);
+      }
+
       const container = this.container;
       if (window.viewer && window.viewer.renderer && window.viewer.renderer.domElement){
         window.viewer.renderer.domElement.style.display = 'none';
@@ -535,6 +546,7 @@ class ModelView extends React.Component {
       controls.enableDamping = true;
 
       const resolveUrl = (u) => (u.startsWith('http') ? u : `${baseUrl}${u}`);
+      console.log('[potree-v2] resolveUrl base:', baseUrl);
       const pointcloud = await potree.loadPointCloud(metadataUrl, resolveUrl);
       scene.add(pointcloud);
 
