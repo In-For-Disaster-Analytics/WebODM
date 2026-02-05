@@ -217,21 +217,28 @@ class ModelView extends React.Component {
     
   }
 
-  pointCloudFilePath = (cb) => {
-    // Check if entwine point cloud exists, 
-    // otherwise fallback to potree point cloud binary format path
+  pointCloudSource = (cb) => {
+    // Prefer Entwine EPT, then Potree v1 (cloud.js), then Potree v2 (metadata.json)
     const entwinePointCloud = this.assetsPath() + '/entwine_pointcloud/ept.json';
-    const potreePointCloud = this.assetsPath() + '/potree_pointcloud/cloud.js';
+    const potreePointCloudV1 = this.assetsPath() + '/potree_pointcloud/cloud.js';
+    const potreePointCloudV2 = this.assetsPath() + '/potree_pointcloud/metadata.json';
 
     this.urlExists(entwinePointCloud, (exists) => {
         if (exists) {
-            cb(entwinePointCloud);
+            cb({ type: 'entwine', url: entwinePointCloud });
             return;
         }
 
-        this.urlExists(potreePointCloud, (potreeExists) => {
-            if (potreeExists) cb(potreePointCloud);
-            else cb(null);
+        this.urlExists(potreePointCloudV1, (potreeExists) => {
+            if (potreeExists) {
+                cb({ type: 'potree-v1', url: potreePointCloudV1 });
+                return;
+            }
+
+            this.urlExists(potreePointCloudV2, (potreeV2Exists) => {
+                if (potreeV2Exists) cb({ type: 'potree-v2', url: potreePointCloudV2 });
+                else cb(null);
+            });
         });
     });
   }
@@ -295,6 +302,7 @@ class ModelView extends React.Component {
   }
 
   getSceneData(){
+      if (!window.viewer) return {};
       let json = Potree.saveProject(window.viewer);
 
       // Remove view, settings since we don't want to trigger
@@ -364,12 +372,16 @@ class ModelView extends React.Component {
     directional.position.z = 99999999999;
     viewer.scene.scene.add( directional );
 
-    this.pointCloudFilePath(pointCloudPath =>{ 
-        if (!pointCloudPath){
+    this.pointCloudSource(pointCloud =>{ 
+        if (!pointCloud){
           this.setState({error: "Point cloud assets not found for this task. Try processing the task again."});
           return;
         }
-        Potree.loadPointCloud(pointCloudPath, "Point Cloud", e => {
+        if (pointCloud.type === 'potree-v2'){
+          this.loadPotreeV2(pointCloud.url);
+          return;
+        }
+        Potree.loadPointCloud(pointCloud.url, "Point Cloud", e => {
           if (e.type == "loading_failed"){
             this.setState({error: "Could not load point cloud. This task doesn't seem to have one. Try processing the task again."});
             return;
@@ -485,6 +497,74 @@ class ModelView extends React.Component {
     viewer.renderer.domElement.addEventListener( 'mousemove', this.handleRenderMouseMove );
     viewer.renderer.domElement.addEventListener( 'touchstart', this.handleRenderTouchStart );
     
+  }
+
+  loadPotreeV2 = async (metadataUrl) => {
+    try{
+      const baseUrl = metadataUrl.substring(0, metadataUrl.lastIndexOf('/') + 1);
+      const [threeMod, controlsMod, potreeMod] = await Promise.all([
+        import(/* webpackIgnore: true */ 'https://cdn.skypack.dev/three'),
+        import(/* webpackIgnore: true */ 'https://cdn.skypack.dev/three/examples/jsm/controls/OrbitControls.js'),
+        import(/* webpackIgnore: true */ 'https://cdn.skypack.dev/potree-core@2.0.7')
+      ]);
+
+      const THREE = threeMod.default || threeMod;
+      const OrbitControls = controlsMod.OrbitControls || controlsMod.default;
+      const PotreeCore = potreeMod.Potree || potreeMod.default || potreeMod;
+      const potree = PotreeCore.Potree ? new PotreeCore.Potree() : new PotreeCore();
+
+      const container = this.container;
+      if (window.viewer && window.viewer.renderer && window.viewer.renderer.domElement){
+        window.viewer.renderer.domElement.style.display = 'none';
+      }
+      $("#potree_sidebar_container").hide();
+      const canvas = document.createElement('canvas');
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      canvas.style.display = 'block';
+      container.appendChild(canvas);
+
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setSize(container.clientWidth, container.clientHeight);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 10000000);
+      camera.position.set(0, 0, 10);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      const resolveUrl = (u) => (u.startsWith('http') ? u : `${baseUrl}${u}`);
+      const pointcloud = await potree.loadPointCloud(metadataUrl, resolveUrl);
+      scene.add(pointcloud);
+
+      const box = pointcloud.boundingBox;
+      if (box){
+        const center = box.getCenter(new THREE.Vector3());
+        controls.target.copy(center);
+        camera.position.copy(center.clone().add(new THREE.Vector3(0, 0, box.getSize(new THREE.Vector3()).length())));
+      }
+
+      const onResize = () => {
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      };
+      window.addEventListener('resize', onResize);
+
+      const animate = () => {
+        requestAnimationFrame(animate);
+        controls.update();
+        potree.updatePointClouds([pointcloud], camera, renderer);
+        renderer.render(scene, camera);
+      };
+      animate();
+    }catch(err){
+      console.error("Potree v2 load failed", err);
+      this.setState({error: "Could not load point cloud (Potree v2). Try processing the task again."});
+    }
   }
 
   getCropCoordinates(){
