@@ -11,14 +11,14 @@
       {% trans "JavaScript is required to continue. Use the link below if you are not redirected." %}
     </div>
     <p>
-      <a href="{{ clusterodm_url }}/admin/#token={{ tapis_token|urlencode }}">{{ clusterodm_url }}</a>
+      <a href="{{ clusterodm_url }}/admin/#token={{ tapis_jwt|urlencode }}">{{ clusterodm_url }}</a>
     </p>
   </noscript>
 
   <script type="text/javascript">
     (function () {
       var base = "{{ clusterodm_url|escapejs }}";
-      var token = "{{ tapis_token|escapejs }}";
+      var token = "{{ tapis_jwt|escapejs }}";
       if (!base || !token) {
         window.location.href = "/dashboard/";
         return;

@@ -18,6 +18,13 @@ from app.views.utils import get_permissions
 from webodm import settings
 from app.models.oauth2 import TapisOAuth2Token
 
+def _looks_like_jwt(token):
+    if not token or not isinstance(token, str):
+        return False
+    if token.count('.') != 2:
+        return False
+    return ' ' not in token
+
 def index(request):
     # Check first access
     if User.objects.filter(is_superuser=True).count() == 0:
@@ -154,15 +161,25 @@ def clusterodm_admin(request):
         messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired.'))
         return redirect('dashboard')
 
-    token_value = token_obj.get_access_token_value()
+    token_value = token_obj.get_or_refresh_access_token()
     if not token_value:
-        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is invalid.'))
+        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired.'))
         return redirect('dashboard')
+
+    if not _looks_like_jwt(token_value):
+        if token_obj.refresh_token:
+            try:
+                token_value = token_obj.refresh()
+            except Exception:
+                token_value = None
+        if not _looks_like_jwt(token_value):
+            messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is invalid. Please log in again.'))
+            return redirect('dashboard')
 
     return render(request, 'app/clusterodm_redirect.html', {
         'title': _('ClusterODM'),
         'clusterodm_url': clusterodm_url.rstrip('/'),
-        'tapis_token': token_value,
+        'tapis_jwt': token_value,
     })
 
 class FirstUserForm(forms.ModelForm):

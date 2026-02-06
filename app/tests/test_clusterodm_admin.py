@@ -80,4 +80,15 @@ class TestClusterODMAdmin(BootTestCase):
         self.assertEqual(res.status_code, 200)
         self.assertTemplateUsed(res, "app/clusterodm_redirect.html")
         self.assertEqual(res.context["clusterodm_url"], "https://clusterodm.example.com")
-        self.assertEqual(res.context["tapis_token"], token)
+        self.assertEqual(res.context["tapis_jwt"], token)
+
+    def test_rejects_non_jwt_token(self):
+        self.client.login(username="testsuperuser", password="test1234")
+        TapisOAuth2Token.objects.create(
+            user=self.superuser,
+            client=self.oauth_client,
+            access_token="Token for wmobley (WEBodm.tacc.utexas.edu)",
+            expires_at=timezone.now() + timezone.timedelta(hours=1),
+        )
+        res = self.client.get("/clusterodm/admin/", follow=True)
+        self.assertRedirects(res, "/dashboard/")
