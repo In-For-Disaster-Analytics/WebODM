@@ -398,6 +398,9 @@ CLUSTER_ID = None
 # e.g. https://mycluster%s.mydomain
 CLUSTER_URL = ''
 
+# Optional link to a ClusterODM instance (used by UI for superusers)
+CLUSTERODM_URL = os.environ.get('WO_CLUSTERODM_URL', '')
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

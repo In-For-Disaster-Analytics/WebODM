@@ -88,6 +88,10 @@ def is_desktop_mode():
 def is_dev_mode():
     return settings.DEV
 
+@register.simple_tag
+def clusterodm_url():
+    return settings.CLUSTERODM_URL
+
 @register.simple_tag(takes_context=True)
 def settings_image_url(context, image):
     try:

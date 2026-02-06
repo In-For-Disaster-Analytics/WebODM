@@ -40,6 +40,7 @@ urlpatterns = [
     url(r'^plugins/(?P<plugin_name>[^/.]+)/(.*)$', app_view_handler),
 
     url(r'^about/$', app_views.about, name='about'),
+    url(r'^clusterodm/admin/$', app_views.clusterodm_admin, name='clusterodm_admin'),
     url(r'^dev-tools/(?P<action>.*)$', dev_views.dev_tools, name='dev_tools'),
     
     # Tapis OAuth2 authentication URLs
@@ -54,4 +55,3 @@ urlpatterns = [
 
 handler404 = app_views.handler404
 handler500 = app_views.handler500
-

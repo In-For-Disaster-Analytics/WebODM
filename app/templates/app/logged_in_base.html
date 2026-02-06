@@ -103,6 +103,7 @@
                     <a href="#"><i class="fa fa-cogs fa-fw"></i> {% trans 'Administration' %}<span class="fa arrow"></span></a>
                     <ul class="nav nav-second-level">
                         {% is_single_user_mode as hide_users %}
+                        {% clusterodm_url as clusterodm_url %}
                         {% if not hide_users %}
                         <li>
                             <a href="/admin/auth/user/"><i class="fa fa-user fa-fw"></i> {% trans 'Accounts' %}</a>
@@ -124,6 +125,11 @@
                         <li>
                             <a href="/admin/app/"><i class="fa fa-cog fa-fw"></i> {% trans 'Application' %}</a>
                         </li>
+                        {% if user.is_superuser and clusterodm_url %}
+                        <li>
+                            <a href="{% url 'clusterodm_admin' %}"><i class="fa fa-cloud fa-fw"></i> {% trans 'ClusterODM' %}</a>
+                        </li>
+                        {% endif %}
                     </ul>
                 </li>
                 {% endif %}

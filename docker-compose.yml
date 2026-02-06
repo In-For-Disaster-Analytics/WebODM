@@ -45,6 +45,7 @@ services:
       - WO_TAPIS_CLIENT_KEY
       - WO_TAPIS_CLIENT_SECRET
       - WO_TAPIS_CALLBACK_URL
+      - WO_CLUSTERODM_URL
     restart: unless-stopped
     oom_score_adj: 0
   broker:
@@ -76,5 +77,6 @@ services:
       - WO_TAPIS_CLIENT_KEY
       - WO_TAPIS_CLIENT_SECRET
       - WO_TAPIS_CALLBACK_URL
+      - WO_CLUSTERODM_URL
     restart: unless-stopped
     oom_score_adj: 250

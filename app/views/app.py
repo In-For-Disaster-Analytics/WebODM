@@ -4,6 +4,7 @@ from django.contrib.auth import login
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import User
 from django.http import Http404
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import render, redirect, get_object_or_404
 from guardian.shortcuts import get_objects_for_user
 
@@ -15,6 +16,7 @@ from django.utils.translation import ugettext as _
 from django import forms
 from app.views.utils import get_permissions
 from webodm import settings
+from app.models.oauth2 import TapisOAuth2Token
 
 def index(request):
     # Check first access
@@ -130,6 +132,38 @@ def processing_node(request, processing_node_id):
                 'processing_node': pn,
                 'available_options_json': pn.get_available_options_json(pretty=True)
             })
+
+
+@login_required
+def clusterodm_admin(request):
+    if not request.user.is_superuser:
+        raise PermissionDenied()
+
+    clusterodm_url = settings.CLUSTERODM_URL
+    if not clusterodm_url:
+        messages.add_message(request, messages.constants.ERROR, _('ClusterODM URL is not configured.'))
+        return redirect('dashboard')
+
+    token_obj = (
+        TapisOAuth2Token.objects
+        .filter(user=request.user)
+        .order_by('-updated_at')
+        .first()
+    )
+    if not token_obj or token_obj.is_expired:
+        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired.'))
+        return redirect('dashboard')
+
+    token_value = token_obj.get_access_token_value()
+    if not token_value:
+        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is invalid.'))
+        return redirect('dashboard')
+
+    return render(request, 'app/clusterodm_redirect.html', {
+        'title': _('ClusterODM'),
+        'clusterodm_url': clusterodm_url.rstrip('/'),
+        'tapis_token': token_value,
+    })
 
 class FirstUserForm(forms.ModelForm):
     class Meta:
