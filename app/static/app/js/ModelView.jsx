@@ -218,28 +218,15 @@ class ModelView extends React.Component {
   }
 
   pointCloudSource = (cb) => {
-    // Prefer Potree v2 (metadata.json), then Potree v1 (cloud.js), then Entwine EPT
-    const potreePointCloudV2 = this.assetsPath() + '/potree_pointcloud/metadata.json';
+    // Potree v1 only (cloud.js)
     const potreePointCloudV1 = this.assetsPath() + '/potree_pointcloud/cloud.js';
-    const entwinePointCloud = this.assetsPath() + '/entwine_pointcloud/ept.json';
 
-    this.urlExists(potreePointCloudV2, (potreeV2Exists) => {
-        if (potreeV2Exists) {
-            cb({ type: 'potree-v2', url: potreePointCloudV2 });
+    this.urlExists(potreePointCloudV1, (potreeExists) => {
+        if (potreeExists) {
+            cb({ type: 'potree-v1', url: potreePointCloudV1 });
             return;
         }
-
-        this.urlExists(potreePointCloudV1, (potreeExists) => {
-            if (potreeExists) {
-                cb({ type: 'potree-v1', url: potreePointCloudV1 });
-                return;
-            }
-
-            this.urlExists(entwinePointCloud, (entwineExists) => {
-                if (entwineExists) cb({ type: 'entwine', url: entwinePointCloud });
-                else cb(null);
-            });
-        });
+        cb(null);
     });
   }
 
@@ -377,10 +364,6 @@ class ModelView extends React.Component {
           this.setState({error: "Point cloud assets not found for this task. Try processing the task again."});
           return;
         }
-        if (pointCloud.type === 'potree-v2'){
-          this.loadPotreeV2(pointCloud.url);
-          return;
-        }
         Potree.loadPointCloud(pointCloud.url, "Point Cloud", e => {
           if (e.type == "loading_failed"){
             this.setState({error: "Could not load point cloud. This task doesn't seem to have one. Try processing the task again."});
@@ -499,97 +482,7 @@ class ModelView extends React.Component {
     
   }
 
-  loadPotreeV2 = async (metadataUrl) => {
-    try{
-      const baseUrl = metadataUrl.substring(0, metadataUrl.lastIndexOf('/') + 1);
-      const [threeMod, controlsMod, potreeMod] = await Promise.all([
-        import(/* webpackIgnore: true */ '/static/app/js/vendor/three/three.module.js'),
-        import(/* webpackIgnore: true */ '/static/app/js/vendor/three/examples/jsm/controls/OrbitControls.js'),
-        import(/* webpackIgnore: true */ '/static/app/js/vendor/potree-core/potree-core.js')
-      ]);
-
-      const THREE = threeMod.default || threeMod;
-      const OrbitControls = controlsMod.OrbitControls || controlsMod.default;
-      const PotreeCore = potreeMod.Potree || potreeMod.default || potreeMod;
-      const potree = PotreeCore.Potree ? new PotreeCore.Potree() : new PotreeCore();
-
-      console.log('[potree-v2] metadataUrl:', metadataUrl);
-      try {
-        const resp = await fetch(metadataUrl, { credentials: 'include' });
-        const contentType = resp.headers.get('content-type');
-        const text = await resp.text();
-        console.log('[potree-v2] metadata status:', resp.status, 'content-type:', contentType);
-        console.log('[potree-v2] metadata head:', text.slice(0, 200));
-      } catch (e) {
-        console.warn('[potree-v2] metadata fetch failed', e);
-      }
-
-      const container = this.container;
-      if (window.viewer && window.viewer.renderer && window.viewer.renderer.domElement){
-        window.viewer.renderer.domElement.style.display = 'none';
-      }
-      $("#potree_sidebar_container").hide();
-      const canvas = document.createElement('canvas');
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
-      canvas.style.display = 'block';
-      container.appendChild(canvas);
-
-      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-      renderer.setPixelRatio(window.devicePixelRatio || 1);
-      renderer.setSize(container.clientWidth, container.clientHeight);
-
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 10000000);
-      camera.position.set(0, 0, 10);
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-
-      const resolveUrl = (u) => (u.startsWith('http') ? u : `${baseUrl}${u}`);
-      console.log('[potree-v2] resolveUrl base:', baseUrl);
-      // potree-core expects "metadata.json" or "cloud.js" as the identifier
-      const pointcloud = await potree.loadPointCloud('metadata.json', resolveUrl);
-      console.log('[potree-v2] pointcloud loaded:', pointcloud);
-      console.log('[potree-v2] pointcloud position:', pointcloud.position);
-      scene.add(pointcloud);
-
-      // If the point cloud is georeferenced far from origin, move to origin for viewing
-      if (typeof pointcloud.moveToOrigin === 'function') {
-        pointcloud.moveToOrigin();
-      }
-
-      const box = (typeof pointcloud.getBoundingBoxWorld === 'function')
-        ? pointcloud.getBoundingBoxWorld()
-        : pointcloud.boundingBox;
-      if (box){
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        console.log('[potree-v2] box center:', center, 'size:', size);
-        controls.target.copy(center);
-        camera.position.copy(center.clone().add(new THREE.Vector3(0, 0, size.length())));
-      }
-
-      const onResize = () => {
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        renderer.setSize(w, h);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-      };
-      window.addEventListener('resize', onResize);
-
-      const animate = () => {
-        requestAnimationFrame(animate);
-        controls.update();
-        potree.updatePointClouds([pointcloud], camera, renderer);
-        renderer.render(scene, camera);
-      };
-      animate();
-    }catch(err){
-      console.error("Potree v2 load failed", err);
-      this.setState({error: "Could not load point cloud (Potree v2). Try processing the task again."});
-    }
-  }
+  // Potree v2 support removed
 
   getCropCoordinates(){
     if (this.props.task.crop_projected && this.props.task.crop_projected.length >= 3){
