@@ -21,6 +21,7 @@ class EditPresetDialog extends React.Component {
     static propTypes = {
         preset: PropTypes.object.isRequired,
         availableOptions: PropTypes.array.isRequired,
+        clusterNodeUrls: PropTypes.array,
         saveAction: PropTypes.func.isRequired,
         deleteAction: PropTypes.func.isRequired,
         onHide: PropTypes.func
@@ -97,7 +98,11 @@ class EditPresetDialog extends React.Component {
     }
 
     render(){
-        let options = PresetUtils.getAvailableOptions(this.props.preset.options, this.props.availableOptions);
+        let options = PresetUtils.getAvailableOptions(
+            this.props.preset.options,
+            this.props.availableOptions,
+            this.props.clusterNodeUrls
+        );
 
         return (
             <div className="edit-preset-dialog">

@@ -48,6 +48,7 @@ class EditTaskForm extends React.Component {
       selectedPreset: null,
       presets: [],
       tags: props.task !== null ? Utils.clone(props.task.tags) : [],
+      clusterNodeUrls: [],
 
       editingPreset: false,
 
@@ -60,6 +61,7 @@ class EditTaskForm extends React.Component {
     this.handleSelectNode = this.handleSelectNode.bind(this);
     this.firstEnabledNode = this.firstEnabledNode.bind(this);
     this.loadProcessingNodes = this.loadProcessingNodes.bind(this);
+    this.loadClusterNodes = this.loadClusterNodes.bind(this);
     this.retryLoad = this.retryLoad.bind(this);
     this.selectNodeByKey = this.selectNodeByKey.bind(this);
     this.getTaskInfo = this.getTaskInfo.bind(this);
@@ -77,6 +79,9 @@ class EditTaskForm extends React.Component {
     this.getAvailableOptionsOnlyText = this.getAvailableOptionsOnlyText.bind(this);
     this.saveLastPresetToStorage = this.saveLastPresetToStorage.bind(this);
     this.formReady = this.formReady.bind(this);
+    this.extractClusterNodeUrls = this.extractClusterNodeUrls.bind(this);
+    this.processingNodeToUrl = this.processingNodeToUrl.bind(this);
+    this.isClusterNode = this.isClusterNode.bind(this);
   }
 
   formReady(){
@@ -137,7 +142,7 @@ class EditTaskForm extends React.Component {
               queue_count: node.queue_count,
               max_images: node.max_images,
               enabled: node.online,
-              url: `http://${node.hostname}:${node.port}`
+              url: this.processingNodeToUrl(node)
             };
           });
 
@@ -155,7 +160,8 @@ class EditTaskForm extends React.Component {
           
           this.setState({
             processingNodes: nodes,
-            loadedProcessingNodes: true
+            loadedProcessingNodes: true,
+            clusterNodeUrls: this.extractClusterNodeUrls(json)
           });
 
           // Have we specified a node?
@@ -188,6 +194,31 @@ class EditTaskForm extends React.Component {
     this.setState({error: ""});
     this.loadProcessingNodes();
     this.loadPresets();
+    this.loadClusterNodes();
+  }
+
+  processingNodeToUrl(node){
+    const protocol = node.port === 443 ? "https" : "http";
+    return `${protocol}://${node.hostname}:${node.port}`;
+  }
+
+  isClusterNode(node){
+    const fields = [
+      node.engine_version,
+      node.engine,
+      node.label,
+      node.hostname
+    ].map(v => String(v || "").toLowerCase());
+
+    return fields.some(v => v.indexOf("clusterodm") !== -1);
+  }
+
+  extractClusterNodeUrls(nodes){
+    if (!Array.isArray(nodes)) return [];
+    const urls = nodes
+      .filter(node => node && this.isClusterNode(node))
+      .map(node => this.processingNodeToUrl(node));
+    return [...new Set(urls)];
   }
 
   findFirstPresetMatching(presets, options){
@@ -306,6 +337,7 @@ class EditTaskForm extends React.Component {
   componentDidMount(){
     this.loadProcessingNodes();
     this.loadPresets();
+    this.loadClusterNodes();
     this.loadSuggestedName();
   }
 
@@ -324,6 +356,15 @@ class EditTaskForm extends React.Component {
   componentWillUnmount(){
       if (this.nodesRequest) this.nodesRequest.abort();
       if (this.presetsRequest) this.presetsRequest.abort();
+      if (this.clusterNodesRequest) this.clusterNodesRequest.abort();
+  }
+
+  loadClusterNodes(){
+    this.clusterNodesRequest = $.getJSON("/api/processingnodes/", json => {
+      this.setState({clusterNodeUrls: this.extractClusterNodeUrls(json)});
+    }).fail(() => {
+      // Best effort only.
+    });
   }
 
   handleNameChange(e){
@@ -624,6 +665,7 @@ class EditTaskForm extends React.Component {
             <EditPresetDialog
               preset={this.state.selectedPreset}
               availableOptions={this.state.selectedNode.options}
+              clusterNodeUrls={this.state.clusterNodeUrls}
               onHide={this.handleCancelEditPreset}
               saveAction={this.handlePresetSave}
               deleteAction={this.handleDeletePreset}
