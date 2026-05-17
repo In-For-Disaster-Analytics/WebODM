@@ -270,6 +270,17 @@ class TestApp(BootTestCase):
         u.refresh_from_db()
         self.assertTrue(u.groups.filter(name='Default').count() == 1)
 
+    def test_default_group_can_view_primary_clusterodm_node(self):
+        original_clusterodm_url = settings.CLUSTERODM_URL
+        settings.CLUSTERODM_URL = "https://clusterodm.example.com"
+        try:
+            pnode = ProcessingNode.objects.create(hostname="clusterodm.example.com", port=443)
+            u = User.objects.create_user(username="default_cluster_user")
+            u.refresh_from_db()
+            self.assertTrue(u.has_perm('view_processingnode', pnode))
+        finally:
+            settings.CLUSTERODM_URL = original_clusterodm_url
+
     def test_projects(self):
         # Get a normal user
         user = User.objects.get(username="testuser")

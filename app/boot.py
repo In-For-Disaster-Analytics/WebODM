@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.parse import urlparse
 
 import kombu
 from django.contrib.auth.models import Permission
@@ -21,6 +22,39 @@ import logging
 from .models import Task, Setting
 from webodm import settings
 from webodm.wsgi import booted
+
+def _clusterodm_hostname_port():
+    clusterodm_url = (settings.CLUSTERODM_URL or "").strip()
+    if not clusterodm_url:
+        return None, None
+
+    # Allow URLs without scheme in configuration.
+    parsed = urlparse(clusterodm_url if "://" in clusterodm_url else f"https://{clusterodm_url}")
+    hostname = parsed.hostname
+    if not hostname:
+        return None, None
+
+    port = parsed.port if parsed.port else (443 if parsed.scheme == "https" else 80)
+    return hostname, port
+
+
+def ensure_default_group_clusterodm_visibility(default_group, logger):
+    hostname, port = _clusterodm_hostname_port()
+    if not hostname or not port:
+        return
+
+    try:
+        pnode = ProcessingNode.objects.get(hostname=hostname, port=port)
+        assign_perm('view_processingnode', default_group, pnode)
+        logger.info("Ensured default group can view primary ClusterODM processing node (%s:%s)", hostname, port)
+    except ObjectDoesNotExist:
+        # ClusterODM node has not been added to WebODM processing nodes yet.
+        pass
+    except MultipleObjectsReturned:
+        # Assign visibility to all matching nodes just in case.
+        for pnode in ProcessingNode.objects.filter(hostname=hostname, port=port):
+            assign_perm('view_processingnode', default_group, pnode)
+        logger.info("Ensured default group can view all matching ClusterODM processing nodes (%s:%s)", hostname, port)
 
 
 def boot():
@@ -68,6 +102,7 @@ def boot():
 
         # Add permission to view processing nodes
         default_group.permissions.add(Permission.objects.get(codename="view_processingnode"))
+        ensure_default_group_clusterodm_visibility(default_group, logger)
 
         add_default_presets()
 

@@ -2,12 +2,14 @@ from __future__ import unicode_literals
 
 from django.db import models
 from django.contrib.postgres import fields
+from django.contrib.auth.models import Group
 from django.utils import timezone
 from django.dispatch import receiver
 from guardian.models import GroupObjectPermissionBase
 from guardian.models import UserObjectPermissionBase
-from guardian.shortcuts import get_objects_for_user
+from guardian.shortcuts import get_objects_for_user, assign_perm
 from django.utils.translation import gettext_lazy as _
+from urllib.parse import urlparse
 
 from webodm import settings
 
@@ -20,6 +22,19 @@ import logging
 import os
 
 logger = logging.getLogger('app.logger')
+
+def _is_primary_clusterodm_node(node):
+    clusterodm_url = (settings.CLUSTERODM_URL or "").strip()
+    if not clusterodm_url:
+        return False
+
+    parsed = urlparse(clusterodm_url if "://" in clusterodm_url else f"https://{clusterodm_url}")
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    port = parsed.port if parsed.port else (443 if parsed.scheme == "https" else 80)
+    return node.hostname == hostname and node.port == port
 
 class ProcessingNode(models.Model):
     hostname = models.CharField(verbose_name=_("Hostname"), max_length=255, help_text=_("Hostname or IP address where the node is located (can be an internal hostname as well). If you are using Docker, this is never 127.0.0.1 or localhost. Find the IP address of your host machine by running ifconfig on Linux or by checking your network settings."))
@@ -303,6 +318,14 @@ def auto_update_node_info(sender, instance, created, **kwargs):
             pass
         except Exception as e:
             logger.warning("auto_update_node_info: " + str(e))
+
+        # Ensure all default users can use the primary ClusterODM node.
+        if _is_primary_clusterodm_node(instance):
+            try:
+                default_group = Group.objects.get(name="Default")
+                assign_perm('view_processingnode', default_group, instance)
+            except Group.DoesNotExist:
+                pass
 
 class ProcessingNodeUserObjectPermission(UserObjectPermissionBase):
     content_object = models.ForeignKey(ProcessingNode, on_delete=models.CASCADE)

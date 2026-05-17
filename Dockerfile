@@ -7,6 +7,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=20
 ARG PYTHON_VERSION=3.9
 ARG RELEASE_CODENAME=jammy
+ARG MIN_NGINX_VERSION=1.31.0
 ARG WORKDIR=/webodm
 
 # Run-time variables
@@ -42,13 +43,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Build-time dependencies
     rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*
     apt-get -qq update
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg ubuntu-keyring
     # Python 3.9 support
     curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xf23c5a6cf475977595c89f51ba6932366a755776' | gpg --dearmor -o /etc/apt/trusted.gpg.d/deadsnakes.gpg
     echo "deb http://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu $RELEASE_CODENAME main" > /etc/apt/sources.list.d/deadsnakes.list
     # Node.js deb source
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg
     echo "deb https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+    # NGINX mainline deb source
+    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+    gpg --dry-run --quiet --no-keyring --import --import-options import-show /usr/share/keyrings/nginx-archive-keyring.gpg | grep -q '573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62'
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu $RELEASE_CODENAME nginx" > /etc/apt/sources.list.d/nginx.list
+    printf 'Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n' > /etc/apt/preferences.d/99nginx
     # Update package list
     apt-get update
     # Install common deps, starting with NodeJS
@@ -57,6 +63,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
         python$PYTHON_VERSION python$PYTHON_VERSION-venv python$PYTHON_VERSION-dev libpq-dev build-essential git libproj-dev gdal-bin pdal \
         libgdal-dev nginx certbot gettext-base cron postgresql-client gettext tzdata
+    nginx_version="$(dpkg-query -W -f='${Version}' nginx)"
+    dpkg --compare-versions "$nginx_version" ge "$MIN_NGINX_VERSION"
     # Create virtualenv
     python$PYTHON_VERSION -m venv $WORKDIR/venv
     # Clean up apt caches to keep cache mount small
@@ -155,13 +163,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Run-time dependencies
     rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*
     apt-get -qq update
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg ubuntu-keyring
     # Legacy Python support
     curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xf23c5a6cf475977595c89f51ba6932366a755776' | gpg --dearmor -o /etc/apt/trusted.gpg.d/deadsnakes.gpg
     echo "deb http://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu $RELEASE_CODENAME main" > /etc/apt/sources.list.d/deadsnakes.list
     # Node.js deb source
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg
     echo "deb https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+    # NGINX mainline deb source
+    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+    gpg --dry-run --quiet --no-keyring --import --import-options import-show /usr/share/keyrings/nginx-archive-keyring.gpg | grep -q '573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62'
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu $RELEASE_CODENAME nginx" > /etc/apt/sources.list.d/nginx.list
+    printf 'Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n' > /etc/apt/preferences.d/99nginx
     # Update package list
     apt-get update
     # Install common deps, starting with NodeJS
@@ -170,6 +183,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
         python$PYTHON_VERSION python$PYTHON_VERSION-distutils gdal-bin pdal \
         nginx certbot gettext-base cron postgresql-client gettext tzdata git
+    nginx_version="$(dpkg-query -W -f='${Version}' nginx)"
+    dpkg --compare-versions "$nginx_version" ge "$MIN_NGINX_VERSION"
     # Install webpack, webpack CLI
     npm install --quiet -g webpack@5.89.0
     npm install --quiet -g webpack-cli@5.1.4
