@@ -67,6 +67,7 @@ export default class LayersControlLayer extends React.Component {
         histogramLoading: false,
         exportLoading: false,
         side: false,
+        temporaryStackPosition: this.getTemporaryStackPosition(props.layer, this.meta),
         error: ""
     };
     this.rescale = params.rescale || "";
@@ -179,6 +180,33 @@ export default class LayersControlLayer extends React.Component {
   canZoomToLayer = () => {
     const { layer } = this.props;
     return !!((layer.options && layer.options.bounds) || typeof layer.getBounds === "function");
+  }
+
+  getTemporaryStackPosition = (layer = this.props.layer, meta = this.meta) => {
+    if (layer && layer.getTemporaryStackPosition) return layer.getTemporaryStackPosition();
+    return (meta || {}).stackPosition || "above";
+  }
+
+  canMoveTemporaryLayer = () => {
+    return this.props.overlay &&
+           this.meta.temporary &&
+           typeof this.props.layer.setTemporaryStackPosition === "function";
+  }
+
+  handleTemporaryStackClick = () => {
+    const nextPosition = this.state.temporaryStackPosition === "below" ? "above" : "below";
+    this.props.layer.setTemporaryStackPosition(nextPosition);
+    this.setState({temporaryStackPosition: nextPosition});
+  }
+
+  temporaryStackIcon = () => {
+    return this.state.temporaryStackPosition === "below" ? "fa-arrow-up" : "fa-arrow-down";
+  }
+
+  temporaryStackTitle = () => {
+    return this.state.temporaryStackPosition === "below" ?
+            _("Move Above Project Layers") :
+            _("Move Below Project Layers");
   }
 
   handleSideClick = () => {
@@ -383,11 +411,12 @@ export default class LayersControlLayer extends React.Component {
     }
 
     const canZoomToLayer = this.canZoomToLayer();
+    const canMoveTemporaryLayer = this.canMoveTemporaryLayer();
 
     return (<div className="layers-control-layer">
         <div className="layer-control-title">
             {!this.props.overlay ? <ExpandButton bind={[this, 'expanded']} className="expand-layer" /> : <div className="paddingSpace"></div>}<Checkbox bind={[this, 'visible']}/>
-            <a title={meta.name} className="layer-label" href="javascript:void(0);" onClick={this.handleLayerClick}><i className={"layer-icon " + (meta.icon || "fa fa-vector-square fa-fw")}></i><div className="layer-title">{meta.name}</div></a> {meta.raster ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleSideClick}><i title={_("Side By Side")} className={"fa fa-fw " + this.sideIcon()}></i></a> : ""}{canZoomToLayer ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleZoomToClick}><i title={_("Zoom To")} className="fa fa-expand"></i></a> : ""}
+            <a title={meta.name} className="layer-label" href="javascript:void(0);" onClick={this.handleLayerClick}><i className={"layer-icon " + (meta.icon || "fa fa-vector-square fa-fw")}></i><div className="layer-title">{meta.name}</div></a> {meta.raster ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleSideClick}><i title={_("Side By Side")} className={"fa fa-fw " + this.sideIcon()}></i></a> : ""}{canMoveTemporaryLayer ? <a className="layer-action temporary-stack-action" href="javascript:void(0)" onClick={this.handleTemporaryStackClick}><i title={this.temporaryStackTitle()} className={"fa fa-fw " + this.temporaryStackIcon()}></i></a> : ""}{canZoomToLayer ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleZoomToClick}><i title={_("Zoom To")} className="fa fa-expand"></i></a> : ""}
         </div>
 
         {this.state.expanded ? 

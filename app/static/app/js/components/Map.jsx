@@ -232,16 +232,26 @@ class Map extends React.Component {
       }));
     }
 
-    layer[Symbol.for("meta")] = {
+    this.temporaryLayerCount += 1;
+    const temporaryLayerIndex = this.temporaryLayerCount;
+    const meta = {
       name,
       icon: serviceType === "wms" ? "fa fa-map fa-fw" : "fa fa-th-large fa-fw",
-      temporary: true
+      temporary: true,
+      stackPosition: "above"
     };
+    layer[Symbol.for("meta")] = meta;
 
-    this.temporaryLayerCount += 1;
+    layer.setTemporaryStackPosition = position => {
+      meta.stackPosition = position === "below" ? "below" : "above";
+      if (layer.setZIndex){
+        layer.setZIndex(meta.stackPosition === "below" ? 5 : 1000 + temporaryLayerIndex);
+      }
+    };
+    layer.getTemporaryStackPosition = () => meta.stackPosition;
 
     if (isOverlay){
-      if (layer.setZIndex) layer.setZIndex(1000 + this.temporaryLayerCount);
+      layer.setTemporaryStackPosition("above");
       layer.addTo(this.map);
       this.setState(update(this.state, {
         overlays: {$push: [layer]}
