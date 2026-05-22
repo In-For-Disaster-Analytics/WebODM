@@ -33,7 +33,7 @@ export default class LayersControlLayer extends React.Component {
     this.map = props.map;
 
     const url = this.getLayerUrl();
-    const params = Utils.queryParams({search: url.slice(url.indexOf("?"))});
+    const params = Utils.queryParams({search: url.indexOf("?") !== -1 ? url.slice(url.indexOf("?")) : ""});
 
     this.meta = props.layer[Symbol.for("meta")] || {};
     this.tmeta = props.layer[Symbol.for("tile-meta")] || {};
@@ -166,13 +166,19 @@ export default class LayersControlLayer extends React.Component {
 
   handleZoomToClick = () => {
     const { layer } = this.props;
+    if (!this.canZoomToLayer()) return;
 
-    const bounds = layer.options.bounds !== undefined ? 
+    const bounds = layer.options && layer.options.bounds !== undefined ?
                    layer.options.bounds :
                    layer.getBounds();
     this.map.fitBounds(bounds);
 
-    if (layer.getPopup()) layer.openPopup();
+    if (layer.getPopup && layer.getPopup()) layer.openPopup();
+  }
+
+  canZoomToLayer = () => {
+    const { layer } = this.props;
+    return !!((layer.options && layer.options.bounds) || typeof layer.getBounds === "function");
   }
 
   handleSideClick = () => {
@@ -376,10 +382,12 @@ export default class LayersControlLayer extends React.Component {
         }
     }
 
+    const canZoomToLayer = this.canZoomToLayer();
+
     return (<div className="layers-control-layer">
         <div className="layer-control-title">
             {!this.props.overlay ? <ExpandButton bind={[this, 'expanded']} className="expand-layer" /> : <div className="paddingSpace"></div>}<Checkbox bind={[this, 'visible']}/>
-            <a title={meta.name} className="layer-label" href="javascript:void(0);" onClick={this.handleLayerClick}><i className={"layer-icon " + (meta.icon || "fa fa-vector-square fa-fw")}></i><div className="layer-title">{meta.name}</div></a> {meta.raster ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleSideClick}><i title={_("Side By Side")} className={"fa fa-fw " + this.sideIcon()}></i></a> : ""}<a className="layer-action" href="javascript:void(0)" onClick={this.handleZoomToClick}><i title={_("Zoom To")} className="fa fa-expand"></i></a>
+            <a title={meta.name} className="layer-label" href="javascript:void(0);" onClick={this.handleLayerClick}><i className={"layer-icon " + (meta.icon || "fa fa-vector-square fa-fw")}></i><div className="layer-title">{meta.name}</div></a> {meta.raster ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleSideClick}><i title={_("Side By Side")} className={"fa fa-fw " + this.sideIcon()}></i></a> : ""}{canZoomToLayer ? <a className="layer-action" href="javascript:void(0)" onClick={this.handleZoomToClick}><i title={_("Zoom To")} className="fa fa-expand"></i></a> : ""}
         </div>
 
         {this.state.expanded ? 

@@ -14,6 +14,7 @@ import ImagePopup from './ImagePopup';
 import GCPPopup from './GCPPopup';
 import SwitchModeButton from './SwitchModeButton';
 import ShareButton from './ShareButton';
+import TemporaryMapLayerDialog from './TemporaryMapLayerDialog';
 import AssetDownloads from '../classes/AssetDownloads';
 import {addTempLayer} from '../classes/TempLayer';
 import PropTypes from 'prop-types';
@@ -82,6 +83,7 @@ class Map extends React.Component {
     this.mapBounds = null;
     this.autolayers = null;
     this.taskCount = 1;
+    this.temporaryLayerCount = 0;
     this.addedCameraShots = {};
     this.zIndexGroupMap = {};
     this.ious = {};
@@ -117,6 +119,151 @@ class Map extends React.Component {
   updatePopupFor(layer){
     const popup = layer.getPopup();
     $('#layerOpacity', popup.getContent()).val(layer.options.opacity);
+  }
+
+  cleanTemporaryLayerText = (text, fallback = "") => {
+    const clean = String(text || "")
+                  .replace(/[<>&]/g, "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .slice(0, 120);
+    return clean || fallback;
+  }
+
+  getWmsQueryParam = (url, paramName) => {
+    const idx = url.indexOf("?");
+    if (idx === -1) return "";
+
+    const params = Utils.queryParams({search: url.slice(idx)});
+    const found = Object.keys(params).find(k => k.toLowerCase() === paramName.toLowerCase());
+    if (!found) return "";
+
+    try{
+      return decodeURIComponent(params[found]);
+    }catch(e){
+      return params[found];
+    }
+  }
+
+  normalizeWmsUrl = url => {
+    const idx = url.indexOf("?");
+    if (idx === -1) return url;
+
+    const baseUrl = url.slice(0, idx);
+    const params = Utils.queryParams({search: url.slice(idx)});
+    const transientWmsParams = {
+      service: true,
+      request: true,
+      version: true,
+      layers: true,
+      styles: true,
+      format: true,
+      transparent: true,
+      width: true,
+      height: true,
+      srs: true,
+      crs: true,
+      bbox: true,
+      x: true,
+      y: true,
+      i: true,
+      j: true
+    };
+    const preservedParams = {};
+
+    Object.keys(params).forEach(k => {
+      if (!transientWmsParams[k.toLowerCase()]){
+        preservedParams[k] = params[k];
+      }
+    });
+
+    return baseUrl + Utils.toSearchQuery(preservedParams);
+  }
+
+  getUniqueTemporaryLayerName = (name, fallback) => {
+    const baseName = this.cleanTemporaryLayerText(name, fallback);
+    const used = {};
+
+    Object.keys(this.basemaps).forEach(name => {
+      used[name] = true;
+    });
+    this.state.overlays.forEach(layer => {
+      const meta = layer[Symbol.for("meta")] || {};
+      if (meta.name) used[meta.name] = true;
+    });
+
+    let uniqueName = baseName;
+    let i = 2;
+    while (used[uniqueName]){
+      uniqueName = `${baseName} (${i++})`;
+    }
+
+    return uniqueName;
+  }
+
+  addTemporaryMapLayer = config => {
+    const serviceType = config.serviceType === "wms" ? "wms" : "tile";
+    const placement = config.placement === "baselayer" ? "baselayer" : "overlay";
+    const isOverlay = placement === "overlay";
+    const fallbackName = serviceType === "wms" ? _("Temporary WMS Layer") : _("Temporary Tile Layer");
+    const name = this.getUniqueTemporaryLayerName(config.name, fallbackName);
+    const maxNativeZoom = parseInt(config.maxNativeZoom, 10);
+    const opacity = isOverlay ? Math.max(0, Math.min(1, parseFloat(config.opacity) / 100)) : 1;
+    const layerOptions = {
+      minZoom: 0,
+      maxZoom: maxNativeZoom + 99,
+      opacity
+    };
+    let layer = null;
+
+    if (serviceType === "wms"){
+      const layers = config.wmsLayers || this.getWmsQueryParam(config.url, "layers");
+      layer = Leaflet.tileLayer.wms(this.normalizeWmsUrl(config.url), Object.assign({}, layerOptions, {
+        layers,
+        version: config.wmsVersion,
+        format: "image/png",
+        transparent: isOverlay
+      }));
+    }else{
+      layer = Leaflet.tileLayer(config.url, Object.assign({}, layerOptions, {
+        maxNativeZoom,
+        tms: config.tms,
+        detectRetina: true
+      }));
+    }
+
+    layer[Symbol.for("meta")] = {
+      name,
+      icon: serviceType === "wms" ? "fa fa-map fa-fw" : "fa fa-th-large fa-fw",
+      temporary: true
+    };
+
+    this.temporaryLayerCount += 1;
+
+    if (isOverlay){
+      if (layer.setZIndex) layer.setZIndex(1000 + this.temporaryLayerCount);
+      layer.addTo(this.map);
+      this.setState(update(this.state, {
+        overlays: {$push: [layer]}
+      }));
+    }else{
+      this.basemaps[name] = layer;
+      if (this.autolayers) this.autolayers.addBaseLayer(layer, name);
+
+      Object.keys(this.basemaps).forEach(label => {
+        const baseLayer = this.basemaps[label];
+        if (baseLayer !== layer && this.map.hasLayer(baseLayer)){
+          this.map.removeLayer(baseLayer);
+        }
+      });
+
+      layer.addTo(this.map);
+      if (layer.bringToBack) layer.bringToBack();
+    }
+  }
+
+  openTemporaryMapLayerDialog = () => {
+    if (this.temporaryMapLayerDialog) this.temporaryMapLayerDialog.show();
   }
 
   tdPopupButtonUrl = (task) => {
@@ -749,6 +896,37 @@ _('Example:'),
         }
     });
     new AddOverlayCtrl().addTo(this.map);
+
+    const component = this;
+    const AddMapLayerCtrl = Leaflet.Control.extend({
+        options: {
+            position: 'topright'
+        },
+
+        onAdd: function () {
+            this.container = Leaflet.DomUtil.create('div', 'leaflet-control-add-map-layer leaflet-bar leaflet-control');
+            Leaflet.DomEvent.disableClickPropagation(this.container);
+
+            this.btn = Leaflet.DomUtil.create('a', 'leaflet-control-add-map-layer-button');
+            this.btn.href = '#';
+            this.btn.setAttribute("title", _("Add a temporary WMS or tile layer"));
+            this.btn.innerHTML = '<i class="fa fa-plus" aria-hidden="true"></i>';
+            Leaflet.DomEvent.on(this.btn, 'click', Leaflet.DomEvent.preventDefault);
+            Leaflet.DomEvent.on(this.btn, 'click', component.openTemporaryMapLayerDialog);
+
+            this.container.append(this.btn);
+            return this.container;
+        },
+
+        onRemove: function () {
+            if (this.btn){
+              Leaflet.DomEvent.off(this.btn, 'click', Leaflet.DomEvent.preventDefault);
+              Leaflet.DomEvent.off(this.btn, 'click', component.openTemporaryMapLayerDialog);
+              this.btn = null;
+            }
+        }
+    });
+    this.addMapLayerControl = new AddMapLayerCtrl().addTo(this.map);
     this.addMeasureControl();
     onUnitSystemChanged(this.handleUnitSystemChanged);
 
@@ -1038,6 +1216,10 @@ _('Example:'),
     if (this.measureLayer){
       this.measureLayer.remove();
       this.measureLayer = null;
+    }
+    if (this.addMapLayerControl){
+      this.addMapLayerControl.remove();
+      this.addMapLayerControl = null;
     }
     offUnitSystemChanged(this.handleUnitSystemChanged);
 
@@ -1355,6 +1537,10 @@ _('Example:'),
     return (
       <div style={{height: "100%"}} className="map">
         <div className="map-modal-container" ref={(domNode) => this.modalContainer = domNode}></div>
+        <TemporaryMapLayerDialog
+          ref={(ref) => { this.temporaryMapLayerDialog = ref; }}
+          onAdd={this.addTemporaryMapLayer}
+        />
 
         <ErrorMessage bind={[this, 'error']} />
         <div className="opacity-slider theme-secondary hidden-xs">

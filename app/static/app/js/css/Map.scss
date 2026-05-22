@@ -116,6 +116,27 @@
     .leaflet-touch .leaflet-control-add-overlay a, .leaflet-control-add-overlay a {
         background-position: 2px 2px;
     }
+
+    .leaflet-control-add-map-layer{
+        z-index: 999;
+
+        a.leaflet-control-add-map-layer-button{
+            width: 30px;
+            height: 30px;
+            line-height: 30px;
+            text-align: center;
+            font-size: 14px;
+            color: #333;
+            border-radius: 2px;
+            &:hover{
+                cursor: pointer;
+            }
+            i{
+                pointer-events: none;
+            }
+        }
+    }
+
     .leaflet-container{        
         a.leaflet-popup-close-button{
             top: 8px;
