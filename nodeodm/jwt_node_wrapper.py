@@ -7,6 +7,7 @@ for ClusterODM integration with Tapis authentication.
 
 import logging
 import os
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import requests
@@ -63,6 +64,58 @@ class JWTNodeWrapper:
     def _apply_auth_token(self, params):
         if self.auth_token:
             params['token'] = self.auth_token
+
+    def _get_json(self, path, log_label):
+        endpoint = f"{self.base_url}/{path.lstrip('/')}"
+        params = {}
+        self._apply_auth_token(params)
+        if params:
+            endpoint += "?" + urlencode(params)
+
+        logger.info(f"[JWTNodeWrapper] GET {log_label}: {endpoint}")
+        try:
+            response = requests.get(endpoint, timeout=self.timeout)
+        except requests.exceptions.RequestException as e:
+            raise NodeConnectionError(f"Failed to connect to ClusterODM {log_label}: {str(e)}")
+
+        if response.status_code != 200:
+            raise NodeServerError(f"ClusterODM {log_label} failed: HTTP {response.status_code} - {response.text}")
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise NodeServerError(f"ClusterODM {log_label} returned invalid JSON: {str(e)}")
+
+        if isinstance(data, dict) and data.get('error'):
+            raise NodeServerError(f"ClusterODM {log_label} returned error: {data.get('error')}")
+
+        return data
+
+    def info(self):
+        """
+        Fetch node info over the wrapper's HTTPS-aware base URL.
+        """
+        data = self._get_json('info', 'info')
+        return SimpleNamespace(
+            version=data.get('version'),
+            task_queue_count=data.get('taskQueueCount', data.get('task_queue_count', 0)),
+            max_images=data.get('maxImages', data.get('max_images')),
+            engine_version=data.get('engineVersion', data.get('engine_version')),
+            engine=data.get('engine'),
+            total_memory=data.get('totalMemory', data.get('total_memory')),
+            available_memory=data.get('availableMemory', data.get('available_memory')),
+            cpu_cores=data.get('cpuCores', data.get('cpu_cores')),
+            max_parallel_tasks=data.get('maxParallelTasks', data.get('max_parallel_tasks'))
+        )
+
+    def options(self):
+        """
+        Fetch processing options over the wrapper's HTTPS-aware base URL.
+        """
+        data = self._get_json('options', 'options')
+        if not isinstance(data, list):
+            raise NodeServerError("ClusterODM options response is not a list")
+        return [SimpleNamespace(**option) for option in data if isinstance(option, dict)]
     
     def create_task(self, images, options, name=None, progress_callback=None):
         """
