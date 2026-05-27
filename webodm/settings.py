@@ -401,6 +401,21 @@ CLUSTER_URL = ''
 # Optional link to a ClusterODM instance (used by UI for superusers)
 CLUSTERODM_URL = os.environ.get('WO_CLUSTERODM_URL', '')
 
+# TAS service account used to resolve TACC allocations for Tapis-backed processing.
+TAS_URL = os.environ.get('WO_TAS_URL', os.environ.get('TAS_URL', ''))
+TAS_SERVICE_USERNAME = os.environ.get('WO_TAS_SERVICE_USERNAME', os.environ.get('TAS_SERVICE_USERNAME', ''))
+TAS_SERVICE_PASSWORD = os.environ.get('WO_TAS_SERVICE_PASSWORD', os.environ.get('TAS_SERVICE_PASSWORD', ''))
+TAS_RESOURCE_FILTER = [
+    item.strip() for item in os.environ.get(
+        'WO_TAS_RESOURCE_FILTER',
+        os.environ.get('TAS_RESOURCE_FILTER', 'LS6,Lonestar6,lonestar6,Stampede3')
+    ).split(',') if item.strip()
+]
+TAS_DEFAULT_ALLOCATION = os.environ.get(
+    'WO_TAS_DEFAULT_ALLOCATION',
+    os.environ.get('TAS_DEFAULT_ALLOCATION', 'PT2050-DataX')
+)
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

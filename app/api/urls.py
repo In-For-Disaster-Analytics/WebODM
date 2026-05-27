@@ -24,6 +24,7 @@ from .tapis_oauth2 import (
 )
 from .tapis_storage import TapisStorageViewSet
 from .tapis_preferences import TapisUserPreferencesView, TapisDiscoveryControlView
+from .tas_allocations import TASAllocationsView
 from webodm import settings
 
 router = routers.DefaultRouter()
@@ -42,6 +43,7 @@ admin_router.register(r'admin/profiles', AdminProfileViewSet, basename='admin-gr
 
 urlpatterns = [
     url(r'processingnodes/options/$', ProcessingNodeOptionsView.as_view()),
+    url(r'tas/allocations/$', TASAllocationsView.as_view(), name='tas_allocations'),
 
     url(r'^', include(router.urls)),
     url(r'^', include(tasks_router.urls)),
@@ -93,4 +95,3 @@ urlpatterns.extend([
     url(r'^tapis-preferences/$', TapisUserPreferencesView.as_view(), name='tapis_user_preferences'),
     url(r'^tapis-discovery/trigger/$', TapisDiscoveryControlView.as_view(), name='tapis_discovery_trigger'),
 ])
-

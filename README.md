@@ -182,6 +182,13 @@ This WebODM instance is configured for distributed processing using TACC's Lones
 - `split-overlap`: Overlap between submodels in meters (default: 150m)
 - `sm-cluster`: Cluster coordinator URL (automatically set)
 
+**Tapis Options**: ClusterODM-Tapis exposes queue, allocation, and max run time task options. Allocation choices are loaded from TAS with service credentials:
+- `WO_TAS_URL` or `TAS_URL`
+- `WO_TAS_SERVICE_USERNAME` or `TAS_SERVICE_USERNAME`
+- `WO_TAS_SERVICE_PASSWORD` or `TAS_SERVICE_PASSWORD`
+- `WO_TAS_RESOURCE_FILTER` or `TAS_RESOURCE_FILTER` (comma-separated, defaults to LS6/Lonestar6 names)
+- `WO_TAS_DEFAULT_ALLOCATION` or `TAS_DEFAULT_ALLOCATION` (defaults to `PT2050-DataX`)
+
 If you don't need the default "node-odm-1" node, simply pass `--default-nodes 0` flag when starting WebODM:
 
 `./webodm.sh restart --default-nodes 0`.

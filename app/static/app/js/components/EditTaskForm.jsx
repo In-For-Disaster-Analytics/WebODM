@@ -49,6 +49,7 @@ class EditTaskForm extends React.Component {
       presets: [],
       tags: props.task !== null ? Utils.clone(props.task.tags) : [],
       clusterNodeUrls: [],
+      loadingTASAllocations: false,
 
       editingPreset: false,
 
@@ -82,13 +83,17 @@ class EditTaskForm extends React.Component {
     this.extractClusterNodeUrls = this.extractClusterNodeUrls.bind(this);
     this.processingNodeToUrl = this.processingNodeToUrl.bind(this);
     this.isClusterNode = this.isClusterNode.bind(this);
+    this.nodeHasTASAllocationOption = this.nodeHasTASAllocationOption.bind(this);
+    this.loadTASAllocationsForNode = this.loadTASAllocationsForNode.bind(this);
+    this.withDefaultTapisOptions = this.withDefaultTapisOptions.bind(this);
   }
 
   formReady(){
     return this.state.loadedProcessingNodes && 
             this.state.selectedNode && 
             this.state.loadedPresets &&
-            this.state.selectedPreset;
+            this.state.selectedPreset &&
+            !this.state.loadingTASAllocations;
   }
 
   checkFilesCount(filesCount){
@@ -157,27 +162,25 @@ class EditTaskForm extends React.Component {
 
           // Choose at random
           let lowestQueueNode = minQueueCountNodes[~~(Math.random() * minQueueCountNodes.length)];
-          
+
+          // Have we specified a node?
+          let selectedNodeKey = lowestQueueNode.key;
+          if (this.props.task && this.props.task.processing_node){
+            if (this.props.task.auto_processing_node){
+              selectedNodeKey = lowestQueueNode.key;
+            }else{
+              selectedNodeKey = this.props.task.processing_node;
+            }
+          }else if (this.props.selectedNode){
+            selectedNodeKey = this.props.selectedNode;
+          }
+
           this.setState({
             processingNodes: nodes,
             loadedProcessingNodes: true,
             clusterNodeUrls: this.extractClusterNodeUrls(json)
-          });
+          }, () => this.selectNodeByKey(selectedNodeKey));
 
-          // Have we specified a node?
-          if (this.props.task && this.props.task.processing_node){
-            if (this.props.task.auto_processing_node){
-              this.selectNodeByKey(lowestQueueNode.key);
-            }else{
-              this.selectNodeByKey(this.props.task.processing_node);
-            }
-          }else if (this.props.selectedNode){
-            this.selectNodeByKey(this.props.selectedNode);
-          }else{
-            this.selectNodeByKey(lowestQueueNode.key);
-          }
-
-          this.notifyFormLoaded();
         }else{
           console.error("Got invalid json response for processing nodes", json);
           failed();
@@ -357,6 +360,7 @@ class EditTaskForm extends React.Component {
       if (this.nodesRequest) this.nodesRequest.abort();
       if (this.presetsRequest) this.presetsRequest.abort();
       if (this.clusterNodesRequest) this.clusterNodesRequest.abort();
+      if (this.tasAllocationsRequest) this.tasAllocationsRequest.abort();
   }
 
   loadClusterNodes(){
@@ -373,7 +377,15 @@ class EditTaskForm extends React.Component {
 
   selectNodeByKey(key){
     let node = this.state.processingNodes.find(node => node.key == key);
-    if (node) this.setState({selectedNode: node});
+    if (node) {
+      this.setState({selectedNode: node}, () => {
+        if (this.nodeHasTASAllocationOption(node)){
+          this.loadTASAllocationsForNode(node);
+        }else{
+          this.notifyFormLoaded();
+        }
+      });
+    }
     else{
         console.log(`Node ${key} does not exist, selecting first enabled`);
         const n = this.firstEnabledNode();
@@ -385,6 +397,58 @@ class EditTaskForm extends React.Component {
 
   handleSelectNode(e){
     this.selectNodeByKey(e.target.value);
+  }
+
+  nodeHasTASAllocationOption(node){
+    return !!(node && Array.isArray(node.options) && node.options.find(opt => opt.name === "tapis-allocation"));
+  }
+
+  loadTASAllocationsForNode(node){
+    if (this.tasAllocationsRequest) this.tasAllocationsRequest.abort();
+
+    this.setState({loadingTASAllocations: true});
+    this.tasAllocationsRequest = $.getJSON("/api/tas/allocations/", json => {
+      const allocations = Array.isArray(json.allocations) ? json.allocations : [];
+      const chargeCodes = allocations.map(allocation => allocation.chargeCode).filter(Boolean);
+      const defaultAllocation = json.default || chargeCodes[0] || "";
+
+      if (chargeCodes.length === 0 || !defaultAllocation){
+        this.setState({
+          loadingTASAllocations: false,
+          error: _("No active TAS allocation is available for this Tapis processing node.")
+        });
+        return;
+      }
+
+      const updateNode = existingNode => {
+        if (!existingNode || existingNode.key !== node.key) return existingNode;
+        return Object.assign({}, existingNode, {
+          options: existingNode.options.map(option => {
+            if (option.name !== "tapis-allocation") return option;
+            return Object.assign({}, option, {
+              type: "enum",
+              domain: chargeCodes,
+              value: defaultAllocation
+            });
+          })
+        });
+      };
+
+      const processingNodes = this.state.processingNodes.map(updateNode);
+      const selectedNode = updateNode(this.state.selectedNode);
+      this.setState({
+        processingNodes,
+        selectedNode,
+        loadingTASAllocations: false
+      }, this.notifyFormLoaded);
+    }).fail((jqXHR) => {
+      if (jqXHR.statusText === "abort") return;
+      const response = jqXHR.responseJSON || {};
+      this.setState({
+        loadingTASAllocations: false,
+        error: response.error || _("Could not load TAS allocations for this Tapis processing node.")
+      });
+    });
   }
 
   // Filter a list of options based on the ones that
@@ -412,6 +476,22 @@ class EditTaskForm extends React.Component {
     return optsCopy.filter(opt => optionNames[opt.name]);
   }
 
+  withDefaultTapisOptions(options, availableOptions){
+    const result = Utils.clone(options);
+    const existing = {};
+    result.forEach(option => existing[option.name] = true);
+
+    ["tapis-allocation"].forEach(name => {
+      if (existing[name]) return;
+      const available = availableOptions.find(option => option.name === name);
+      if (available && available.value !== undefined && available.value !== ""){
+        result.push({name, value: available.value});
+      }
+    });
+
+    return result;
+  }
+
   getAvailableOptionsOnlyText(options, availableOptions){
     const opts = this.getAvailableOptionsOnly(options, availableOptions);
     let res = opts.map(opt => {
@@ -434,7 +514,10 @@ class EditTaskForm extends React.Component {
     return {
       name: name !== "" ? name : this.state.namePlaceholder,
       selectedNode: selectedNode,
-      options: this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options),
+      options: this.withDefaultTapisOptions(
+        this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options),
+        selectedNode.options
+      ),
       tags
     };
   }
