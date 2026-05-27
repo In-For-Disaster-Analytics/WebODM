@@ -481,7 +481,7 @@ class EditTaskForm extends React.Component {
     const existing = {};
     result.forEach(option => existing[option.name] = true);
 
-    ["tapis-allocation"].forEach(name => {
+    ["tapis-queue", "tapis-allocation", "tapis-max-run-time"].forEach(name => {
       if (existing[name]) return;
       const available = availableOptions.find(option => option.name === name);
       if (available && available.value !== undefined && available.value !== ""){
