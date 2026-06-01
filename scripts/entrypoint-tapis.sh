@@ -3,6 +3,20 @@ set -e
 
 echo "Starting WebODM with Tapis OAuth2 integration..."
 
+restore_tapis_oauth_imports() {
+    # The Docker build comments these imports out so build-time Django commands can run.
+    # Runtime always needs the model exports because URL and context modules import them.
+    if [ -f /webodm/app/models/__init__.py ]; then
+        sed -i 's/#TAPIS_TEMP_DISABLE#from \.oauth2 import/from \.oauth2 import/' /webodm/app/models/__init__.py
+    fi
+
+    if [ -f /webodm/app/admin.py ]; then
+        sed -i 's/#TAPIS_TEMP_DISABLE#from \.admin\.oauth2 import/from \.admin\.oauth2 import/' /webodm/app/admin.py
+    fi
+}
+
+restore_tapis_oauth_imports
+
 # Check if Tapis OAuth2 is configured
 if [ -n "$WO_TAPIS_BASE_URL" ] && [ -n "$WO_TAPIS_TENANT_ID" ]; then
     echo "Tapis OAuth2 configuration detected:"

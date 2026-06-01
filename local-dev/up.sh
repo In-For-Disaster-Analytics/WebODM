@@ -3,9 +3,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+if [ -f .env.local ]; then
+  set -a
+  . ./.env.local
+  set +a
+fi
+
 compose() {
   docker compose -f docker-compose.local.yml "$@"
 }
+
+bind_ip="${LOCAL_DEV_BIND_IP:-127.0.0.1}"
+webodm_port="${LOCAL_DEV_WEBODM_PORT:-18000}"
+clusterodm_port="${LOCAL_DEV_CLUSTERODM_PORT:-14000}"
+clusterodm_admin_port="${LOCAL_DEV_CLUSTERODM_ADMIN_PORT:-11000}"
+nodeodm_port="${LOCAL_DEV_NODEODM_PORT:-13001}"
 
 mkdir -p \
   .local-dev/media \
@@ -50,7 +62,7 @@ compose exec -T webapp python manage.py addnode clusterodm 3000 --label clustero
 
 echo ""
 echo "Local checkpoint dev stack is running:"
-echo "  WebODM:        http://localhost:8000"
-echo "  ClusterODM:    http://localhost:4000"
-echo "  Cluster Admin: http://localhost:10000"
-echo "  NodeODM:       http://localhost:3001"
+echo "  WebODM:        http://webodm.local.test:${webodm_port}    (or http://${bind_ip}:${webodm_port})"
+echo "  ClusterODM:    http://clusterodm.local.test:${clusterodm_port} (or http://${bind_ip}:${clusterodm_port})"
+echo "  Cluster Admin: http://clusterodm.local.test:${clusterodm_admin_port} (or http://${bind_ip}:${clusterodm_admin_port})"
+echo "  NodeODM:       http://nodeodm.local.test:${nodeodm_port}    (or http://${bind_ip}:${nodeodm_port})"

@@ -14,7 +14,7 @@ services:
   node-odm:
     image: opendronemap/nodeodm
     ports:
-      - "3001:3000"
+      - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_NODEODM_PORT:-13001}:3000"
     volumes:
       - ./.local-dev/nodeodm-data:/var/www/data
     restart: unless-stopped
@@ -39,14 +39,17 @@ services:
     depends_on:
       - node-odm
     ports:
-      - "4000:3000"
-      - "10000:10000"
+      - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_CLUSTERODM_PORT:-14000}:3000"
+      - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_CLUSTERODM_ADMIN_PORT:-11000}:10000"
     volumes:
       - ./.local-dev/clusterodm-data:/var/www/data
     restart: unless-stopped
 
   webapp:
-    image: opendronemap/webodm_webapp
+    image: webodm:ls6-checkpoint-local
+    build:
+      context: ..
+      dockerfile: Dockerfile
     env_file:
       - ./webodm.env
     entrypoint: /bin/bash -c "service cron start && chmod +x /webodm/*.sh && /bin/bash -c \"/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/start.sh\""
@@ -56,18 +59,16 @@ services:
       - worker
       - clusterodm
     ports:
-      - "8000:8000"
+      - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_WEBODM_PORT:-18000}:8000"
     volumes:
       - ./.local-dev/media:/webodm/app/media
-      - ../app/models/task.py:/webodm/app/models/task.py:ro
-      - ../app/models/oauth2.py:/webodm/app/models/oauth2.py:ro
-      - ../nodeodm/models.py:/webodm/nodeodm/models.py:ro
-      - ../nodeodm/jwt_node_wrapper.py:/webodm/nodeodm/jwt_node_wrapper.py:ro
-      - ../scripts:/webodm/scripts:ro
     restart: unless-stopped
 
   worker:
-    image: opendronemap/webodm_webapp
+    image: webodm:ls6-checkpoint-local
+    build:
+      context: ..
+      dockerfile: Dockerfile
     env_file:
       - ./webodm.env
     entrypoint: /bin/bash -c "/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/wait-for-it.sh -t 0 webapp:8000 -- /webodm/worker.sh start"
@@ -77,9 +78,4 @@ services:
       - clusterodm
     volumes:
       - ./.local-dev/media:/webodm/app/media
-      - ../app/models/task.py:/webodm/app/models/task.py:ro
-      - ../app/models/oauth2.py:/webodm/app/models/oauth2.py:ro
-      - ../nodeodm/models.py:/webodm/nodeodm/models.py:ro
-      - ../nodeodm/jwt_node_wrapper.py:/webodm/nodeodm/jwt_node_wrapper.py:ro
-      - ../scripts:/webodm/scripts:ro
     restart: unless-stopped

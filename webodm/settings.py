@@ -56,6 +56,8 @@ WORKER_RUNNING = sys.argv[2:3] == ["worker"]
 DEBUG = os.environ.get('WO_DEBUG', 'YES') == 'YES' or TESTING
 DEV = os.environ.get('WO_DEV', 'NO') == 'YES' and not TESTING
 DEV_WATCH_PLUGINS = DEV and os.environ.get('WO_DEV_WATCH_PLUGINS', 'NO') == 'YES'
+LOCAL_DEV_SKIP_AUTH = DEBUG and os.environ.get('WO_LOCAL_DEV_SKIP_AUTH', 'NO') == 'YES'
+LOCAL_DEV_USER = os.environ.get('WO_LOCAL_DEV_USER', 'localdev')
 SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = os.environ.get('WO_SSL', 'NO') == 'YES'
 INTERNAL_IPS = ['127.0.0.1']
 
@@ -128,6 +130,12 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.locale.LocaleMiddleware',
 ]
+
+if LOCAL_DEV_SKIP_AUTH:
+    MIDDLEWARE.insert(
+        MIDDLEWARE.index('django.contrib.auth.middleware.AuthenticationMiddleware') + 1,
+        'app.localdev.LocalDevLoginMiddleware',
+    )
 
 ROOT_URLCONF = 'webodm.urls'
 
@@ -318,6 +326,18 @@ MESSAGE_TAGS = {
 
 # REST setup
 # Use Django's standard django.contrib.auth permissions (no anonymous usage)
+DEFAULT_AUTHENTICATION_CLASSES = (
+  'rest_framework.authentication.SessionAuthentication',
+  'rest_framework.authentication.BasicAuthentication',
+  'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
+  'app.api.authentication.JSONWebTokenAuthenticationQS',
+)
+
+if LOCAL_DEV_SKIP_AUTH:
+  DEFAULT_AUTHENTICATION_CLASSES = (
+    'app.api.authentication.LocalDevAuthentication',
+  ) + DEFAULT_AUTHENTICATION_CLASSES
+
 REST_FRAMEWORK = {
   'DEFAULT_PERMISSION_CLASSES': [
     'rest_framework.permissions.DjangoObjectPermissions',
@@ -327,12 +347,7 @@ REST_FRAMEWORK = {
     'django_filters.rest_framework.DjangoFilterBackend',
     'rest_framework.filters.OrderingFilter',
   ],
-  'DEFAULT_AUTHENTICATION_CLASSES': (
-    'rest_framework.authentication.SessionAuthentication',
-    'rest_framework.authentication.BasicAuthentication',
-    'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
-    'app.api.authentication.JSONWebTokenAuthenticationQS',
-  ),
+  'DEFAULT_AUTHENTICATION_CLASSES': DEFAULT_AUTHENTICATION_CLASSES,
   'PAGE_SIZE': 10,
   'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
 }
