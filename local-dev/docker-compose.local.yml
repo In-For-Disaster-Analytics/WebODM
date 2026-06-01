@@ -1,0 +1,85 @@
+name: webodm-checkpoint-local
+
+services:
+  db:
+    image: opendronemap/webodm_db
+    volumes:
+      - ./.local-dev/db:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  broker:
+    image: redis:7.0.10
+    restart: unless-stopped
+
+  node-odm:
+    image: opendronemap/nodeodm
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./.local-dev/nodeodm-data:/var/www/data
+    restart: unless-stopped
+
+  clusterodm:
+    image: clusterodm:ls6-checkpoint-local
+    build:
+      context: ../../ClusterODM
+      dockerfile: Dockerfile.local-dev
+    command:
+      - --port
+      - "3000"
+      - --admin-cli-port
+      - "0"
+      - --admin-web-port
+      - "10000"
+      - --admin-web-use-tapis-jwt=false
+      - --log-level
+      - debug
+      - --public-address
+      - http://clusterodm:3000
+    depends_on:
+      - node-odm
+    ports:
+      - "4000:3000"
+      - "10000:10000"
+    volumes:
+      - ./.local-dev/clusterodm-data:/var/www/data
+    restart: unless-stopped
+
+  webapp:
+    image: opendronemap/webodm_webapp
+    env_file:
+      - ./webodm.env
+    entrypoint: /bin/bash -c "service cron start && chmod +x /webodm/*.sh && /bin/bash -c \"/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/start.sh\""
+    depends_on:
+      - db
+      - broker
+      - worker
+      - clusterodm
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.local-dev/media:/webodm/app/media
+      - ../app/models/task.py:/webodm/app/models/task.py:ro
+      - ../app/models/oauth2.py:/webodm/app/models/oauth2.py:ro
+      - ../nodeodm/models.py:/webodm/nodeodm/models.py:ro
+      - ../nodeodm/jwt_node_wrapper.py:/webodm/nodeodm/jwt_node_wrapper.py:ro
+      - ../scripts:/webodm/scripts:ro
+    restart: unless-stopped
+
+  worker:
+    image: opendronemap/webodm_webapp
+    env_file:
+      - ./webodm.env
+    entrypoint: /bin/bash -c "/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/wait-for-it.sh -t 0 webapp:8000 -- /webodm/worker.sh start"
+    depends_on:
+      - db
+      - broker
+      - clusterodm
+    volumes:
+      - ./.local-dev/media:/webodm/app/media
+      - ../app/models/task.py:/webodm/app/models/task.py:ro
+      - ../app/models/oauth2.py:/webodm/app/models/oauth2.py:ro
+      - ../nodeodm/models.py:/webodm/nodeodm/models.py:ro
+      - ../nodeodm/jwt_node_wrapper.py:/webodm/nodeodm/jwt_node_wrapper.py:ro
+      - ../scripts:/webodm/scripts:ro
+    restart: unless-stopped

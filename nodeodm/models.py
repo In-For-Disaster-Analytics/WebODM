@@ -24,7 +24,7 @@ import os
 logger = logging.getLogger('app.logger')
 
 def _is_primary_clusterodm_node(node):
-    clusterodm_url = (settings.CLUSTERODM_URL or "").strip()
+    clusterodm_url = (getattr(settings, 'CLUSTERODM_URL', '') or "").strip()
     if not clusterodm_url:
         return False
 
