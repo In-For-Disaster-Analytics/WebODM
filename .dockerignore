@@ -2,3 +2,22 @@
 .secret_key
 node_modules/
 .venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.DS_Store
+
+# Local development/runtime state. These bind mounts can grow to multiple GB
+# and must never be sent as Docker build context.
+local-dev/.local-dev*/
+local-dev/.env.local
+local-dev/__pycache__/
+app/media/
+tmp/
+logs/
+
+# Local-only nested checkouts/artifacts.
+locale/
+.env.sample
