@@ -69,6 +69,7 @@ class EditTaskPanel extends React.Component {
                 <EditTaskForm 
                   ref={(domNode) => { if (domNode) this.taskForm = domNode; }}
                   onFormLoaded={this.handleFormTaskLoaded}
+                  filesCount={this.props.task.images_count || this.props.task.imagesCount || 0}
                   task={this.props.task}
                 />
                 <div className="actions">

@@ -14,6 +14,7 @@ class EditTaskForm extends React.Component {
   static defaultProps = {
     selectedNode: null,
     task: null,
+    filesCount: 0,
     onFormChanged: () => {},
     inReview: false
   };
@@ -26,6 +27,7 @@ class EditTaskForm extends React.Component {
       onFormLoaded: PropTypes.func,
       onFormChanged: PropTypes.func,
       inReview: PropTypes.bool,
+      filesCount: PropTypes.number,
       task: PropTypes.object,
       suggestedTaskName: PropTypes.oneOfType([PropTypes.string, PropTypes.func]),
       getCropPolygon: PropTypes.func
@@ -85,6 +87,9 @@ class EditTaskForm extends React.Component {
     this.isClusterNode = this.isClusterNode.bind(this);
     this.nodeHasTASAllocationOption = this.nodeHasTASAllocationOption.bind(this);
     this.loadTASAllocationsForNode = this.loadTASAllocationsForNode.bind(this);
+    this.defaultValueForImages = this.defaultValueForImages.bind(this);
+    this.withImageCountDefaultOptions = this.withImageCountDefaultOptions.bind(this);
+    this.getSelectedNodeOptions = this.getSelectedNodeOptions.bind(this);
     this.withDefaultTapisOptions = this.withDefaultTapisOptions.bind(this);
   }
 
@@ -353,6 +358,7 @@ class EditTaskForm extends React.Component {
     ['name', 'selectedNode', 'selectedPreset'].forEach(prop => {
         if (prevState[prop] !== this.state[prop]) changed = true;
     });
+    if (prevProps.filesCount !== this.props.filesCount) changed = true;
     if (changed) this.props.onFormChanged();
   }
 
@@ -476,12 +482,56 @@ class EditTaskForm extends React.Component {
     return optsCopy.filter(opt => optionNames[opt.name]);
   }
 
+  defaultValueForImages(option, filesCount = this.props.filesCount){
+    const defaultByImages = option.defaultByImages || option.defaultsByImages;
+    const count = parseInt(filesCount, 10);
+
+    if (Array.isArray(defaultByImages) && Number.isFinite(count) && count > 0){
+      const sortedDefaults = defaultByImages
+        .map(mapping => ({
+          maxImages: parseInt(mapping.maxImages, 10),
+          value: mapping.value
+        }))
+        .filter(mapping => Number.isFinite(mapping.maxImages) && mapping.maxImages > 0)
+        .sort((a, b) => a.maxImages - b.maxImages);
+
+      const match = sortedDefaults.find(mapping => mapping.maxImages >= count);
+      if (match && match.value !== undefined && match.value !== null && match.value !== ""){
+        return String(match.value);
+      }
+    }
+
+    return option.value;
+  }
+
+  withImageCountDefaultOptions(availableOptions){
+    if (!Array.isArray(availableOptions)) return [];
+
+    return availableOptions.map(option => {
+      if (!option || typeof option !== "object") return option;
+
+      const value = this.defaultValueForImages(option);
+      if (value === undefined || value === null || value === "") return Object.assign({}, option);
+
+      if (option.type === "enum" && Array.isArray(option.domain) && option.domain.length > 0 && option.domain.indexOf(value) === -1){
+        return Object.assign({}, option);
+      }
+
+      return Object.assign({}, option, { value });
+    });
+  }
+
+  getSelectedNodeOptions(){
+    if (!this.state.selectedNode) return [];
+    return this.withImageCountDefaultOptions(this.state.selectedNode.options);
+  }
+
   withDefaultTapisOptions(options, availableOptions){
     const result = Utils.clone(options);
     const existing = {};
     result.forEach(option => existing[option.name] = true);
 
-    ["tapis-queue", "tapis-allocation", "tapis-max-run-time"].forEach(name => {
+    ["tapis-queue", "tapis-allocation", "tapis-max-run-time", "tapis-node"].forEach(name => {
       if (existing[name]) return;
       const available = availableOptions.find(option => option.name === name);
       if (available && available.value !== undefined && available.value !== ""){
@@ -510,13 +560,14 @@ class EditTaskForm extends React.Component {
 
   getTaskInfo(){
     const { name, selectedNode, selectedPreset, tags } = this.state;
+    const availableOptions = this.getSelectedNodeOptions();
 
     return {
       name: name !== "" ? name : this.state.namePlaceholder,
       selectedNode: selectedNode,
       options: this.withDefaultTapisOptions(
-        this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options),
-        selectedNode.options
+        this.getAvailableOptionsOnly(selectedPreset.options, availableOptions),
+        availableOptions
       ),
       tags
     };
@@ -670,7 +721,7 @@ class EditTaskForm extends React.Component {
 
       const optionsSelector = (<div>
         <select 
-            title={this.getAvailableOptionsOnlyText(this.state.selectedPreset.options, this.state.selectedNode.options)}
+            title={this.getAvailableOptionsOnlyText(this.state.selectedPreset.options, this.getSelectedNodeOptions())}
             className="form-control" 
             value={this.state.selectedPreset.id} 
             onChange={this.handleSelectPreset}>
@@ -739,7 +790,7 @@ class EditTaskForm extends React.Component {
             <div className="col-sm-10">
               {!this.props.inReview ? optionsSelector : 
                <div className="review-options">
-                {this.getAvailableOptionsOnlyText(this.state.selectedPreset.options, this.state.selectedNode.options)}
+                {this.getAvailableOptionsOnlyText(this.state.selectedPreset.options, this.getSelectedNodeOptions())}
                </div>}
             </div>
           </div>
@@ -747,7 +798,7 @@ class EditTaskForm extends React.Component {
           {this.state.editingPreset ? 
             <EditPresetDialog
               preset={this.state.selectedPreset}
-              availableOptions={this.state.selectedNode.options}
+              availableOptions={this.getSelectedNodeOptions()}
               clusterNodeUrls={this.state.clusterNodeUrls}
               onHide={this.handleCancelEditPreset}
               saveAction={this.handlePresetSave}

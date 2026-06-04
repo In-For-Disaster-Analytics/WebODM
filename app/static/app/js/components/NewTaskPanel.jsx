@@ -234,6 +234,7 @@ class NewTaskPanel extends React.Component {
               onFormLoaded={this.handleFormTaskLoaded}
               onFormChanged={this.handleFormChanged}
               inReview={this.state.inReview}
+              filesCount={this.props.filesCount}
               suggestedTaskName={this.handleSuggestedTaskName}
               getCropPolygon={this.getCropPolygon}
               ref={(domNode) => { if (domNode) this.taskForm = domNode; }}
