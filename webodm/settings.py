@@ -443,10 +443,15 @@ TAS_REQUIRED_ALLOCATIONS = [
 ]
 # How long (seconds) to cache a user's active allocation charge codes before
 # re-querying TAS. Keeps chunked uploads from hammering the TAS service.
-TAS_ALLOCATION_CACHE_SECONDS = int(os.environ.get(
-    'WO_TAS_ALLOCATION_CACHE_SECONDS',
-    os.environ.get('TAS_ALLOCATION_CACHE_SECONDS', '300')
-))
+# Defaults to the sign-in (JWT) token lifetime so a user's allocation access
+# is re-checked no later than when they have to re-authenticate. An empty or
+# invalid value also falls back to the token lifetime.
+_tas_alloc_cache = (os.environ.get('WO_TAS_ALLOCATION_CACHE_SECONDS')
+                    or os.environ.get('TAS_ALLOCATION_CACHE_SECONDS') or '').strip()
+try:
+    TAS_ALLOCATION_CACHE_SECONDS = int(_tas_alloc_cache)
+except ValueError:
+    TAS_ALLOCATION_CACHE_SECONDS = int(JWT_AUTH['JWT_EXPIRATION_DELTA'].total_seconds())
 
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
