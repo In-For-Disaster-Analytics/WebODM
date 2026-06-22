@@ -51,6 +51,8 @@ services:
       - WO_TAS_SERVICE_PASSWORD
       - WO_TAS_RESOURCE_FILTER
       - WO_TAS_DEFAULT_ALLOCATION
+      - WO_TAS_REQUIRED_ALLOCATIONS
+      - WO_TAS_ALLOCATION_CACHE_SECONDS
     restart: unless-stopped
     oom_score_adj: 0
   broker:
@@ -88,5 +90,7 @@ services:
       - WO_TAS_SERVICE_PASSWORD
       - WO_TAS_RESOURCE_FILTER
       - WO_TAS_DEFAULT_ALLOCATION
+      - WO_TAS_REQUIRED_ALLOCATIONS
+      - WO_TAS_ALLOCATION_CACHE_SECONDS
     restart: unless-stopped
     oom_score_adj: 250

@@ -2,6 +2,7 @@ import logging
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from requests.auth import HTTPBasicAuth
@@ -168,3 +169,51 @@ def choose_default_allocation(allocations):
             return preferred
 
     return allocations[0].get('chargeCode')
+
+
+def required_allocations():
+    """
+    Charge codes that gate project/upload/job access. Empty means the gate is
+    disabled and any authenticated user is allowed.
+    """
+    configured = _setting('TAS_REQUIRED_ALLOCATIONS', [])
+    if isinstance(configured, str):
+        configured = configured.split(',')
+    return {str(item).strip() for item in configured if str(item).strip()}
+
+
+def allocation_gate_enabled():
+    return bool(required_allocations())
+
+
+def _cached_charge_codes(username):
+    cache_seconds = int(_setting('TAS_ALLOCATION_CACHE_SECONDS', 300) or 0)
+    cache_key = 'tas_alloc_codes:{}'.format(username)
+
+    if cache_seconds > 0:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
+
+    codes = {a.get('chargeCode') for a in list_active_allocations(username) if a.get('chargeCode')}
+
+    if cache_seconds > 0:
+        cache.set(cache_key, list(codes), cache_seconds)
+
+    return codes
+
+
+def user_has_required_allocation(username):
+    """
+    Return True if the gate is disabled, or if the user holds at least one
+    active allocation whose charge code is in the required set. Raises
+    TASConfigurationError if the gate is enabled but TAS is not configured.
+    """
+    required = required_allocations()
+    if not required:
+        return True
+
+    if not username:
+        return False
+
+    return bool(_cached_charge_codes(username) & required)

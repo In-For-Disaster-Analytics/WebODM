@@ -15,6 +15,7 @@ from app import models
 from .tasks import TaskIDsSerializer
 from .tags import TagsField, parse_tags_input
 from .common import get_and_check_project
+from .permissions import HasRequiredAllocation
 from django.utils.translation import gettext as _
 
 def normalized_perm_names(perms):
@@ -109,6 +110,16 @@ class ProjectViewSet(viewsets.ModelViewSet):
     queryset = models.Project.objects.prefetch_related('task_set').filter(deleting=False).order_by('-created_at')
     filterset_class = ProjectFilter
     ordering_fields = '__all__'
+
+    # Actions that create new processing work and therefore require an
+    # active allocation when the allocation gate is enabled.
+    allocation_gated_actions = ('create', 'duplicate')
+
+    def get_permissions(self):
+        permission_classes = list(super().get_permissions())
+        if self.action in self.allocation_gated_actions:
+            permission_classes.append(HasRequiredAllocation())
+        return permission_classes
 
     # Disable pagination when not requesting any page
     def paginate_queryset(self, queryset):

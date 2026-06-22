@@ -36,6 +36,7 @@ from nodeodm import status_codes
 from nodeodm.models import ProcessingNode
 from worker import tasks as worker_tasks
 from .common import get_and_check_project, get_asset_download_filename
+from .permissions import HasRequiredAllocation
 from .tags import TagsField
 from app.security import path_traversal_check
 from django.utils.translation import gettext_lazy as _
@@ -124,6 +125,11 @@ class TaskViewSet(viewsets.ViewSet):
             permission_classes = [permissions.AllowAny]
         else:
             permission_classes = [permissions.DjangoModelPermissions, ]
+
+        # Creating tasks, uploading imagery, and committing (running) jobs
+        # require an active allocation when the allocation gate is enabled.
+        if self.action in ('create', 'upload', 'commit'):
+            permission_classes = permission_classes + [HasRequiredAllocation]
 
         return [permission() for permission in permission_classes]
 

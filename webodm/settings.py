@@ -431,6 +431,23 @@ TAS_DEFAULT_ALLOCATION = os.environ.get(
     os.environ.get('TAS_DEFAULT_ALLOCATION', 'PT2050-DataX')
 )
 
+# Allocation-based access control.
+# Comma-separated list of TAS charge codes that are allowed to create projects,
+# upload imagery, and run processing jobs. Leave empty to disable the gate
+# (any authenticated user is allowed). Superusers always bypass the gate.
+TAS_REQUIRED_ALLOCATIONS = [
+    item.strip() for item in os.environ.get(
+        'WO_TAS_REQUIRED_ALLOCATIONS',
+        os.environ.get('TAS_REQUIRED_ALLOCATIONS', '')
+    ).split(',') if item.strip()
+]
+# How long (seconds) to cache a user's active allocation charge codes before
+# re-querying TAS. Keeps chunked uploads from hammering the TAS service.
+TAS_ALLOCATION_CACHE_SECONDS = int(os.environ.get(
+    'WO_TAS_ALLOCATION_CACHE_SECONDS',
+    os.environ.get('TAS_ALLOCATION_CACHE_SECONDS', '300')
+))
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 
