@@ -114,10 +114,17 @@ ensure_dir_ownership() {
             # inherit the corral group, plus group rwx. A default POSIX ACL makes the
             # group access survive writers that set an explicit mode (tar, cp -p) and
             # bypass the umask. See docs/design/2026-07-01-corral-ownership-group-inheritance.md
-            sudo chmod -R g+rwX "$path" 2>/dev/null || true
-            sudo find "$path" -type d -exec chmod g+s {} + 2>/dev/null || true
+            #
+            # Throttle these recursive passes: on a large, populated corral tree this is
+            # heavy NFS I/O (see docs/incidents/2026-06-17-corral-backup-io-outage.md).
+            # Prefer running before the tree is populated, or during a maintenance window.
+            local io_throttle=""
+            if command -v ionice >/dev/null 2>&1; then io_throttle="ionice -c3"; fi
+            if command -v nice   >/dev/null 2>&1; then io_throttle="$io_throttle nice -n19"; fi
+            sudo $io_throttle chmod -R g+rwX "$path" 2>/dev/null || true
+            sudo $io_throttle find "$path" -type d -exec chmod g+s {} + 2>/dev/null || true
             if command -v setfacl >/dev/null 2>&1; then
-                sudo setfacl -R -m g:"$desired_group":rwX -d -m g:"$desired_group":rwX "$path" 2>/dev/null \
+                sudo $io_throttle setfacl -R -m g:"$desired_group":rwX -d -m g:"$desired_group":rwX "$path" 2>/dev/null \
                     || log_warning "setfacl not applied on $path (filesystem may not support ACLs; setgid still active)"
             fi
         fi
