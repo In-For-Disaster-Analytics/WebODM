@@ -2,6 +2,18 @@
 __dirname=$(cd $(dirname "$0"); pwd -P)
 cd ${__dirname}
 
+# Drop from root to the corral service account (WO_RUN_AS_USER) for the process
+# that writes media, so files land owned by that account instead of nobody on the
+# root-squashed corral NFS mount. No-op (runs as current user) when WO_RUN_AS_USER
+# is unset or gosu is unavailable, so existing deployments are unaffected.
+# See docs/design/2026-07-01-corral-ownership-group-inheritance.md
+run_as_service() {
+	if [ -n "$WO_RUN_AS_USER" ] && [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
+		exec gosu "$WO_RUN_AS_USER" "$@"
+	fi
+	exec "$@"
+}
+
 usage(){
   echo "Usage: $0 <command>"
   echo
@@ -58,7 +70,10 @@ start(){
 	action=$1
 
 	echo "Starting worker using broker at $WO_BROKER"
-	celery -A worker worker --autoscale $WEB_CONCURRENCY,2 --max-tasks-per-child 1000 --loglevel=warn > /dev/null
+	# Group-writable default so media files created by task processing stay g+rw
+	# for the corral allocation group.
+	umask 002
+	run_as_service celery -A worker worker --autoscale $WEB_CONCURRENCY,2 --max-tasks-per-child 1000 --loglevel=warn > /dev/null
 }
 
 start_scheduler(){

@@ -110,7 +110,23 @@ ensure_dir_ownership() {
     if sudo chown -R "$desired_user:$desired_group" "$path"; then
         log_info "Adjusted ownership for $path"
         if [[ "$desired_group" == "$CORRAL_GROUP" ]]; then
-            sudo chmod g+rwXs "$path" 2>/dev/null || true
+            # Group-inheritance layer: setgid on every directory so new files/dirs
+            # inherit the corral group, plus group rwx. A default POSIX ACL makes the
+            # group access survive writers that set an explicit mode (tar, cp -p) and
+            # bypass the umask. See docs/design/2026-07-01-corral-ownership-group-inheritance.md
+            #
+            # Throttle these recursive passes: on a large, populated corral tree this is
+            # heavy NFS I/O (see docs/incidents/2026-06-17-corral-backup-io-outage.md).
+            # Prefer running before the tree is populated, or during a maintenance window.
+            local io_throttle=""
+            if command -v ionice >/dev/null 2>&1; then io_throttle="ionice -c3"; fi
+            if command -v nice   >/dev/null 2>&1; then io_throttle="$io_throttle nice -n19"; fi
+            sudo $io_throttle chmod -R g+rwX "$path" 2>/dev/null || true
+            sudo $io_throttle find "$path" -type d -exec chmod g+s {} + 2>/dev/null || true
+            if command -v setfacl >/dev/null 2>&1; then
+                sudo $io_throttle setfacl -R -m g:"$desired_group":rwX -d -m g:"$desired_group":rwX "$path" 2>/dev/null \
+                    || log_warning "setfacl not applied on $path (filesystem may not support ACLs; setgid still active)"
+            fi
         fi
     else
         log_warning "Could not change ownership of $path; continuing (root-squash?)"
@@ -424,6 +440,22 @@ setup_webodm() {
                 echo "WO_CORRAL_GROUP_ID=$CORRAL_GROUP_ID" >> .env
             fi
         fi
+
+        # Corral service account the containers step down to (gosu) for media writes.
+        # Keep whatever the operator set; if set, it MUST resolve to a real account and
+        # SHOULD be a member of the corral group (else group access will not work).
+        run_as_user=$(grep '^WO_RUN_AS_USER=' .env | cut -d'=' -f2- || true)
+        if [[ -n "$run_as_user" ]]; then
+            if ! id -u "$run_as_user" >/dev/null 2>&1; then
+                log_error "WO_RUN_AS_USER=$run_as_user does not resolve to an account on this host. Fix .env or create the account before continuing."
+                exit 1
+            fi
+            if ! id -nG "$run_as_user" 2>/dev/null | tr ' ' '\n' | grep -Fxq "$CORRAL_GROUP"; then
+                log_warning "Service account $run_as_user is not a member of $CORRAL_GROUP; group access to media may fail until it is added (TACC allocation group)."
+            fi
+            log_info "Media-writing processes will run as $run_as_user (uid $(id -u "$run_as_user"))"
+        fi
+
         if grep -q '^WO_HOST=' .env; then
             sed -i "s|^WO_HOST=.*|WO_HOST=$HOSTNAME|" .env
         else

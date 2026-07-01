@@ -154,7 +154,20 @@ else
     congrats
 
     nginx -c $(pwd)/nginx/$conf
-    gunicorn webodm.wsgi --bind unix:/tmp/gunicorn.sock --timeout 300000 --max-requests 500 --workers $WEB_CONCURRENCY --preload
+
+    # Drop the Django app (the media writer) to the corral service account so
+    # uploaded/generated media is owned by that account instead of nobody on the
+    # root-squashed corral NFS mount. nginx stays root (nginx.conf: `user root root`)
+    # and still reaches the gunicorn socket. No-op when WO_RUN_AS_USER is unset, so
+    # existing deployments are unaffected.
+    # See docs/design/2026-07-01-corral-ownership-group-inheritance.md
+    gosu_prefix=""
+    if [ -n "$WO_RUN_AS_USER" ] && [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
+        gosu_prefix="gosu $WO_RUN_AS_USER"
+    fi
+    # Group-writable default so media files stay g+rw for the corral group.
+    umask 002
+    $gosu_prefix gunicorn webodm.wsgi --bind unix:/tmp/gunicorn.sock --timeout 300000 --max-requests 500 --workers $WEB_CONCURRENCY --preload
 fi
 
 # If this is executed, it means the previous command failed, don't display the congratulations message
