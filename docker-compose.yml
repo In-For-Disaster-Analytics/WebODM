@@ -37,6 +37,7 @@ services:
       - WO_DEV
       - WO_DEV_WATCH_PLUGINS
       - WO_SECRET_KEY
+      - WO_RUN_AS_USER
       - WEB_CONCURRENCY
       - WO_SHARED_VOLUME_ROOT
       - WO_TAPIS_BASE_URL
@@ -76,6 +77,7 @@ services:
       - WO_BROKER
       - WO_DEBUG
       - WO_SECRET_KEY
+      - WO_RUN_AS_USER
       - WEB_CONCURRENCY
       - WO_SHARED_VOLUME_ROOT
       - WO_TAPIS_BASE_URL

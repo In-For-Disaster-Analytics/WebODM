@@ -180,9 +180,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Install common deps, starting with NodeJS
     apt-get -qq install -y -o APT::Keep-Downloaded-Packages=false nodejs
     # Python, GDAL, PDAL, nginx, letsencrypt, psql, git
+    # gosu: drop from root to the corral service account for media-writing processes
+    # (see docs/design/2026-07-01-corral-ownership-group-inheritance.md)
     apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
         python$PYTHON_VERSION python$PYTHON_VERSION-distutils gdal-bin pdal \
-        nginx certbot gettext-base cron postgresql-client gettext tzdata git
+        nginx certbot gettext-base cron postgresql-client gettext tzdata git gosu
     nginx_version="$(dpkg-query -W -f='${Version}' nginx)"
     dpkg --compare-versions "$nginx_version" ge "$MIN_NGINX_VERSION"
     # Install webpack, webpack CLI
