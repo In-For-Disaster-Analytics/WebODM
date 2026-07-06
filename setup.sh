@@ -828,42 +828,170 @@ setup_firewall() {
 }
 
 # Setup backup script
+# Corral-safe hardened backup. See docs/design/2026-07-01-backup-hardening-corral-safe.md
+# and docs/incidents/2026-06-17-corral-backup-io-outage.md in the odm-suite repo.
 setup_backup() {
     log_info "Setting up backup script..."
-    
+
     # Create backup script
     sudo tee /usr/local/bin/webodm-backup.sh > /dev/null << 'EOF'
 #!/bin/bash
-BACKUP_DIR="/corral/webodm/backups"
+# WebODM corral-safe backup.
+# Principles: never hang the mount, fail loudly (never fake success), throttle I/O,
+# stage the DB dump locally, back up media incrementally to a separate corral subtree.
+set -euo pipefail
+
+# --- Config (override via environment) ---------------------------------------
+MEDIA_ROOT="${WEBODM_MEDIA_ROOT:-/corral/webodm/media}"       # live media (read-only here)
+BACKUP_DIR="${WEBODM_BACKUP_DIR:-/corral/webodm/backups}"     # corral subtree, NOT the media tree
+MEDIA_BACKUP_DIR="$BACKUP_DIR/media"                          # rsync mirror target
+DB_STAGE_DIR="${WEBODM_DB_STAGE:-$HOME/ODM-SUITE/backups/db}" # LOCAL disk staging for the DB dump
+
+# Derive the DB name/user from WebODM's OWN config so the backup always targets the DB
+# the app actually uses. WebODM's settings.py falls back to these same defaults
+# (WO_DATABASE_NAME=webodm_dev, WO_DATABASE_USER=postgres) when unset. As of 2026-07 no
+# WO_DATABASE_NAME override is set, so this resolves to WebODM's shipped default
+# "webodm_dev" -- a known-unintended prod DB name, tracked separately for rename. When
+# WO_DATABASE_NAME is eventually set, this backup follows it automatically (no drift).
+WEBODM_ENV="${WEBODM_ENV_FILE:-$HOME/ODM-SUITE/WebODM/.env}"
+env_val() { [[ -f "$WEBODM_ENV" ]] || return 0; grep -E "^$1=" "$WEBODM_ENV" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+DB_NAME="${WEBODM_DB:-$(env_val WO_DATABASE_NAME)}"; DB_NAME="${DB_NAME:-webodm_dev}"
+DB_USER="${WEBODM_DB_USER:-$(env_val WO_DATABASE_USER)}"; DB_USER="${DB_USER:-postgres}"
+LOG_FILE="${WEBODM_BACKUP_LOG:-/var/log/webodm-backup.log}"
+ALERT_FILE="${WEBODM_BACKUP_ALERT:-/var/log/webodm-backup.failed}"
+RETENTION_DAYS="${WEBODM_BACKUP_RETENTION_DAYS:-7}"
+PREFLIGHT_TIMEOUT="${WEBODM_PREFLIGHT_TIMEOUT:-20}"           # seconds
+DB_TIMEOUT="${WEBODM_DB_TIMEOUT:-1800}"                       # seconds (30m)
+MEDIA_TIMEOUT="${WEBODM_MEDIA_TIMEOUT:-6h}"
+
 DATE=$(date +%Y%m%d_%H%M%S)
-mkdir -p $BACKUP_DIR
 
-# Database backup
-if docker ps | grep -q db; then
-    docker exec db pg_dump -U postgres webodm > $BACKUP_DIR/webodm_$DATE.sql
-    echo "Database backed up to $BACKUP_DIR/webodm_$DATE.sql"
+log() { printf '%s [%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$1" "${2:-}" | tee -a "$LOG_FILE" 2>/dev/null >&2 || true; }
+fail() { log ERROR "$1"; date +'%Y-%m-%d %H:%M:%S' > "$ALERT_FILE" 2>/dev/null || true; echo "$1" >> "$ALERT_FILE" 2>/dev/null || true; exit 1; }
+
+# --- Single-instance lock (a slow/stuck run must NOT stack another) ----------
+exec 9>/var/lock/webodm-backup.lock || fail "cannot open lock file"
+if ! flock -n 9; then
+    log WARN "another backup run holds the lock; exiting without stacking"
+    exit 0
 fi
 
-# Media backup
-if [[ -d "/corral/webodm/media" ]]; then
-    tar -czf $BACKUP_DIR/media_$DATE.tar.gz -C /corral/webodm media/
-    echo "Media files backed up to $BACKUP_DIR/media_$DATE.tar.gz"
+log INFO "backup start (DATE=$DATE, DB=$DB_NAME)"
+
+# --- Preflight: corral must be mounted, writable, and responsive -------------
+# Never proceed into a hard-NFS hang; skip-and-alert instead.
+corral_ok() {
+    mountpoint -q /corral || { log ERROR "corral is not a mountpoint"; return 1; }
+    timeout "$PREFLIGHT_TIMEOUT" mkdir -p "$BACKUP_DIR" 2>/dev/null || { log ERROR "cannot create $BACKUP_DIR (timeout/denied)"; return 1; }
+    local probe="$BACKUP_DIR/.write_test.$$"
+    timeout "$PREFLIGHT_TIMEOUT" bash -c "touch '$probe' && rm -f '$probe'" 2>/dev/null || { log ERROR "corral not writable within ${PREFLIGHT_TIMEOUT}s"; return 1; }
+    return 0
+}
+corral_ok || fail "corral preflight failed; skipping backup (mount down or Permission denied)"
+
+# --- Database backup: stage LOCALLY, verify, then copy to corral -------------
+# Local staging means the DB backup survives even a corral outage.
+# NOTE: container name "db" is fixed by docker-compose.yml (container_name: db);
+# if that ever changes this fails loudly (below) rather than silently skipping.
+db_ok=false
+if docker ps --format '{{.Names}}' | grep -qx db; then
+    mkdir -p "$DB_STAGE_DIR"
+    stage="$DB_STAGE_DIR/${DB_NAME}_$DATE.dump"
+    if timeout "$DB_TIMEOUT" docker exec db pg_dump -U "$DB_USER" -Fc "$DB_NAME" > "$stage"; then
+        # pg_restore --list is a structural/TOC integrity check (archive is readable),
+        # NOT a full restore drill; schedule periodic test-restores separately.
+        if [[ -s "$stage" ]] && docker exec -i db pg_restore --list < "$stage" >/dev/null 2>&1; then
+            # timeout-wrapped: corral was healthy at preflight, but pg_dump may have
+            # run for up to DB_TIMEOUT since then, so re-guard this corral write.
+            if timeout 300 cp "$stage" "$BACKUP_DIR/${DB_NAME}_$DATE.dump"; then
+                log INFO "database backed up: $BACKUP_DIR/${DB_NAME}_$DATE.dump ($(du -h "$stage" | cut -f1))"
+                db_ok=true
+            else
+                fail "copy of DB dump to corral failed or timed out (mount may have degraded mid-run)"
+            fi
+        else
+            rm -f "$stage"; fail "pg_dump produced an empty or unrestorable dump for '$DB_NAME'"
+        fi
+    else
+        rm -f "$stage"; fail "pg_dump failed or timed out for database '$DB_NAME'"
+    fi
+    # Prune local staging so it cannot fill local disk and stall Postgres.
+    timeout 5m find "$DB_STAGE_DIR" -type f -name '*.dump' -mtime "+$RETENTION_DAYS" -delete || log WARN "local staging prune timed out"
+else
+    fail "db container not running; cannot back up database"
 fi
 
-# Keep only last 7 days
-find $BACKUP_DIR -type f -mtime +7 -delete
-echo "Old backups cleaned up"
+# --- Media backup: incremental, throttled, time-boxed, point-in-time ---------
+# Dated hardlink snapshots (--link-dest against the previous snapshot): unchanged
+# files are hardlinked so each snapshot costs ~the delta, but every night is an
+# independent, immutable point-in-time copy. This means a bad night in the live
+# tree (accidental deletion, partial/empty listing during a flaky mount) does NOT
+# destroy older backups the way a single --delete'd mirror would.
+# Runs in the idle I/O class so it yields to WebODM; time-boxed so a stuck copy
+# is killed rather than left hanging the mount.
+media_ok=false
+if [[ -d "$MEDIA_ROOT" ]]; then
+    snap_dir="$MEDIA_BACKUP_DIR/$DATE"
+    latest_link="$MEDIA_BACKUP_DIR/latest"
+    mkdir -p "$MEDIA_BACKUP_DIR"
+    link_dest=()
+    [[ -d "$latest_link" ]] && link_dest=(--link-dest="$latest_link")
+    if timeout "$MEDIA_TIMEOUT" ionice -c3 nice -n19 \
+         rsync -a --delete --partial "${link_dest[@]}" "$MEDIA_ROOT/" "$snap_dir/"; then
+        # Atomically repoint "latest" at the new snapshot for the next --link-dest base.
+        ln -sfn "$snap_dir" "$latest_link.tmp" && mv -Tf "$latest_link.tmp" "$latest_link"
+        log INFO "media snapshot: $snap_dir"
+        media_ok=true
+    else
+        fail "media rsync failed or timed out (${MEDIA_TIMEOUT})"
+    fi
+else
+    log WARN "media root $MEDIA_ROOT not found; skipping media backup"
+fi
+
+# --- Retention (time-boxed): prune old DB dumps AND old media snapshots ------
+# Keep enough media snapshots for several recovery points, not just one.
+timeout 10m find "$BACKUP_DIR" -maxdepth 1 -type f -mtime "+$RETENTION_DAYS" -delete || log WARN "corral db-dump retention sweep timed out"
+timeout 10m find "$MEDIA_BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf {} + || log WARN "media snapshot retention sweep timed out"
+
+rm -f "$ALERT_FILE" 2>/dev/null || true
+log INFO "backup complete (db_ok=$db_ok, media_ok=$media_ok)"
 EOF
-    
+
     sudo chmod +x /usr/local/bin/webodm-backup.sh
-    
+
+    # Log rotation for the on-disk backup log
+    sudo tee /etc/logrotate.d/webodm-backup > /dev/null << 'EOF'
+/var/log/webodm-backup.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+
+    # Ensure the log file exists and is writable by the cron user
+    sudo touch /var/log/webodm-backup.log
+    sudo chown "$(id -un)":"$(id -gn)" /var/log/webodm-backup.log 2>/dev/null || true
+
+    # Make the corral backup dir inherit the corral group + setgid + default ACL,
+    # consistent with webodm/media (see setup_storage). Self-guards if the dir/mount
+    # is absent (e.g. corral currently unavailable); snapshots created later by cron
+    # inherit from it. Belt-and-suspenders on top of the parent webodm/ inheritance.
+    if [[ -d "$CORRAL_BASE/webodm/backups" ]]; then
+        ensure_dir_ownership "$CORRAL_BASE/webodm/backups" || log_warning "Could not adjust backup dir ownership (corral may be unavailable)"
+    fi
+
     # Add to crontab if not already present
     if ! crontab -l 2>/dev/null | grep -q "webodm-backup"; then
         (crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/webodm-backup.sh") | crontab -
         log_success "Daily backup scheduled at 2 AM"
     fi
-    
-    log_success "Backup script installed"
+
+    log_success "Backup script installed (corral-safe: preflight, lock, throttled, verified DB dump)"
 }
 
 # Health check
@@ -1009,6 +1137,9 @@ case "${1:-}" in
     "backup")
         /usr/local/bin/webodm-backup.sh
         ;;
+    "install-backup")
+        setup_backup
+        ;;
     "stop")
         log_info "Stopping all services..."
         cd "$REPO_BASE/WebODM" && ./webodm.sh stop || log_warning "WebODM stop failed"
@@ -1048,18 +1179,19 @@ case "${1:-}" in
         main
         ;;
     *)
-        echo "Usage: $0 [health|backup|start|stop|restart|update|build|pull]"
+        echo "Usage: $0 [health|backup|install-backup|start|stop|restart|update|build|pull]"
         echo ""
         echo "Commands:"
-        echo "  (no args)  - Run full automated setup with Docker builds"
-        echo "  health     - Run health checks only"
-        echo "  backup     - Run backup script"
-        echo "  start      - Start all services"
-        echo "  stop       - Stop all services"
-        echo "  restart    - Restart all services"
-        echo "  update     - Pull repos, rebuild Docker images, and restart services"
-        echo "  build      - Rebuild all Docker images only"
-        echo "  pull       - Pull latest code from all repositories"
+        echo "  (no args)      - Run full automated setup with Docker builds"
+        echo "  health         - Run health checks only"
+        echo "  backup         - Run backup script"
+        echo "  install-backup - (Re)install the corral-safe backup script + cron, without a full setup"
+        echo "  start          - Start all services"
+        echo "  stop           - Stop all services"
+        echo "  restart        - Restart all services"
+        echo "  update         - Pull repos, rebuild Docker images, and restart services"
+        echo "  build          - Rebuild all Docker images only"
+        echo "  pull           - Pull latest code from all repositories"
         exit 1
         ;;
 esac
