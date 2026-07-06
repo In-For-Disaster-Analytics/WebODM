@@ -61,7 +61,13 @@ log() { printf '%s [%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$1" "${2:-}" | tee
 fail() { log ERROR "$1"; date +'%Y-%m-%d %H:%M:%S' > "$ALERT_FILE" 2>/dev/null || true; echo "$1" >> "$ALERT_FILE" 2>/dev/null || true; exit 1; }
 
 # --- Single-instance lock (a slow/stuck run must NOT stack another) ----------
-exec 9>/var/lock/webodm-backup.lock || fail "cannot open lock file"
+# Prefer /var/lock, but fall back to /tmp so the lock never blocks the run just
+# because of directory permissions (this script runs as an unprivileged user).
+LOCK_FILE="${WEBODM_LOCK:-/var/lock/webodm-backup.lock}"
+if ! exec 9>"$LOCK_FILE" 2>/dev/null; then
+    LOCK_FILE="/tmp/webodm-backup.lock"
+    exec 9>"$LOCK_FILE" || fail "cannot open lock file ($LOCK_FILE)"
+fi
 if ! flock -n 9; then
     log WARN "another backup run holds the lock; exiting without stacking"
     exit 0
@@ -189,8 +195,14 @@ disable_cron() {
 
 run_now() {
     [[ -x "$TARGET" ]] || { log "ERROR: $TARGET not installed; run '$0 install' first"; exit 1; }
-    log "Running backup now (foreground)..."
-    sudo "$TARGET"
+    # Run as the CURRENT user (not sudo/root): the nightly cron runs as this user, and
+    # corral squashes root -> nobody, so a root run would write nobody-owned backups and
+    # use a different $HOME staging dir. Keep it consistent and non-root.
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "WARNING: running as root -- corral writes will be squashed to 'nobody'. Prefer running as the WebODM service user."
+    fi
+    log "Running backup now (foreground, as $(id -un))..."
+    "$TARGET"
 }
 
 status() {
