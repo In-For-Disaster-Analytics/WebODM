@@ -7,8 +7,19 @@ cd ${__dirname}
 # root-squashed corral NFS mount. No-op (runs as current user) when WO_RUN_AS_USER
 # is unset or gosu is unavailable, so existing deployments are unaffected.
 # See docs/design/2026-07-01-corral-ownership-group-inheritance.md
+# Hand the app's root-owned, boot-writable dirs to the service account before
+# dropping privileges. WebODM rebuilds plugin assets (webpack.config.js, node_modules,
+# public/build) under coreplugins/ at boot; those are root-owned from the image build,
+# so a non-root process cannot write them. Persistent plugin data lives on the corral
+# media bind (MEDIA_ROOT/plugins), which is already owned by the service account -- do
+# NOT chown media here.
+prepare_service_account_dirs() {
+	[ -d /webodm/coreplugins ] && chown -R "$WO_RUN_AS_USER" /webodm/coreplugins 2>/dev/null || true
+}
+
 run_as_service() {
 	if [ -n "$WO_RUN_AS_USER" ] && [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
+		prepare_service_account_dirs
 		exec gosu "$WO_RUN_AS_USER" "$@"
 	fi
 	exec "$@"
