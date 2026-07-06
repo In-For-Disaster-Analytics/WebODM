@@ -164,6 +164,11 @@ else
     gosu_prefix=""
     if [ -n "$WO_RUN_AS_USER" ] && [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
         gosu_prefix="gosu $WO_RUN_AS_USER"
+        # WebODM rebuilds plugin assets under coreplugins/ at boot (webpack.config.js,
+        # node_modules, public/build); those are root-owned from the image build, so hand
+        # them to the service account before dropping privileges. Persistent plugin data
+        # lives on the corral media bind and is already service-account-owned.
+        [ -d /webodm/coreplugins ] && chown -R "$WO_RUN_AS_USER" /webodm/coreplugins 2>/dev/null || true
     fi
     # Group-writable default so media files stay g+rw for the corral group.
     umask 002
