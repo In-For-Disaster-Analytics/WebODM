@@ -985,10 +985,23 @@ EOF
         ensure_dir_ownership "$CORRAL_BASE/webodm/backups" || log_warning "Could not adjust backup dir ownership (corral may be unavailable)"
     fi
 
-    # Add to crontab if not already present
-    if ! crontab -l 2>/dev/null | grep -q "webodm-backup"; then
-        (crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/webodm-backup.sh") | crontab -
-        log_success "Daily backup scheduled at 2 AM"
+    # Schedule the nightly cron ONLY when explicitly opted in.
+    # Installing the script above is safe (it is corral-safe: flock lock + preflight +
+    # timeout + throttling, so it cannot stack or hang the mount). But auto-scheduling
+    # the cron on EVERY setup.sh run is how a backup job silently (re)appears -- e.g.
+    # during a cutover while corral is still being stabilized. Enable deliberately once
+    # corral is healthy:
+    #     WEBODM_ENABLE_BACKUP_CRON=1 ./setup.sh
+    # or add the crontab line by hand. See docs/incidents/2026-06-17-corral-backup-io-outage.md
+    if [[ "${WEBODM_ENABLE_BACKUP_CRON:-0}" == "1" ]]; then
+        if ! crontab -l 2>/dev/null | grep -q "webodm-backup"; then
+            (crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/webodm-backup.sh") | crontab -
+            log_success "Daily backup scheduled at 2 AM"
+        else
+            log_info "Backup cron already present; leaving as-is"
+        fi
+    else
+        log_warning "Backup script installed but cron NOT scheduled (opt-in). To enable the nightly job: WEBODM_ENABLE_BACKUP_CRON=1 ./setup.sh"
     fi
 
     log_success "Backup script installed (corral-safe: preflight, lock, throttled, verified DB dump)"
