@@ -3,14 +3,16 @@
 # (which rebuilds containers, rewrites nginx/firewall, etc.). Standalone and idempotent.
 #
 # Usage:
-#   scripts/backup-ctl.sh install       Install/refresh /usr/local/bin/webodm-backup.sh (+ logrotate).
+#   scripts/backup-ctl.sh install        Install/refresh /usr/local/bin/webodm-backup.sh (+ logrotate).
 #                                         Does NOT schedule the cron.
-#   scripts/backup-ctl.sh enable-cron   Schedule the nightly job (0 2 * * *).
-#   scripts/backup-ctl.sh disable-cron  Remove the cron line.
-#   scripts/backup-ctl.sh run           Run a backup now (foreground), for testing.
-#   scripts/backup-ctl.sh status        Show install/cron/log/alert + any stuck (D-state) processes.
-#   scripts/backup-ctl.sh uninstall     Remove the cron, script, and logrotate config.
+#   scripts/backup-ctl.sh enable-cron    Schedule the nightly job (0 2 * * *).
+#   scripts/backup-ctl.sh disable-cron   Remove the cron line.
+#   scripts/backup-ctl.sh run [--db-only]  Run a backup now (foreground). --db-only skips media.
+#   scripts/backup-ctl.sh status         Show install/cron/log/alert + any stuck (D-state) processes.
+#   scripts/backup-ctl.sh uninstall      Remove the cron, script, and logrotate config.
 #
+# Design: everything heavy is built on LOCAL disk first, then moved to corral in a single
+# pass -- corral is never read and written at the same time (that is what jailed the mount).
 # See docs/design/2026-07-01-backup-hardening-corral-safe.md and
 #     docs/incidents/2026-06-17-corral-backup-io-outage.md
 set -euo pipefail
@@ -29,21 +31,21 @@ install_script() {
 #!/bin/bash
 # WebODM corral-safe backup.
 # Principles: never hang the mount, fail loudly (never fake success), throttle I/O,
-# stage the DB dump locally, back up media incrementally to a separate corral subtree.
+# do ALL heavy work on LOCAL disk, then push finished artifacts to corral in one pass.
+# corral is never read+written simultaneously (that is what stacked D-state jobs before).
 set -euo pipefail
 
 # --- Config (override via environment) ---------------------------------------
 MEDIA_ROOT="${WEBODM_MEDIA_ROOT:-/corral/webodm/media}"       # live media (read-only here)
-BACKUP_DIR="${WEBODM_BACKUP_DIR:-/corral/webodm/backups}"     # corral subtree, NOT the media tree
-MEDIA_BACKUP_DIR="$BACKUP_DIR/media"                          # rsync mirror target
-DB_STAGE_DIR="${WEBODM_DB_STAGE:-$HOME/ODM-SUITE/backups/db}" # LOCAL disk staging for the DB dump
+BACKUP_DIR="${WEBODM_BACKUP_DIR:-/corral/webodm/backups}"     # FINAL corral destination (NOT the media tree)
+MEDIA_BACKUP_DIR="$BACKUP_DIR/media"                          # corral: dated snapshots
+STAGE_ROOT="${WEBODM_STAGE_ROOT:-$HOME/ODM-SUITE/backups}"    # LOCAL working area (fast disk)
+DB_STAGE_DIR="$STAGE_ROOT/db"                                 # LOCAL: DB dump staging
+MEDIA_MIRROR="$STAGE_ROOT/media-mirror"                       # LOCAL: persistent mirror of media
+SKIP_MEDIA="${WEBODM_SKIP_MEDIA:-0}"                          # 1 = DB only (fast, for testing)
 
 # Derive the DB name/user from WebODM's OWN config so the backup always targets the DB
-# the app actually uses. WebODM's settings.py falls back to these same defaults
-# (WO_DATABASE_NAME=webodm_dev, WO_DATABASE_USER=postgres) when unset. As of 2026-07 no
-# WO_DATABASE_NAME override is set, so this resolves to WebODM's shipped default
-# "webodm_dev" -- a known-unintended prod DB name, tracked separately for rename. When
-# WO_DATABASE_NAME is eventually set, this backup follows it automatically (no drift).
+# the app actually uses (defaults to WebODM's shipped webodm_dev / postgres). No drift.
 WEBODM_ENV="${WEBODM_ENV_FILE:-$HOME/ODM-SUITE/WebODM/.env}"
 env_val() { [[ -f "$WEBODM_ENV" ]] || return 0; grep -E "^$1=" "$WEBODM_ENV" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 DB_NAME="${WEBODM_DB:-$(env_val WO_DATABASE_NAME)}"; DB_NAME="${DB_NAME:-webodm_dev}"
@@ -53,16 +55,25 @@ ALERT_FILE="${WEBODM_BACKUP_ALERT:-/var/log/webodm-backup.failed}"
 RETENTION_DAYS="${WEBODM_BACKUP_RETENTION_DAYS:-7}"
 PREFLIGHT_TIMEOUT="${WEBODM_PREFLIGHT_TIMEOUT:-20}"           # seconds
 DB_TIMEOUT="${WEBODM_DB_TIMEOUT:-1800}"                       # seconds (30m)
-MEDIA_TIMEOUT="${WEBODM_MEDIA_TIMEOUT:-6h}"
+MEDIA_PULL_TIMEOUT="${WEBODM_MEDIA_PULL_TIMEOUT:-6h}"         # corral -> local
+MEDIA_PUSH_TIMEOUT="${WEBODM_MEDIA_PUSH_TIMEOUT:-6h}"         # local  -> corral
+DU_TIMEOUT="${WEBODM_DU_TIMEOUT:-15m}"                        # sizing the source
 
 DATE=$(date +%Y%m%d_%H%M%S)
 
 log() { printf '%s [%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$1" "${2:-}" | tee -a "$LOG_FILE" 2>/dev/null >&2 || true; }
 fail() { log ERROR "$1"; date +'%Y-%m-%d %H:%M:%S' > "$ALERT_FILE" 2>/dev/null || true; echo "$1" >> "$ALERT_FILE" 2>/dev/null || true; exit 1; }
 
+# --- Interrupt handling: kill the current child so Ctrl+C / SIGTERM stops cleanly.
+CHILD=""
+on_signal() { trap - INT TERM; [[ -n "$CHILD" ]] && kill "$CHILD" 2>/dev/null || true; log WARN "interrupted; stopping"; exit 130; }
+trap on_signal INT TERM
+# Run a command as a killable background child and wait, so signals are handled promptly
+# (a foreground child wedged in NFS D-state still can't be reaped, but local phases are).
+run_step() { "$@" & CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return $rc; }
+
 # --- Single-instance lock (a slow/stuck run must NOT stack another) ----------
-# Prefer /var/lock, but fall back to /tmp so the lock never blocks the run just
-# because of directory permissions (this script runs as an unprivileged user).
+# Prefer /var/lock, fall back to /tmp so directory permissions can't block the run.
 LOCK_FILE="${WEBODM_LOCK:-/var/lock/webodm-backup.lock}"
 if ! exec 9>"$LOCK_FILE" 2>/dev/null; then
     LOCK_FILE="/tmp/webodm-backup.lock"
@@ -73,10 +84,9 @@ if ! flock -n 9; then
     exit 0
 fi
 
-log INFO "backup start (DATE=$DATE, DB=$DB_NAME)"
+log INFO "backup start (DATE=$DATE, DB=$DB_NAME, skip_media=$SKIP_MEDIA, stage=$STAGE_ROOT)"
 
 # --- Preflight: corral must be mounted, writable, and responsive -------------
-# Never proceed into a hard-NFS hang; skip-and-alert instead.
 corral_ok() {
     mountpoint -q /corral || { log ERROR "corral is not a mountpoint"; return 1; }
     timeout "$PREFLIGHT_TIMEOUT" mkdir -p "$BACKUP_DIR" 2>/dev/null || { log ERROR "cannot create $BACKUP_DIR (timeout/denied)"; return 1; }
@@ -85,21 +95,15 @@ corral_ok() {
     return 0
 }
 corral_ok || fail "corral preflight failed; skipping backup (mount down or Permission denied)"
+mkdir -p "$STAGE_ROOT" "$DB_STAGE_DIR" || fail "cannot create local staging under $STAGE_ROOT"
 
-# --- Database backup: stage LOCALLY, verify, then copy to corral -------------
-# Local staging means the DB backup survives even a corral outage.
-# NOTE: container name "db" is fixed by docker-compose.yml (container_name: db);
-# if that ever changes this fails loudly (below) rather than silently skipping.
+# --- Database backup: dump LOCALLY, verify, then copy to corral in one pass ---
 db_ok=false
 if docker ps --format '{{.Names}}' | grep -qx db; then
-    mkdir -p "$DB_STAGE_DIR"
     stage="$DB_STAGE_DIR/${DB_NAME}_$DATE.dump"
     if timeout "$DB_TIMEOUT" docker exec db pg_dump -U "$DB_USER" -Fc "$DB_NAME" > "$stage"; then
-        # pg_restore --list is a structural/TOC integrity check (archive is readable),
-        # NOT a full restore drill; schedule periodic test-restores separately.
+        # Structural integrity check (TOC readable) -- not a full restore drill.
         if [[ -s "$stage" ]] && docker exec -i db pg_restore --list < "$stage" >/dev/null 2>&1; then
-            # timeout-wrapped: corral was healthy at preflight, but pg_dump may have
-            # run for up to DB_TIMEOUT since then, so re-guard this corral write.
             if timeout 300 cp "$stage" "$BACKUP_DIR/${DB_NAME}_$DATE.dump"; then
                 log INFO "database backed up: $BACKUP_DIR/${DB_NAME}_$DATE.dump ($(du -h "$stage" | cut -f1))"
                 db_ok=true
@@ -112,42 +116,63 @@ if docker ps --format '{{.Names}}' | grep -qx db; then
     else
         rm -f "$stage"; fail "pg_dump failed or timed out for database '$DB_NAME'"
     fi
-    # Prune local staging so it cannot fill local disk and stall Postgres.
     timeout 5m find "$DB_STAGE_DIR" -type f -name '*.dump' -mtime "+$RETENTION_DAYS" -delete || log WARN "local staging prune timed out"
 else
     fail "db container not running; cannot back up database"
 fi
 
-# --- Media backup: incremental, throttled, time-boxed, point-in-time ---------
-# Dated hardlink snapshots (--link-dest against the previous snapshot): unchanged
-# files are hardlinked so each snapshot costs ~the delta, but every night is an
-# independent, immutable point-in-time copy. This means a bad night in the live
-# tree (accidental deletion, partial/empty listing during a flaky mount) does NOT
-# destroy older backups the way a single --delete'd mirror would.
-# Runs in the idle I/O class so it yields to WebODM; time-boxed so a stuck copy
-# is killed rather than left hanging the mount.
+# --- Media backup: LOCAL mirror first, then push a snapshot to corral --------
+# Phase 1 reads corral -> writes LOCAL (interruptible). Phase 2 reads LOCAL -> writes
+# corral, --link-dest against the previous corral snapshot so only deltas are written.
+# corral is never read and written at the same time.
 media_ok=false
-if [[ -d "$MEDIA_ROOT" ]]; then
+if [[ "$SKIP_MEDIA" == "1" ]]; then
+    log INFO "media backup skipped (WEBODM_SKIP_MEDIA=1)"
+elif [[ -d "$MEDIA_ROOT" ]]; then
+    mkdir -p "$MEDIA_MIRROR" "$MEDIA_BACKUP_DIR"
+
+    # Free-space guard: local disk must hold a full mirror. Account for what the mirror
+    # already occupies (incremental runs need little extra). Abort loudly rather than
+    # fill the disk (which would be a new incident).
+    avail_kb=$(df -Pk "$MEDIA_MIRROR" 2>/dev/null | awk 'NR==2{print $4}')
+    mirror_kb=$(du -sk "$MEDIA_MIRROR" 2>/dev/null | awk '{print $1}'); mirror_kb=${mirror_kb:-0}
+    need_kb=$(timeout "$DU_TIMEOUT" ionice -c3 nice -n19 du -sk "$MEDIA_ROOT" 2>/dev/null | awk '{print $1}')
+    if [[ -n "${need_kb:-}" && -n "${avail_kb:-}" ]]; then
+        # usable = free space + space we can reuse from the existing mirror
+        if (( avail_kb + mirror_kb < need_kb + need_kb/10 )); then
+            fail "insufficient local space at $MEDIA_MIRROR: source ~$((need_kb/1024))MB, usable ~$(((avail_kb+mirror_kb)/1024))MB. Set WEBODM_STAGE_ROOT to a bigger disk or use WEBODM_SKIP_MEDIA=1."
+        fi
+        log INFO "local space ok (source ~$((need_kb/1024))MB, usable ~$(((avail_kb+mirror_kb)/1024))MB)"
+    else
+        log WARN "could not size $MEDIA_ROOT within $DU_TIMEOUT; proceeding (rsync fails loud on ENOSPC)"
+    fi
+
+    # Phase 1: corral -> local mirror (incremental; throttled; time-boxed).
+    if run_step timeout "$MEDIA_PULL_TIMEOUT" ionice -c3 nice -n19 \
+         rsync -a --delete --partial "$MEDIA_ROOT/" "$MEDIA_MIRROR/"; then
+        log INFO "local mirror updated: $MEDIA_MIRROR"
+    else
+        fail "media pull (corral -> local) failed or timed out (${MEDIA_PULL_TIMEOUT})"
+    fi
+
+    # Phase 2: local mirror -> corral dated snapshot (hardlink unchanged vs previous).
     snap_dir="$MEDIA_BACKUP_DIR/$DATE"
     latest_link="$MEDIA_BACKUP_DIR/latest"
-    mkdir -p "$MEDIA_BACKUP_DIR"
     link_dest=()
     [[ -d "$latest_link" ]] && link_dest=(--link-dest="$latest_link")
-    if timeout "$MEDIA_TIMEOUT" ionice -c3 nice -n19 \
-         rsync -a --delete --partial "${link_dest[@]}" "$MEDIA_ROOT/" "$snap_dir/"; then
-        # Atomically repoint "latest" at the new snapshot for the next --link-dest base.
+    if run_step timeout "$MEDIA_PUSH_TIMEOUT" ionice -c3 nice -n19 \
+         rsync -a --partial "${link_dest[@]}" "$MEDIA_MIRROR/" "$snap_dir/"; then
         ln -sfn "$snap_dir" "$latest_link.tmp" && mv -Tf "$latest_link.tmp" "$latest_link"
-        log INFO "media snapshot: $snap_dir"
+        log INFO "media snapshot pushed to corral: $snap_dir"
         media_ok=true
     else
-        fail "media rsync failed or timed out (${MEDIA_TIMEOUT})"
+        fail "media push (local -> corral) failed or timed out (${MEDIA_PUSH_TIMEOUT})"
     fi
 else
     log WARN "media root $MEDIA_ROOT not found; skipping media backup"
 fi
 
-# --- Retention (time-boxed): prune old DB dumps AND old media snapshots ------
-# Keep enough media snapshots for several recovery points, not just one.
+# --- Retention (time-boxed) --------------------------------------------------
 timeout 10m find "$BACKUP_DIR" -maxdepth 1 -type f -mtime "+$RETENTION_DAYS" -delete || log WARN "corral db-dump retention sweep timed out"
 timeout 10m find "$MEDIA_BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf {} + || log WARN "media snapshot retention sweep timed out"
 
@@ -196,13 +221,14 @@ disable_cron() {
 run_now() {
     [[ -x "$TARGET" ]] || { log "ERROR: $TARGET not installed; run '$0 install' first"; exit 1; }
     # Run as the CURRENT user (not sudo/root): the nightly cron runs as this user, and
-    # corral squashes root -> nobody, so a root run would write nobody-owned backups and
-    # use a different $HOME staging dir. Keep it consistent and non-root.
+    # corral squashes root -> nobody, so a root run would write nobody-owned backups.
     if [[ "$(id -u)" -eq 0 ]]; then
-        log "WARNING: running as root -- corral writes will be squashed to 'nobody'. Prefer running as the WebODM service user."
+        log "WARNING: running as root -- corral writes will be squashed to 'nobody'. Prefer the WebODM service user."
     fi
-    log "Running backup now (foreground, as $(id -un))..."
-    "$TARGET"
+    local skip=0
+    [[ "${1:-}" == "--db-only" ]] && skip=1
+    log "Running backup now (foreground, as $(id -un)${skip:+, db-only=$skip})..."
+    WEBODM_SKIP_MEDIA="$skip" "$TARGET"
 }
 
 status() {
@@ -228,8 +254,8 @@ case "${1:-}" in
     install)      install_script ;;
     enable-cron)  enable_cron ;;
     disable-cron) disable_cron ;;
-    run)          run_now ;;
+    run)          run_now "${2:-}" ;;
     status)       status ;;
     uninstall)    uninstall ;;
-    *) echo "usage: $0 {install|enable-cron|disable-cron|run|status|uninstall}"; exit 1 ;;
+    *) echo "usage: $0 {install|enable-cron|disable-cron|run [--db-only]|status|uninstall}"; exit 1 ;;
 esac
