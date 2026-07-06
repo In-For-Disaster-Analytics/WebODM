@@ -87,14 +87,26 @@ fi
 log INFO "backup start (DATE=$DATE, DB=$DB_NAME, skip_media=$SKIP_MEDIA, stage=$STAGE_ROOT)"
 
 # --- Preflight: corral must be mounted, writable, and responsive -------------
+# Probe corral in the BACKGROUND with a bounded wait. On a hung `hard` NFS mount even
+# `timeout` cannot kill a process wedged in uninterruptible (D) I/O, so we must NOT wait
+# on it: if the probe has not returned within the window, abandon it (it may remain in D
+# until corral recovers) and abort -- the script/terminal is never left hanging.
 corral_ok() {
     mountpoint -q /corral || { log ERROR "corral is not a mountpoint"; return 1; }
-    timeout "$PREFLIGHT_TIMEOUT" mkdir -p "$BACKUP_DIR" 2>/dev/null || { log ERROR "cannot create $BACKUP_DIR (timeout/denied)"; return 1; }
     local probe="$BACKUP_DIR/.write_test.$$"
-    timeout "$PREFLIGHT_TIMEOUT" bash -c "touch '$probe' && rm -f '$probe'" 2>/dev/null || { log ERROR "corral not writable within ${PREFLIGHT_TIMEOUT}s"; return 1; }
+    ( timeout "$PREFLIGHT_TIMEOUT" bash -c "mkdir -p '$BACKUP_DIR' && touch '$probe' && rm -f '$probe'" >/dev/null 2>&1 ) &
+    local pp=$! waited=0 limit=$((PREFLIGHT_TIMEOUT + 5))
+    while kill -0 "$pp" 2>/dev/null; do
+        sleep 1; waited=$((waited + 1))
+        if (( waited >= limit )); then
+            log ERROR "corral did not respond in ${waited}s; mount appears hung (probe pid $pp may be stuck in D until corral recovers)"
+            return 1
+        fi
+    done
+    wait "$pp" 2>/dev/null || { log ERROR "corral not writable (probe failed within ${PREFLIGHT_TIMEOUT}s)"; return 1; }
     return 0
 }
-corral_ok || fail "corral preflight failed; skipping backup (mount down or Permission denied)"
+corral_ok || fail "corral preflight failed; skipping backup (mount down/hung or Permission denied)"
 mkdir -p "$STAGE_ROOT" "$DB_STAGE_DIR" || fail "cannot create local staging under $STAGE_ROOT"
 
 # --- Database backup: dump LOCALLY, verify, then copy to corral in one pass ---
