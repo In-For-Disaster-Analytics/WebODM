@@ -1,5 +1,6 @@
 import React from 'react';
 import './css/ModelView.scss';
+import PluginsAPI from './classes/plugins/API';
 import ErrorMessage from './components/ErrorMessage';
 import SwitchModeButton from './components/SwitchModeButton';
 import AssetDownloadButtons from './components/AssetDownloadButtons';
@@ -386,6 +387,8 @@ class ModelView extends React.Component {
           material.size = 1;
 
           viewer.fitToScreen();
+
+          PluginsAPI.Model.triggerWillAddControls({ viewer, task: this.props.task });
 
           if (getUnitSystem() === 'metric'){
               viewer.setLengthUnitAndDisplayUnit('m', 'm');

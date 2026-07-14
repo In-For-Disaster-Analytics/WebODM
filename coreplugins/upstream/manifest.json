@@ -1,0 +1,13 @@
+{
+	"name": "Upstream Sensor Overlay",
+	"webodmMinVersion": "2.5.0",
+	"description": "Overlay Upstream sensor station data on orthophotos and point clouds with time-aware color mapping",
+	"version": "1.0.0",
+	"author": "TACC / In-For-Disaster-Analytics",
+	"email": "wmobley@tacc.utexas.edu",
+	"repository": "https://github.com/In-For-Disaster-Analytics/WebODM",
+	"tags": ["sensors", "upstream", "overlay", "time-series", "orthophoto", "point-cloud"],
+	"homepage": "https://github.com/In-For-Disaster-Analytics/upstream",
+	"experimental": false,
+	"deprecated": false
+}

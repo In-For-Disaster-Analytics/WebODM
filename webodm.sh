@@ -429,8 +429,8 @@ start(){
 			export WO_PORT=443
 		fi
 
-		# Make sure we have a hostname
-		if [ "$WO_HOST" = "localhost" ]; then
+		# Make sure we have a hostname (only required for Let's Encrypt; manual certs work with localhost)
+		if [ "$WO_HOST" = "localhost" ] && [ "$method" = "Lets Encrypt" ]; then
 			echo -e "\033[91mSSL is enabled, but hostname cannot be set to $WO_HOST. Set the --hostname argument to the domain of your WebODM server (for example: www.mywebodm.org).\033[39m"
 			exit 1
 		fi
