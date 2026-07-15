@@ -140,7 +140,14 @@ class ProjectDiscover(APIView):
         get_and_check_project(request, pk)
         token = _get_user_token(request)
         if not token:
-            return Response({'error': 'No Tapis token. Please log in via Tapis first.'},
+            try:
+                from app.models import TapisOAuth2Client
+                client = TapisOAuth2Client.objects.filter(is_active=True).first()
+                login_url = f'/api/oauth2/tapis/authorize/{client.client_id}/' if client else None
+            except Exception:
+                login_url = None
+            return Response({'error': 'No Tapis token. Please log in via Tapis first.',
+                             'login_url': login_url},
                             status=status.HTTP_401_UNAUTHORIZED)
         stacks = _discover_upstream_pods(token)
         return Response({'stacks': stacks})

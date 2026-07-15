@@ -259,6 +259,7 @@ class SettingsPanel extends React.Component {
             campaignId: config.campaign_id || '',
             loading: false,
             error: null,
+            loginUrl: null,
             saved: false,
         };
     }
@@ -280,8 +281,10 @@ class SettingsPanel extends React.Component {
                 });
             })
             .fail(xhr => {
-                const msg = xhr.responseJSON ? xhr.responseJSON.error : 'Discovery failed';
-                this.setState({ error: msg, loading: false });
+                const json = xhr.responseJSON || {};
+                const msg = json.error || 'Discovery failed';
+                const loginUrl = json.login_url || null;
+                this.setState({ error: msg, loginUrl, loading: false });
             });
     }
 
@@ -355,6 +358,12 @@ class SettingsPanel extends React.Component {
                             </label>
                         )}
                         {error && <p className="upstream-err">{error}</p>}
+                        {this.state.loginUrl && (
+                            <a href={this.state.loginUrl + '?redirect_after=' + encodeURIComponent(window.location.href)}
+                               className="upstream-link" style={{ display: 'inline-block', marginBottom: 8 }}>
+                                Log in with Tapis →
+                            </a>
+                        )}
                         {!loading && stacks.length > 0 && (
                             <button disabled={loading} onClick={() => this.connect()}>Connect</button>
                         )}
