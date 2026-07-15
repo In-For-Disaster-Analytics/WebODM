@@ -1,0 +1,76 @@
+.upstream-settings-btn {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    cursor: pointer;
+    background: white;
+    border-radius: 4px;
+    user-select: none;
+
+    &:hover { background: #f4f4f4; }
+}
+
+.upstream-panel {
+    position: fixed;
+    top: 60px;
+    right: 10px;
+    z-index: 9999;
+    background: white;
+    border-radius: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+    padding: 16px;
+    min-width: 280px;
+    max-width: 340px;
+    font-family: sans-serif;
+    font-size: 13px;
+}
+
+.upstream-settings {
+    h4 { margin: 0 0 12px; font-size: 14px; color: #333; }
+
+    label {
+        display: block;
+        margin-bottom: 8px;
+        color: #555;
+
+        input, select {
+            display: block;
+            width: 100%;
+            margin-top: 3px;
+            padding: 5px 7px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+    }
+
+    button {
+        padding: 6px 14px;
+        background: #2196F3;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+
+        &:disabled { opacity: 0.6; cursor: default; }
+        &:hover:not(:disabled) { background: #1976D2; }
+    }
+
+    .upstream-link {
+        background: none;
+        color: #2196F3;
+        padding: 6px 4px;
+        text-decoration: underline;
+        font-size: 12px;
+
+        &:hover { color: #1976D2; background: none; }
+    }
+}
+
+.upstream-ok { color: #388E3C; font-size: 12px; margin: 4px 0 10px; }
+.upstream-err { color: #d32f2f; font-size: 12px; margin: 4px 0; }

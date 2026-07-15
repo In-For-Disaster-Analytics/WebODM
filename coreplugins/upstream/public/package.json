@@ -1,0 +1,13 @@
+{
+  "name": "upstream",
+  "version": "1.0.0",
+  "description": "Upstream sensor overlay plugin",
+  "main": "main.js",
+  "scripts": {
+    "build": "webpack --mode production",
+    "watch": "webpack --mode development --watch"
+  },
+  "author": "TACC / In-For-Disaster-Analytics",
+  "license": "ISC",
+  "dependencies": {}
+}

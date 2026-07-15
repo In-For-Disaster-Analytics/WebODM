@@ -212,13 +212,18 @@ class TapisOAuth2CallbackView(View):
             expires_in = token_data.get('expires_in')
             expires_at = TapisOAuth2Token.compute_expires_at(expires_in, access_token_value)
             
+            # Tapis wraps refresh_token as {"refresh_token": "...", "expires_at": "..."}
+            raw_refresh = token_data.get('refresh_token', '')
+            if isinstance(raw_refresh, dict):
+                raw_refresh = raw_refresh.get('refresh_token', '')
+
             # Create or update token
             token, created = TapisOAuth2Token.objects.update_or_create(
                 user=user,
                 client=client,
                 defaults={
                     'access_token': access_token_value,
-                    'refresh_token': token_data.get('refresh_token', ''),
+                    'refresh_token': raw_refresh,
                     'token_type': token_data.get('token_type', 'Bearer'),
                     'scope': token_data.get('scope', ''),
                     'expires_at': expires_at

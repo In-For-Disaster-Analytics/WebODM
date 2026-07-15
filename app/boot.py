@@ -19,7 +19,7 @@ from nodeodm.models import ProcessingNode
 from webodm.settings import MEDIA_ROOT
 from . import signals
 import logging
-from .models import Task, Setting
+from .models import Task, Setting, TapisOAuth2Client
 from webodm import settings
 from webodm.wsgi import booted
 
@@ -137,6 +137,7 @@ def boot():
                     s.app_logo.save(os.path.basename(settings.APP_DEFAULT_LOGO), File(f))
         
         init_plugins()
+        ensure_tapis_oauth2_client(logger)
 
         if not settings.TESTING:
             try:
@@ -147,6 +148,36 @@ def boot():
 
     except ProgrammingError:
         logger.warning("Could not touch the database. If running a migration, this is expected.")
+
+
+def ensure_tapis_oauth2_client(logger):
+    client_id = os.environ.get('WO_TAPIS_CLIENT_ID', '').strip()
+    client_secret = os.environ.get('WO_TAPIS_CLIENT_SECRET', '').strip()
+    base_url = os.environ.get('WO_TAPIS_BASE_URL', '').strip()
+    tenant_id = os.environ.get('WO_TAPIS_TENANT_ID', '').strip()
+    callback_url = os.environ.get('WO_TAPIS_CALLBACK_URL', '').strip()
+
+    if not all([client_id, client_secret, base_url, tenant_id, callback_url]):
+        return
+
+    try:
+        client, created = TapisOAuth2Client.objects.update_or_create(
+            client_id=client_id,
+            defaults=dict(
+                client_secret=client_secret,
+                base_url=base_url,
+                tenant_id=tenant_id,
+                callback_url=callback_url,
+                name=f'WebODM ({client_id})',
+                is_active=True,
+            ),
+        )
+        if created:
+            logger.info("Created Tapis OAuth2 client '%s' from environment", client_id)
+        else:
+            logger.info("Updated Tapis OAuth2 client '%s' from environment", client_id)
+    except Exception as e:
+        logger.warning("Could not ensure Tapis OAuth2 client: %s", e)
 
 
 def add_default_presets():
