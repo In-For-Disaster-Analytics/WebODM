@@ -55,12 +55,27 @@ class ChatStartView(TaskView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        remote_resources = publisher.build_remote_resources(task)
+        source_urls = [r['url'] for r in remote_resources]
+        file_lines = '\n'.join(
+            f"  - {r['name']} ({r['format']}): {r['url']}"
+            for r in remote_resources
+        )
+        message = (
+            'Analyze these WebODM outputs and propose CKAN dataset metadata.\n\n'
+            'The following files are available as authenticated remote downloads '
+            '(they are NOT locally accessible — do NOT call pdf_summarize or any '
+            'other file tool on these paths; the tools only work on local files):\n'
+            f'{file_lines}\n\n'
+            'Use the dataset metadata and the file list above to author the CKAN record.'
+        )
         payload = {
             'action': 'analyze',
-            'message': 'Analyze these WebODM outputs and propose CKAN dataset metadata.',
+            'message': message,
             'schema': 'generic_ckan',
             'dataset': publisher.build_dataset(task, publishing_user=request.user),
-            'remote_resources': publisher.build_remote_resources(task),
+            'source_urls': source_urls,
+            'remote_resources': remote_resources,
         }
 
         try:
@@ -88,12 +103,14 @@ class ChatStartView(TaskView):
         else:
             text = (data.get('result') or {}).get('review_markdown') or str(data)
 
-        # Initialise publish status so /publish-status is queryable immediately
+        # Initialise publish status so /publish-status is queryable immediately.
+        # Track has_pending_interrupt so ChatMessageView can route to /resume vs /runs.
         ds.set_json(_status_key(task.id), {
             'status': 'idle',
             'ckan_url': task.ckan_url or '',
             'thread_id': thread_id,
             'error': '',
+            'has_pending_interrupt': bool(requires_action),
         })
 
         return Response(
@@ -131,13 +148,29 @@ class ChatMessageView(TaskView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Route to /resume only when the graph is paused at an interrupt (e.g. a
+        # clarification question). After propose → END there is no pending interrupt,
+        # so calling /resume returns in <20ms with no work done. Instead call /runs
+        # with session_id so the intake node loads the prior state and routes the
+        # message via LLM (revise, dry-run, apply, etc.).
+        state_record = ds.get_json(_status_key(task.id), {})
+        has_pending_interrupt = state_record.get('has_pending_interrupt', False)
+
         try:
-            r = requests.post(
-                f'{_agent_url()}/v1/ckan-registration/runs/{thread_id}/resume',
-                headers={'Authorization': f'Bearer {jwt}'},
-                json={'message': message},
-                timeout=90,
-            )
+            if has_pending_interrupt:
+                r = requests.post(
+                    f'{_agent_url()}/v1/ckan-registration/runs/{thread_id}/resume',
+                    headers={'Authorization': f'Bearer {jwt}'},
+                    json={'message': message},
+                    timeout=90,
+                )
+            else:
+                r = requests.post(
+                    f'{_agent_url()}/v1/ckan-registration/runs',
+                    headers={'Authorization': f'Bearer {jwt}'},
+                    json={'session_id': thread_id, 'message': message},
+                    timeout=90,
+                )
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.exception('CKAN: agent message request failed')
@@ -148,7 +181,12 @@ class ChatMessageView(TaskView):
 
         data = r.json()
 
+        # Keep the interrupt flag current so subsequent messages route correctly.
         requires_action = data.get('requires_action')
+        current_record = ds.get_json(_status_key(task.id), {})
+        current_record['has_pending_interrupt'] = bool(requires_action)
+        ds.set_json(_status_key(task.id), current_record)
+
         if requires_action and requires_action.get('message'):
             text = requires_action['message']
         else:

@@ -1,4 +1,29 @@
 {
   "version": 1,
-  "bugs": []
+  "bugs": [
+    {
+      "id": "bug-001",
+      "timestamp": "2026-07-16",
+      "error_message": "CKAN chat times out; 4 rapid graph invocations each exit in <20ms after propose completes",
+      "file": "coreplugins/ckan/api_views.py, coreplugins/ckan/publisher.py",
+      "root_cause": "ChatMessageView and apply_ckan_publish unconditionally called /resume even when the graph had no pending interrupt (post-propose → END). LangGraph Command(resume=...) returns in <20ms with no work done when there is no interrupt.",
+      "fix": "Track has_pending_interrupt in GlobalDataStore. ChatMessageView routes to /resume when True, else /runs with session_id. apply_ckan_publish changed from /resume to /runs.",
+      "tags": ["langgraph", "interrupt", "ckan", "chat", "timeout", "celery"],
+      "related_bugs": ["bug-002"],
+      "occurrences": 1,
+      "last_seen": "2026-07-16"
+    },
+    {
+      "id": "bug-002",
+      "timestamp": "2026-07-16",
+      "error_message": "Persona node takes 107 seconds; LLM hallucinates local PDF paths and burns 6-call tool budget on useless pdf_summarize calls",
+      "file": "coreplugins/ckan/api_views.py",
+      "root_cause": "ChatStartView sent remote_resources (list of {url, name, format} dicts) instead of source_urls (list of URL strings). The agent's _gather_evidence() only reads source_url/source_urls; has_data was false. With no data context, Meta-Llama-3.3-70B invented local PDF paths. Each failed pdf_summarize call costs ~5-6s (LLM decides next action after FileSafetyError), 6 calls = ~36s per round, two rounds = 72+ seconds.",
+      "fix": "In ChatStartView.post(): extract URLs from remote_resources into source_urls list (so has_data=true). Build an informative message listing the file names/formats and explicitly instructing the LLM NOT to call file tools on these paths (they are remote, not locally accessible).",
+      "tags": ["ckan", "persona", "llm", "hallucination", "pdf_summarize", "source_urls", "remote_resources", "timeout"],
+      "related_bugs": ["bug-001"],
+      "occurrences": 1,
+      "last_seen": "2026-07-16"
+    }
+  ]
 }

@@ -480,10 +480,13 @@ def apply_ckan_publish(task_id, thread_id, user_id):
                 f'Tapis token for {user.username} is expired and could not be refreshed.'
             )
 
+        # After propose → END there is no pending interrupt, so /resume would return
+        # immediately with no work done. Use /runs with session_id so the intake node
+        # loads the prior state and the apply node executes the live CKAN write.
         r = requests.post(
-            f"{_settings.WO_DSO_AGENT_URL.rstrip('/')}/v1/ckan-registration/runs/{thread_id}/resume",
+            f"{_settings.WO_DSO_AGENT_URL.rstrip('/')}/v1/ckan-registration/runs",
             headers={'Authorization': f'Bearer {jwt}'},
-            json={'action': 'apply', 'approval': 'REGISTER'},
+            json={'session_id': thread_id, 'action': 'apply', 'approval': 'REGISTER'},
             timeout=120,
         )
         r.raise_for_status()
