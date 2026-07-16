@@ -412,16 +412,32 @@ def bbox_wkt(geom):
 
 
 def build_remote_resources(task):
-    """Build RemoteResource list from task.available_assets."""
+    """Build RemoteResource list from task.available_assets plus WebODM viewer links."""
     base = django_settings.WO_URL.rstrip('/')
-    return [
+    pid = task.project_id
+    tid = task.id
+
+    resources = [
         {
-            'url': f'{base}/api/projects/{task.project_id}/tasks/{task.id}/download/{asset}',
+            'url': f'{base}/api/projects/{pid}/tasks/{tid}/download/{asset}',
             'name': _friendly_name(asset),
             'format': _infer_format(asset),
         }
         for asset in task.available_assets
     ]
+
+    resources.append({
+        'url': f'{base}/projects/{pid}/tasks/{tid}/map',
+        'name': 'Web Map Viewer',
+        'format': 'HTML',
+    })
+    resources.append({
+        'url': f'{base}/projects/{pid}/tasks/{tid}/model',
+        'name': '3D Model Viewer',
+        'format': 'HTML',
+    })
+
+    return resources
 
 
 # ── Celery task (must be fully self-contained) ────────────────────────────────
