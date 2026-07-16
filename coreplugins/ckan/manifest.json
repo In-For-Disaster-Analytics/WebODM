@@ -1,0 +1,13 @@
+{
+	"name": "CKAN",
+	"webodmMinVersion": "0.6.0",
+	"description": "Publish completed ODM tasks as CKAN datasets via dso-agent-api",
+	"version": "1.0.0",
+	"author": "DSO / TACC",
+	"email": "",
+	"repository": "https://github.com/In-For-Disaster-Analytics/odm-suite",
+	"tags": ["ckan", "dso", "tacc", "publish"],
+	"homepage": "https://github.com/In-For-Disaster-Analytics/odm-suite",
+	"experimental": false,
+	"deprecated": false
+}

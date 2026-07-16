@@ -140,8 +140,13 @@ class TapisOAuth2CallbackView(View):
             # Store tokens
             self._store_user_tokens(user, client, token_data)
             
-            # Trigger flight discovery in background after successful login
-            self._trigger_flight_discovery(user, client)
+            # Trigger flight discovery without blocking the HTTP response
+            import threading
+            threading.Thread(
+                target=self._trigger_flight_discovery,
+                args=(user, client),
+                daemon=True,
+            ).start()
             
             # Cleanup state
             redirect_url = state_obj.redirect_after_auth or '/dashboard/'
@@ -265,9 +270,9 @@ class TapisOAuth2CallbackView(View):
                 # Update last discovery timestamp
                 preferences.update_last_discovery()
                 
-            except ImportError:
-                # Fallback to synchronous discovery if Celery is not available
-                logger.warning("Celery not available, running synchronous flight discovery")
+            except Exception:
+                # Fallback to synchronous discovery if Celery task dispatch fails
+                logger.warning("Celery dispatch failed, running synchronous flight discovery")
                 try:
                     from app.services.tapis_storage import TapisFlightDiscoveryService
                     

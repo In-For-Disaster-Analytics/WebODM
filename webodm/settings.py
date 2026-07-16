@@ -453,6 +453,13 @@ try:
 except ValueError:
     TAS_ALLOCATION_CACHE_SECONDS = int(JWT_AUTH['JWT_EXPIRATION_DELTA'].total_seconds())
 
+# DSO Agent API — CKAN publishing via dso-agent-api + Tapis OAuth2
+# Feature is inactive unless WO_DSO_AGENT_URL is set.
+# Auth uses the logged-in user's stored Tapis OAuth2 token (TapisOAuth2Token).
+WO_DSO_AGENT_URL = os.environ.get('WO_DSO_AGENT_URL', '')
+# Externally reachable base URL for WebODM (used to build CKAN resource links).
+WO_URL           = os.environ.get('WO_URL', 'http://localhost:8000')
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

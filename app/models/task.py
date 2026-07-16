@@ -290,8 +290,9 @@ class Task(models.Model):
     size = models.FloatField(default=0.0, blank=True, help_text=_("Size of the task on disk in megabytes"), verbose_name=_("Size"))
     compacted = models.BooleanField(default=False, help_text=_("A flag indicating whether this task was compacted"), verbose_name=_("Compact"))
     crop = GeometryField(null=True, blank=True, srid=4326, help_text=_("Polygon defining the crop area of this task"), verbose_name=_("Crop Polygon"))
+    ckan_url = models.URLField(null=True, blank=True, help_text=_("CKAN dataset URL if this task has been published"), verbose_name=_("CKAN URL"))
 
-    
+
     class Meta:
         verbose_name = _("Task")
         verbose_name_plural = _("Tasks")
