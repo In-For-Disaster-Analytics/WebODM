@@ -465,12 +465,12 @@ def build_remote_resources(task, request=None):
     ]
 
     resources.append({
-        'url': f'{base}/projects/{pid}/tasks/{tid}/map',
+        'url': f'{base}/public/task/{tid}/map/',
         'name': 'Web Map Viewer',
         'format': 'HTML',
     })
     resources.append({
-        'url': f'{base}/projects/{pid}/tasks/{tid}/model',
+        'url': f'{base}/public/task/{tid}/3d/',
         'name': '3D Model Viewer',
         'format': 'HTML',
     })
