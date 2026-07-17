@@ -55,7 +55,7 @@ class ChatStartView(TaskView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        remote_resources = publisher.build_remote_resources(task)
+        remote_resources = publisher.build_remote_resources(task, request)
         source_urls = [r['url'] for r in remote_resources]
         file_lines = '\n'.join(
             f"  - {r['name']} ({r['format']}): {r['url']}"

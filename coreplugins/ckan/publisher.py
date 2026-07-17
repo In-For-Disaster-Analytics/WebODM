@@ -46,6 +46,20 @@ _FORMAT_MAP = {
 # Camera model substrings that indicate multispectral sensors
 _MULTISPECTRAL_KEYWORDS = ('m3m', 'm2m', 'micasense', 'parrot', 'sequoia', 'altum', 'rededge', 'p4m')
 
+# Only these assets are meaningful to catalog in CKAN — skip internal/intermediate files
+# (cameras.json, shots.geojson, ground_control_points.geojson, etc.)
+_PUBLISHABLE_ASSETS = {
+    'orthophoto.tif',
+    'dsm.tif',
+    'dtm.tif',
+    'georeferenced_model.laz',
+    'georeferenced_model.las',
+    'georeferenced_model.ply',
+    'textured_model.zip',
+    'report.pdf',
+    'all.zip',
+}
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -416,11 +430,21 @@ def bbox_wkt(geom):
         return None
 
 
-def build_remote_resources(task):
-    """Build RemoteResource list from task.available_assets plus WebODM viewer links."""
-    base = django_settings.WO_URL.rstrip('/')
+def build_remote_resources(task, request=None):
+    """Build RemoteResource list from task.available_assets plus WebODM viewer links.
+
+    Base URL is derived from the Django request when provided (handles multi-domain
+    deployments correctly), falling back to WO_URL. Only meaningful output assets are
+    included — intermediate files like cameras.json are excluded.
+    """
+    if request is not None:
+        base = request.build_absolute_uri('/').rstrip('/')
+    else:
+        base = django_settings.WO_URL.rstrip('/')
     pid = task.project_id
     tid = task.id
+
+    publishable = [a for a in task.available_assets if a in _PUBLISHABLE_ASSETS]
 
     resources = [
         {
@@ -428,7 +452,7 @@ def build_remote_resources(task):
             'name': _friendly_name(asset),
             'format': _infer_format(asset),
         }
-        for asset in task.available_assets
+        for asset in publishable
     ]
 
     resources.append({
@@ -484,6 +508,10 @@ def apply_ckan_publish(task_id, thread_id, user_id):
             raise RuntimeError(
                 f'Tapis token for {user.username} is expired and could not be refreshed.'
             )
+
+        # Make the task publicly accessible so the CKAN resource URLs work without auth.
+        Task.objects.filter(id=task_id).update(public=True)
+        _logger.info('CKAN publish: set task %s to public', task_id)
 
         # After propose → END there is no pending interrupt, so /resume would return
         # immediately with no work done. Use /runs with session_id so the intake node
