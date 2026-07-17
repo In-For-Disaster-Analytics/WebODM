@@ -16,7 +16,10 @@ http {
 
   # fallback in case we can't determine a type
   default_type application/octet-stream;
-  access_log off;
+  log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                 '$status $body_bytes_sent "$http_referer" '
+                 '"$http_user_agent" "$http_x_forwarded_for"';
+  access_log /var/log/nginx/access.log main;
   sendfile on;
 
   gzip on;
@@ -52,6 +55,12 @@ http {
 
     proxy_connect_timeout 60s;
     proxy_read_timeout 300000s;
+
+    location /nginx_status {
+      stub_status on;
+      allow 127.0.0.1;
+      deny all;
+    }
 
     # path for static files
     location /static {
