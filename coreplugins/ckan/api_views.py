@@ -66,7 +66,11 @@ class ChatStartView(TaskView):
         known_owner_org = state_record.get('owner_org', '') or ''
 
         remote_resources = publisher.build_remote_resources(task, request)
-        source_urls = [r['url'] for r in remote_resources]
+        # Do NOT pass download URLs as source_urls — they require authentication and are
+        # binary file downloads, not metadata pages. Passing them would cause the agent to
+        # see the /api/projects/{pid}/tasks/{tid}/ pattern twice and invert it into wrong
+        # /projects/{pid}/tasks/{uuid}/map viewer URLs for the dataset `url` field.
+        source_urls = []
         file_lines = '\n'.join(
             f"  - {r['name']} ({r['format']}): {r['url']}"
             for r in remote_resources
@@ -77,10 +81,13 @@ class ChatStartView(TaskView):
             '(they are NOT local file paths — use `fetch_remote_pdf` for any PDF URL, '
             'NOT `pdf_summarize` which requires a local path):\n'
             f'{file_lines}\n\n'
-            'IMPORTANT: Register ONLY the resource URLs listed above as CKAN resources. '
-            'Do NOT construct, modify, or infer any other WebODM URLs — the URLs provided '
-            'above are the correct, publicly accessible formats. In particular, do NOT use '
-            'the /projects/ URL pattern; use the /public/task/ URLs shown above for viewers.'
+            'IMPORTANT — resource URLs: Register ONLY the resource URLs listed above as '
+            'CKAN resources. Do NOT construct, modify, or infer any other WebODM URLs. '
+            'In particular, do NOT use the /projects/ URL pattern for viewer links — '
+            'use the /public/task/ URLs shown above.\n'
+            'IMPORTANT — dataset `url` field: Set it to null. There is no public '
+            'landing-page URL for this WebODM task; do not populate `url` with a '
+            'download link or a constructed task/viewer URL.'
         )
         payload = {
             'action': 'analyze',
