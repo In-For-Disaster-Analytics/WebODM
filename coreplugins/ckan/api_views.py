@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 import requests
 from django.conf import settings
@@ -26,6 +27,10 @@ def _agent_url():
 
 def _agent_available():
     return bool(_agent_url())
+
+
+def _now():
+    return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 class ChatStartView(TaskView):
@@ -69,10 +74,13 @@ class ChatStartView(TaskView):
         message = (
             'Analyze these WebODM outputs and propose CKAN dataset metadata.\n\n'
             'The following files are available as authenticated remote downloads '
-            '(they are NOT locally accessible — do NOT call pdf_summarize or any '
-            'other file tool on these paths; the tools only work on local files):\n'
+            '(they are NOT local file paths — use `fetch_remote_pdf` for any PDF URL, '
+            'NOT `pdf_summarize` which requires a local path):\n'
             f'{file_lines}\n\n'
-            'Use the dataset metadata and the file list above to author the CKAN record.'
+            'IMPORTANT: Register ONLY the resource URLs listed above as CKAN resources. '
+            'Do NOT construct, modify, or infer any other WebODM URLs — the URLs provided '
+            'above are the correct, publicly accessible formats. In particular, do NOT use '
+            'the /projects/ URL pattern; use the /public/task/ URLs shown above for viewers.'
         )
         payload = {
             'action': 'analyze',
@@ -126,6 +134,7 @@ class ChatStartView(TaskView):
             'thread_id': thread_id,
             'error': '',
             'has_pending_interrupt': bool(requires_action),
+            'timestamp': _now(),
         })
 
         return Response(
@@ -202,6 +211,7 @@ class ChatMessageView(TaskView):
             if has_pending_interrupt and isinstance(e, requests.exceptions.Timeout):
                 current_record = ds.get_json(_status_key(task.id), {})
                 current_record['has_pending_interrupt'] = False
+                current_record['timestamp'] = _now()
                 ds.set_json(_status_key(task.id), current_record)
             return Response(
                 {'error': f'Agent unavailable: {e}'},
@@ -214,6 +224,7 @@ class ChatMessageView(TaskView):
         requires_action = data.get('requires_action')
         current_record = ds.get_json(_status_key(task.id), {})
         current_record['has_pending_interrupt'] = bool(requires_action)
+        current_record['timestamp'] = _now()
         ds.set_json(_status_key(task.id), current_record)
 
         if requires_action and requires_action.get('message'):
@@ -254,6 +265,7 @@ class ChatConfirmView(TaskView):
             'ckan_url': '',
             'thread_id': thread_id,
             'error': '',
+            'timestamp': _now(),
         })
 
         run_function_async(publisher.apply_ckan_publish, str(task.id), thread_id, request.user.id)

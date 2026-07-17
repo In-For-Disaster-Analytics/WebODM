@@ -493,8 +493,12 @@ def apply_ckan_publish(task_id, thread_id, user_id):
     from app.models.oauth2 import TapisOAuth2Client, TapisOAuth2Token
     from django.contrib.auth.models import User
     from django.conf import settings as _settings
+    from datetime import datetime
     import requests
     import logging
+
+    def _ts():
+        return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
     _logger = logging.getLogger('app.logger')
     ds = GlobalDataStore('ckan')
@@ -530,6 +534,7 @@ def apply_ckan_publish(task_id, thread_id, user_id):
             'ckan_url': '',
             'thread_id': thread_id,
             'error': '',
+            'timestamp': _ts(),
         })
 
         # After propose → END there is no pending interrupt, so /resume would return
@@ -578,6 +583,7 @@ def apply_ckan_publish(task_id, thread_id, user_id):
             'owner_org': owner_org,
             'thread_id': thread_id,
             'error': '',
+            'timestamp': _ts(),
         })
         _logger.info('CKAN publish succeeded for task %s: %s (%s)', task_id, dataset_url, resource_msg)
 
@@ -590,4 +596,5 @@ def apply_ckan_publish(task_id, thread_id, user_id):
             'ckan_url': '',
             'thread_id': thread_id,
             'error': str(e),
+            'timestamp': _ts(),
         })
