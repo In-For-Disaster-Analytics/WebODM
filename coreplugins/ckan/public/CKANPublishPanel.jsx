@@ -344,14 +344,7 @@ export default class CKANPublishPanel extends React.Component {
 
     componentDidUpdate(_, prevState) {
         if (prevState.messages.length !== this.state.messages.length && this._chatArea) {
-            const last = this.state.messages[this.state.messages.length - 1];
-            // Agent messages: scroll to top so the response reads from the beginning.
-            // User messages: scroll to bottom to show the loading indicator.
-            if (last && last.role === 'agent') {
-                this._chatArea.scrollTop = 0;
-            } else {
-                this._chatArea.scrollTop = this._chatArea.scrollHeight;
-            }
+            this._chatArea.scrollTop = this._chatArea.scrollHeight;
         }
     }
 
