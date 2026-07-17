@@ -416,16 +416,20 @@ def build_dataset(task, publishing_user=None):
 
 
 def bbox_wkt(geom):
-    """Return a WKT polygon bounding box from a Django geometry field, or None."""
+    """Return a GeoJSON polygon string from a Django geometry field, or None.
+
+    CKAN's spatial extension requires a JSON-encoded GeoJSON object, not WKT.
+    """
+    import json as _json
     if geom is None:
         return None
     try:
         ext = geom.extent  # (xmin, ymin, xmax, ymax)
         xmin, ymin, xmax, ymax = ext
-        return (
-            f'POLYGON(({xmin} {ymin}, {xmax} {ymin}, '
-            f'{xmax} {ymax}, {xmin} {ymax}, {xmin} {ymin}))'
-        )
+        return _json.dumps({
+            "type": "Polygon",
+            "coordinates": [[[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]],
+        })
     except Exception:
         return None
 
@@ -550,10 +554,16 @@ def apply_ckan_publish(task_id, thread_id, user_id):
 
         Task.objects.filter(id=task_id).update(ckan_url=dataset_url)
 
-        resource_msg = (
-            f'Registered {resource_created} of {resource_count} resources.'
-            if resource_count else ''
-        )
+        resource_errors = result_data.get('resource_errors') or []
+        if resource_count and resource_created < resource_count:
+            resource_msg = (
+                f'Registered {resource_created} of {resource_count} resources.'
+                + (f' Failures: {"; ".join(str(e) for e in resource_errors[:3])}' if resource_errors else '')
+            )
+        elif resource_count:
+            resource_msg = f'Registered {resource_created} of {resource_count} resources.'
+        else:
+            resource_msg = ''
         ds.set_json(status_key, {
             'status': 'success',
             'phase': 'complete',
