@@ -1,4 +1,4 @@
-worker_processes 1;
+worker_processes auto;
 
 # Change this if running outside docker!
 user root root;
@@ -6,8 +6,8 @@ pid /tmp/nginx.pid;
 error_log /dev/null;
 
 events {
-  worker_connections 1024; # increase if you have lots of clients
-  accept_mutex off; # set to 'on' if nginx worker_processes > 1
+  worker_connections 1024;
+  accept_mutex on;
   use epoll;
 }
 
@@ -18,6 +18,20 @@ http {
   default_type application/octet-stream;
   access_log off;
   sendfile on;
+
+  gzip on;
+  gzip_comp_level 5;
+  gzip_min_length 256;
+  gzip_proxied any;
+  gzip_types
+    application/javascript
+    application/json
+    application/x-javascript
+    image/svg+xml
+    text/css
+    text/javascript
+    text/plain
+    text/xml;
 
   upstream app_server {
     # fail_timeout=0 means we always retry an upstream even if it failed
