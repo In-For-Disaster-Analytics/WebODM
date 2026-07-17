@@ -90,7 +90,7 @@ class ChatStartView(TaskView):
                 f'{_agent_url()}/v1/ckan-registration/runs',
                 headers={'Authorization': f'Bearer {jwt}'},
                 json=payload,
-                timeout=90,
+                timeout=180,
             )
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
@@ -177,14 +177,14 @@ class ChatMessageView(TaskView):
                     f'{_agent_url()}/v1/ckan-registration/runs/{thread_id}/resume',
                     headers={'Authorization': f'Bearer {jwt}'},
                     json={'message': message},
-                    timeout=90,
+                    timeout=180,
                 )
             else:
                 r = requests.post(
                     f'{_agent_url()}/v1/ckan-registration/runs',
                     headers={'Authorization': f'Bearer {jwt}'},
                     json={'session_id': thread_id, 'message': message},
-                    timeout=90,
+                    timeout=180,
                 )
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
@@ -195,6 +195,14 @@ class ChatMessageView(TaskView):
                 except Exception:
                     pass
             logger.exception('CKAN: agent message request failed (body: %s)', _body)
+            # If a resume call timed out, the agent likely completed on the server side.
+            # Clear the interrupt flag so the next message routes to /runs instead of
+            # calling /resume on an already-finished graph (which returns instantly and
+            # appears "hung" to the user).
+            if has_pending_interrupt and isinstance(e, requests.exceptions.Timeout):
+                current_record = ds.get_json(_status_key(task.id), {})
+                current_record['has_pending_interrupt'] = False
+                ds.set_json(_status_key(task.id), current_record)
             return Response(
                 {'error': f'Agent unavailable: {e}'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
