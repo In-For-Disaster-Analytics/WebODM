@@ -258,10 +258,15 @@ def build_notes(task):
 
 
 def build_temporal_coverage(task):
-    """Return (start_iso, end_iso) capture dates from stats.json, or (None, None)."""
+    """Return (start_iso, end_iso) capture dates from stats.json, falling back to task.created_at."""
     stats = task.get_statistics()
     start = _parse_stats_date(stats.get('start_date'))
     end = _parse_stats_date(stats.get('end_date'))
+    fallback = task.created_at.strftime('%Y-%m-%d') if task.created_at else None
+    if not start:
+        start = fallback
+    if not end:
+        end = fallback
     return start, end
 
 
