@@ -75,12 +75,22 @@ class ChatStartView(TaskView):
             f"  - {r['name']} ({r['format']}): {r['url']}"
             for r in remote_resources
         )
+        report_url = next(
+            (r['url'] for r in remote_resources if r['url'].endswith('/download/report.pdf')),
+            None,
+        )
+        pdf_instruction = (
+            f'\nYour FIRST tool call MUST be: fetch_remote_pdf({{"url": "{report_url}"}})  '
+            '— do not call any other tool before reading the report.'
+            if report_url else ''
+        )
         message = (
             'Analyze these WebODM outputs and propose CKAN dataset metadata.\n\n'
             'The following files are available as authenticated remote downloads '
             '(they are NOT local file paths — use `fetch_remote_pdf` for any PDF URL, '
             'NOT `pdf_summarize` which requires a local path):\n'
-            f'{file_lines}\n\n'
+            f'{file_lines}'
+            f'{pdf_instruction}\n\n'
             'IMPORTANT — resource URLs: Register ONLY the resource URLs listed above as '
             'CKAN resources. Do NOT construct, modify, or infer any other WebODM URLs. '
             'In particular, do NOT use the /projects/ URL pattern for viewer links — '
