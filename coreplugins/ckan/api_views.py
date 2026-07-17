@@ -220,6 +220,8 @@ class ChatConfirmView(TaskView):
 
         ds.set_json(_status_key(task.id), {
             'status': 'publishing',
+            'phase': 'queued',
+            'message': 'Preparing to publish…',
             'ckan_url': '',
             'thread_id': thread_id,
             'error': '',

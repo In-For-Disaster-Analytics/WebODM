@@ -80,6 +80,7 @@ export default class CKANPublishPanel extends React.Component {
             threadId: null,
             agentStatus: null,
             publishStatus: 'idle',   // idle | publishing | success | error
+            publishMessage: '',      // phase message from the Celery task (polled)
             ckanUrl: props.task.ckan_url || '',
             error: '',
             loading: false,
@@ -110,12 +111,22 @@ export default class CKANPublishPanel extends React.Component {
             type: 'GET',
             url: `/api/plugins/ckan/task/${task.id}/publish-status`,
         }).done(data => {
+            const prevStatus = this.state.publishStatus;
             this.setState({
                 publishStatus: data.status,
+                publishMessage: data.message || '',
                 ckanUrl: data.ckan_url || this.state.ckanUrl,
                 error: data.error || '',
             });
-            if (data.status === 'success' || data.status === 'error') {
+            if (data.status === 'success') {
+                this._stopPolling();
+                if (prevStatus !== 'success') {
+                    const text = data.message
+                        ? `Published successfully. ${data.message}`
+                        : 'Published successfully.';
+                    this._appendMessage('agent', text);
+                }
+            } else if (data.status === 'error') {
                 this._stopPolling();
             }
         }).fail(() => {
@@ -235,7 +246,7 @@ export default class CKANPublishPanel extends React.Component {
     }
 
     renderPanel() {
-        const { messages, inputText, publishStatus, ckanUrl, error, loading, inputLocked } = this.state;
+        const { messages, inputText, publishStatus, publishMessage, ckanUrl, error, loading, inputLocked } = this.state;
 
         const modal = (
             <div style={styles.backdrop} onClick={() => this.setState({ panelOpen: false })}>
@@ -265,6 +276,11 @@ export default class CKANPublishPanel extends React.Component {
                     {loading && (
                         <div style={styles.agentMsg}>
                             <i className="fa fa-circle-notch fa-spin" /> Thinking…
+                        </div>
+                    )}
+                    {publishStatus === 'publishing' && publishMessage && (
+                        <div style={styles.phaseMsg}>
+                            <i className="fa fa-circle-notch fa-spin" /> {publishMessage}
                         </div>
                     )}
                     {publishStatus === 'success' && ckanUrl && (
@@ -421,6 +437,13 @@ const styles = {
     },
     msgText: {
         fontSize: 13,
+    },
+    phaseMsg: {
+        alignSelf: 'flex-start',
+        color: '#666',
+        fontStyle: 'italic',
+        fontSize: 12,
+        padding: '2px 0',
     },
     successMsg: {
         color: '#2d7a2d',

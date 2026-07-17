@@ -513,6 +513,16 @@ def apply_ckan_publish(task_id, thread_id, user_id):
         Task.objects.filter(id=task_id).update(public=True)
         _logger.info('CKAN publish: set task %s to public', task_id)
 
+        # Phase 1 — signal the frontend that the dataset record is being created.
+        ds.set_json(status_key, {
+            'status': 'publishing',
+            'phase': 'creating_dataset',
+            'message': 'Creating CKAN dataset record…',
+            'ckan_url': '',
+            'thread_id': thread_id,
+            'error': '',
+        })
+
         # After propose → END there is no pending interrupt, so /resume would return
         # immediately with no work done. Use /runs with session_id so the intake node
         # loads the prior state and the apply node executes the live CKAN write.
@@ -526,28 +536,40 @@ def apply_ckan_publish(task_id, thread_id, user_id):
         data = r.json()
 
         agent_status = data.get('status', '')
-        dataset_url = (data.get('result') or {}).get('dataset_url', '')
+        result_data = data.get('result') or {}
+        dataset_url = result_data.get('dataset_url', '')
+        resource_created = result_data.get('resource_created', 0)
+        resource_count = result_data.get('resource_count', 0)
 
         if not dataset_url:
             error_msg = (
-                (data.get('result') or {}).get('error')
+                result_data.get('error')
                 or f'Agent returned status={agent_status!r} with no dataset_url'
             )
             raise RuntimeError(error_msg)
 
         Task.objects.filter(id=task_id).update(ckan_url=dataset_url)
+
+        resource_msg = (
+            f'Registered {resource_created} of {resource_count} resources.'
+            if resource_count else ''
+        )
         ds.set_json(status_key, {
             'status': 'success',
+            'phase': 'complete',
+            'message': resource_msg,
             'ckan_url': dataset_url,
             'thread_id': thread_id,
             'error': '',
         })
-        _logger.info(f'CKAN publish succeeded for task {task_id}: {dataset_url}')
+        _logger.info('CKAN publish succeeded for task %s: %s (%s)', task_id, dataset_url, resource_msg)
 
     except Exception as e:
-        _logger.exception(f'CKAN apply failed for task {task_id}')
+        _logger.exception('CKAN apply failed for task %s', task_id)
         ds.set_json(status_key, {
             'status': 'error',
+            'phase': 'failed',
+            'message': '',
             'ckan_url': '',
             'thread_id': thread_id,
             'error': str(e),
