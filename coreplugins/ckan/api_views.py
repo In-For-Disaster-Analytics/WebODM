@@ -55,6 +55,11 @@ class ChatStartView(TaskView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # If this task was published before, reuse the stored owner_org so the
+        # agent skips the org-selection interrupt on re-publish.
+        state_record = ds.get_json(_status_key(task.id), {})
+        known_owner_org = state_record.get('owner_org', '') or ''
+
         remote_resources = publisher.build_remote_resources(task, request)
         source_urls = [r['url'] for r in remote_resources]
         file_lines = '\n'.join(
@@ -73,7 +78,9 @@ class ChatStartView(TaskView):
             'action': 'analyze',
             'message': message,
             'schema': 'generic_ckan',
-            'dataset': publisher.build_dataset(task, publishing_user=request.user),
+            'dataset': publisher.build_dataset(
+                task, publishing_user=request.user, owner_org=known_owner_org or None
+            ),
             'source_urls': source_urls,
             'remote_resources': remote_resources,
         }
@@ -87,7 +94,13 @@ class ChatStartView(TaskView):
             )
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logger.exception('CKAN: agent start request failed')
+            _body = ''
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    _body = e.response.text[:500]
+                except Exception:
+                    pass
+            logger.exception('CKAN: agent start request failed (body: %s)', _body)
             return Response(
                 {'error': f'Agent unavailable: {e}'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -105,9 +118,11 @@ class ChatStartView(TaskView):
 
         # Initialise publish status so /publish-status is queryable immediately.
         # Track has_pending_interrupt so ChatMessageView can route to /resume vs /runs.
+        # Preserve known_owner_org so subsequent re-publishes also skip the org prompt.
         ds.set_json(_status_key(task.id), {
             'status': 'idle',
             'ckan_url': task.ckan_url or '',
+            'owner_org': known_owner_org,
             'thread_id': thread_id,
             'error': '',
             'has_pending_interrupt': bool(requires_action),
@@ -173,7 +188,13 @@ class ChatMessageView(TaskView):
                 )
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logger.exception('CKAN: agent message request failed')
+            _body = ''
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    _body = e.response.text[:500]
+                except Exception:
+                    pass
+            logger.exception('CKAN: agent message request failed (body: %s)', _body)
             return Response(
                 {'error': f'Agent unavailable: {e}'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,

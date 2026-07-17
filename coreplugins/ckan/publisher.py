@@ -381,7 +381,7 @@ def _tas_email(username):
         return None
 
 
-def build_dataset(task, publishing_user=None):
+def build_dataset(task, publishing_user=None, owner_org=None):
     """
     Build the complete dataset override dict for the agent's analyze call.
     Passes all locally-available structured fields so the agent doesn't need
@@ -389,6 +389,8 @@ def build_dataset(task, publishing_user=None):
 
     author        = project owner (whoever created/owns the data)
     maintainer    = the WebODM user currently publishing to CKAN
+    owner_org     = CKAN org slug from a prior publish; omitted when unknown so the
+                    agent prompts the user to select one
     Emails passed as None when not populated — the agent must emit _gap_<field>
     per its MANDATORY RULES rather than an empty string.
     """
@@ -401,7 +403,7 @@ def build_dataset(task, publishing_user=None):
     maintainer = _user_display_name(publishing_user) if publishing_user else None
     maintainer_email = _user_email(publishing_user) if publishing_user else None
 
-    return {
+    dataset = {
         'title': build_title(task),
         'notes': build_notes(task),
         'spatial': bbox_wkt(task.orthophoto_extent),
@@ -413,6 +415,9 @@ def build_dataset(task, publishing_user=None):
         'maintainer': maintainer,
         'maintainer_email': maintainer_email,
     }
+    if owner_org:
+        dataset['owner_org'] = owner_org
+    return dataset
 
 
 def bbox_wkt(geom):
@@ -542,6 +547,7 @@ def apply_ckan_publish(task_id, thread_id, user_id):
         agent_status = data.get('status', '')
         result_data = data.get('result') or {}
         dataset_url = result_data.get('dataset_url', '')
+        owner_org = result_data.get('owner_org', '')
         resource_created = result_data.get('resource_created', 0)
         resource_count = result_data.get('resource_count', 0)
 
@@ -569,6 +575,7 @@ def apply_ckan_publish(task_id, thread_id, user_id):
             'phase': 'complete',
             'message': resource_msg,
             'ckan_url': dataset_url,
+            'owner_org': owner_org,
             'thread_id': thread_id,
             'error': '',
         })
