@@ -153,6 +153,18 @@ else
 
     congrats
 
+    # nginx.conf runs workers as `user root root`, which makes every worker call
+    # initgroups("root") on fork, rebuilding its supplementary groups from /etc/group.
+    # Docker's `group_add: ${WO_CORRAL_GROUP_ID}` only seeds this at container start and
+    # isn't guaranteed to survive that rebuild, so workers can non-deterministically lose
+    # the corral group and get Permission denied (403) serving /media/CACHE and
+    # /media/settings directly off the corral NFS mount. Make the group a static /etc/group
+    # entry so initgroups() reliably restores it on every fork.
+    if [ -n "$WO_CORRAL_GROUP_ID" ] && ! getent group "$WO_CORRAL_GROUP_ID" | grep -qw root; then
+        groupadd -f -g "$WO_CORRAL_GROUP_ID" corral 2>/dev/null || true
+        usermod -aG "$WO_CORRAL_GROUP_ID" root
+    fi
+
     nginx -c $(pwd)/nginx/$conf
 
     # Drop the Django app (the media writer) to the corral service account so
