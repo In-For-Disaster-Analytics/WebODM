@@ -1,3 +1,4 @@
+import hashlib
 import json
 import rio_tiler.utils
 from rasterio.enums import ColorInterp
@@ -7,6 +8,7 @@ from rasterio.errors import NotGeoreferencedWarning
 import urllib
 import os
 from .common import get_asset_download_filename
+from django.core.cache import cache
 from django.http import HttpResponse
 from rio_tiler.errors import TileOutsideBounds
 from rio_tiler.utils import has_alpha_band, \
@@ -93,6 +95,29 @@ def get_pointcloud_path(task):
     return task.get_asset_download_path("georeferenced_model.laz")
 
 
+# Raster metadata/tile computation is expensive (raster reads + numpy stats,
+# or hillshade/colormap/encode for tiles) but fully deterministic for a given
+# file + query params. Cache responses keyed on the raster's mtime so that a
+# reprocessed task naturally invalidates old entries.
+# See docs/incidents/2026-07-20-public-map-cpu-thread-oversubscription.md
+TILER_CACHE_TTL = 60 * 60 * 24 * 7  # 7 days
+
+
+def tiler_cache_key(prefix, raster_path, request, *extra):
+    try:
+        mtime = os.path.getmtime(raster_path)
+    except OSError:
+        mtime = 0
+
+    # Exclude the frontend's random cache-busting "cache" param, otherwise
+    # every request would get a unique key and never hit the cache.
+    query = "&".join(sorted(
+        "{}={}".format(k, v) for k, v in request.query_params.items() if k != "cache"
+    ))
+    raw = "{}:{}:{}:{}:{}".format(prefix, raster_path, mtime, query, ":".join(str(e) for e in extra))
+    return "tiler:" + hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
 class TileJson(TaskNestedView):
     def get(self, request, pk=None, project_pk=None, tile_type=""):
         """
@@ -171,6 +196,15 @@ class Metadata(TaskNestedView):
         raster_path = get_raster_path(task, tile_type)
         if not os.path.isfile(raster_path):
             raise exceptions.NotFound()
+
+        # crop=1 references task.crop indirectly (a DB field, not a query
+        # param), so it must be included explicitly or a changed crop area
+        # would incorrectly hit the old crop's cached entry.
+        cache_key = tiler_cache_key("metadata", raster_path, request, task.crop.wkt if task.crop else "")
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         try:
             with COGReader(raster_path) as src:
                 band_count = src.dataset.meta['count']
@@ -287,6 +321,7 @@ class Metadata(TaskNestedView):
         info['minzoom'] -= ZOOM_EXTRA_LEVELS
         info['bounds'] = {'value': bounds if bounds is not None else src.bounds, 'crs': src.dataset.crs}
 
+        cache.set(cache_key, info, TILER_CACHE_TTL)
         return Response(info)
 
 
@@ -368,6 +403,18 @@ class Tiles(TaskNestedView):
         url = get_raster_path(task, tile_type)
         if not os.path.isfile(url):
             raise exceptions.NotFound()
+
+        # crop=1 references task.crop indirectly (a DB field, not a query
+        # param), so it must be included explicitly or a changed crop area
+        # would incorrectly hit the old crop's cached entry.
+        cache_key = tiler_cache_key(
+            "tile", url, request, tile_type, z, x, y, scale, ext,
+            request.headers.get('Accept', ''), task.crop.wkt if task.crop else ""
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            data, content_type = cached
+            return HttpResponse(data, content_type=content_type)
 
         with COGReader(url) as src:
             if not src.tile_exists(z, x, y):
@@ -506,22 +553,22 @@ class Tiles(TaskNestedView):
                 rgb = hsv_blend(rgb, intensity)
                 if rgb is not None:
                     mask = tile.mask[tile_buffer:tilesize+tile_buffer, tile_buffer:tilesize+tile_buffer]
-                    return HttpResponse(
-                        render(rgb, mask, img_format=driver, **options),
-                        content_type="image/{}".format(ext)
-                    )
+                    data = render(rgb, mask, img_format=driver, **options)
+                    content_type = "image/{}".format(ext)
+                    cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+                    return HttpResponse(data, content_type=content_type)
 
             if color_map is not None:
-                return HttpResponse(
-                    tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, colormap=colormap.get(color_map),
-                                                                    **options),
-                    content_type="image/{}".format(ext)
-                )
+                data = tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, colormap=colormap.get(color_map),
+                                                                    **options)
+                content_type = "image/{}".format(ext)
+                cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+                return HttpResponse(data, content_type=content_type)
 
-            return HttpResponse(
-                tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, **options),
-                content_type="image/{}".format(ext)
-            )
+            data = tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, **options)
+            content_type = "image/{}".format(ext)
+            cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+            return HttpResponse(data, content_type=content_type)
 
 
 class Export(TaskNestedView):
