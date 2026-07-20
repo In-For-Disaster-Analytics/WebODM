@@ -518,7 +518,11 @@ class Map extends React.Component {
                   tileSize: TILESIZE,
                   tms: scheme === 'tms',
                   opacity: this.state.opacity / 100,
-                  detectRetina: true,
+                  // detectRetina quadruples the number of concurrent tile
+                  // requests (half-size tiles, one zoom level deeper) on
+                  // HiDPI screens, which overwhelms the tile-render backend.
+                  // See docs/incidents/2026-07-20-public-map-cpu-thread-oversubscription.md
+                  detectRetina: false,
                   zIndex: this.typeZIndex(type, zIndexGroup),
                 });
             
