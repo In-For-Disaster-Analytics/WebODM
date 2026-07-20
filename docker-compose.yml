@@ -57,6 +57,14 @@ services:
       - WO_TAS_ALLOCATION_CACHE_SECONDS
       - WO_DSO_AGENT_URL
       - WO_URL
+      # Prevent numpy/GDAL from each spawning their own thread pool per
+      # gunicorn worker; under concurrent raster requests this oversubscribes
+      # CPU cores and causes severe slowdowns.
+      # See ../docs/incidents/2026-07-20-public-map-cpu-thread-oversubscription.md
+      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - GDAL_NUM_THREADS=1
     restart: unless-stopped
     oom_score_adj: 0
   broker:
@@ -100,5 +108,13 @@ services:
       - WO_TAS_ALLOCATION_CACHE_SECONDS
       - WO_DSO_AGENT_URL
       - WO_URL
+      # Prevent numpy/GDAL from each spawning their own thread pool per
+      # worker process; under concurrent raster tasks this oversubscribes
+      # CPU cores and causes severe slowdowns.
+      # See ../docs/incidents/2026-07-20-public-map-cpu-thread-oversubscription.md
+      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - GDAL_NUM_THREADS=1
     restart: unless-stopped
     oom_score_adj: 250
