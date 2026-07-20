@@ -30,6 +30,7 @@ services:
       - broker
       - worker
     environment:
+      - WO_CORRAL_GROUP_ID
       - WO_PORT
       - WO_HOST
       - WO_DEBUG
