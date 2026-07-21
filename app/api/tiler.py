@@ -329,7 +329,11 @@ class Metadata(TaskNestedView):
                 try:
                     info['color_maps'].append({
                         'key': cmap,
-                        'color_map': colormap.get(cmap).values(),
+                        # list(...) matches DRF's JSONEncoder fallback for
+                        # iterables (tuple(item for item in obj)) byte-for-byte
+                        # as JSON, but unlike the lazy dict_values view, a
+                        # plain list is picklable for the cache.
+                        'color_map': list(colormap.get(cmap).values()),
                         'label': cmap_labels.get(cmap, cmap)
                     })
                 except FileNotFoundError:
