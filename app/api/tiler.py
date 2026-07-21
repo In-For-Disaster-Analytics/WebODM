@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import rio_tiler.utils
 from rasterio.enums import ColorInterp
 from rasterio.crs import CRS
@@ -48,6 +49,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 for custom_colormap in custom_colormaps:
     colormap = colormap.register(custom_colormap)
+
+logger = logging.getLogger('app.logger')
 
 
 def get_zoom_safe(src_dst):
@@ -116,6 +119,27 @@ def tiler_cache_key(prefix, raster_path, request, *extra):
     ))
     raw = "{}:{}:{}:{}:{}".format(prefix, raster_path, mtime, query, ":".join(str(e) for e in extra))
     return "tiler:" + hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def tiler_cache_set(cache_key, value):
+    # Caching is a pure optimization; a serialization failure here (e.g. an
+    # object that doesn't pickle cleanly) must never turn into a 500 for the
+    # caller. Log and skip caching rather than raising.
+    try:
+        cache.set(cache_key, value, TILER_CACHE_TTL)
+    except Exception:
+        logger.warning("Could not cache tiler response for key %s", cache_key, exc_info=True)
+
+
+def tiler_cache_get(cache_key):
+    # Symmetric with tiler_cache_set: treat any read/deserialization failure
+    # (e.g. a stale entry from before a format change) as a cache miss
+    # rather than letting it crash the request.
+    try:
+        return cache.get(cache_key)
+    except Exception:
+        logger.warning("Could not read cached tiler response for key %s", cache_key, exc_info=True)
+        return None
 
 
 class TileJson(TaskNestedView):
@@ -201,7 +225,7 @@ class Metadata(TaskNestedView):
         # param), so it must be included explicitly or a changed crop area
         # would incorrectly hit the old crop's cached entry.
         cache_key = tiler_cache_key("metadata", raster_path, request, task.crop.wkt if task.crop else "")
-        cached = cache.get(cache_key)
+        cached = tiler_cache_get(cache_key)
         if cached is not None:
             return Response(cached)
 
@@ -319,9 +343,13 @@ class Metadata(TaskNestedView):
             info['maxzoom'] = info['minzoom']
         info['maxzoom'] += ZOOM_EXTRA_LEVELS
         info['minzoom'] -= ZOOM_EXTRA_LEVELS
-        info['bounds'] = {'value': bounds if bounds is not None else src.bounds, 'crs': src.dataset.crs}
+        # dict(...) matches what DRF's JSONEncoder already produces for a
+        # CRS object (it falls back to dict() for anything with __getitem__),
+        # so this keeps the API response byte-identical while also making it
+        # picklable for the cache (the raw CRS object is not).
+        info['bounds'] = {'value': bounds if bounds is not None else src.bounds, 'crs': dict(src.dataset.crs)}
 
-        cache.set(cache_key, info, TILER_CACHE_TTL)
+        tiler_cache_set(cache_key, info)
         return Response(info)
 
 
@@ -411,7 +439,7 @@ class Tiles(TaskNestedView):
             "tile", url, request, tile_type, z, x, y, scale, ext,
             request.headers.get('Accept', ''), task.crop.wkt if task.crop else ""
         )
-        cached = cache.get(cache_key)
+        cached = tiler_cache_get(cache_key)
         if cached is not None:
             data, content_type = cached
             return HttpResponse(data, content_type=content_type)
@@ -555,19 +583,19 @@ class Tiles(TaskNestedView):
                     mask = tile.mask[tile_buffer:tilesize+tile_buffer, tile_buffer:tilesize+tile_buffer]
                     data = render(rgb, mask, img_format=driver, **options)
                     content_type = "image/{}".format(ext)
-                    cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+                    tiler_cache_set(cache_key, (data, content_type))
                     return HttpResponse(data, content_type=content_type)
 
             if color_map is not None:
                 data = tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, colormap=colormap.get(color_map),
                                                                     **options)
                 content_type = "image/{}".format(ext)
-                cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+                tiler_cache_set(cache_key, (data, content_type))
                 return HttpResponse(data, content_type=content_type)
 
             data = tile.post_process(in_range=(rescale_arr,)).render(img_format=driver, **options)
             content_type = "image/{}".format(ext)
-            cache.set(cache_key, (data, content_type), TILER_CACHE_TTL)
+            tiler_cache_set(cache_key, (data, content_type))
             return HttpResponse(data, content_type=content_type)
 
 
