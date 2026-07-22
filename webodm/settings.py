@@ -460,6 +460,17 @@ WO_DSO_AGENT_URL = os.environ.get('WO_DSO_AGENT_URL', '')
 # Externally reachable base URL for WebODM (used to build CKAN resource links).
 WO_URL           = os.environ.get('WO_URL', 'http://localhost:8000')
 
+# Label Studio integration (coreplugins/embeddings) — self-hosted Label Studio
+# Pod, e.g. https://labelstudio.pods.portals.tapis.io (see label-studio-tapis-auth).
+# Feature is inactive unless WO_LABEL_STUDIO_URL is set.
+WO_LABEL_STUDIO_URL = os.environ.get('WO_LABEL_STUDIO_URL', '')
+# Label Studio's OWN Personal Access Token (sent as `Authorization: Bearer`),
+# generated once by an admin inside the Label Studio instance itself — NOT a
+# Tapis JWT (see docs/design/2026-07-22-geospatial-embeddings-classification.md,
+# Decision 32). Used only for label_studio_client.py's server-to-server API
+# calls (project create/import/webhook-register); never sent to the browser.
+WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

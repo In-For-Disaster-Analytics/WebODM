@@ -1,23 +1,30 @@
 """
-DRF stub endpoints for the task-detail panel actions (design spec "API
-Endpoints" > "Task-detail panel (per-task)"). This is the FIRST
-implementation increment: URL routing/nesting and (for task-scoped views)
-task-level permission resolution are real, via
+DRF endpoints for the task-detail panel actions (design spec "API Endpoints"
+> "Task-detail panel (per-task)"). URL routing/nesting and (for task-scoped
+views) task-level permission resolution are real, via
 app.plugins.views.TaskView (== app.api.tasks.TaskNestedView), the same base
-class coreplugins/ckan and coreplugins/objdetect already use. The actual
-business logic each endpoint is meant to perform -- proxying Label Studio,
-queuing the embed-generate/model-train Tapis Actors, writing to the (not yet
-existing) embeddingsdb Pod, calling the DSO STAC API -- is explicitly NOT
-implemented here; see label_studio_client.py/embeddings_client.py/
-stac_client.py (not created in this increment; those Pods/Actors don't exist
-yet per the spec's own infrastructure sequencing).
+class coreplugins/ckan and coreplugins/objdetect already use.
+
+Second implementation increment: TaskLabelView is now real, backed by
+label_studio_client.py (project create + task import + webhook registration
+against Label Studio's actual REST API -- Decisions 10/32). Every other
+endpoint's business logic -- queuing the embed-generate/model-train Tapis
+Actors, writing to the (not yet existing) embeddingsdb Pod, calling the DSO
+STAC API -- is still explicitly NOT implemented; see embeddings_client.py/
+stac_client.py (not created yet; those Pods/Actors don't exist yet per the
+spec's own infrastructure sequencing).
 """
 
+from datetime import datetime, timezone
+
+from django.conf import settings
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.plugins.views import TaskView
+
+from . import label_studio_client
 
 
 def _not_implemented(message):
@@ -25,6 +32,23 @@ def _not_implemented(message):
         {'error': message},
         status=status.HTTP_501_NOT_IMPLEMENTED,
     )
+
+
+# Phase 1 default land-cover taxonomy (design spec "Phase 1 Research Findings").
+# PLACEHOLDER: the real `label_classes` DB table (site-scoped, with
+# instance-wide defaults -- Decision 12) lives in `embeddingsdb`, which does
+# not exist yet. Once it does, TaskLabelView.post() below should query it
+# (falling back to these same 7 rows as the instance-wide default, per the
+# design spec) instead of using this hardcoded list directly.
+_PHASE1_DEFAULT_LABEL_CLASSES = [
+    {'value': 'structure', 'display_name': 'Structure', 'color_hex': '#e6194b'},
+    {'value': 'vegetation', 'display_name': 'Vegetation', 'color_hex': '#3cb44b'},
+    {'value': 'bare_ground', 'display_name': 'Bare Ground', 'color_hex': '#ffe119'},
+    {'value': 'water', 'display_name': 'Water', 'color_hex': '#4363d8'},
+    {'value': 'road_paved', 'display_name': 'Road / Paved Surface', 'color_hex': '#911eb4'},
+    {'value': 'damage_debris', 'display_name': 'Damage / Debris', 'color_hex': '#f58231'},
+    {'value': 'other', 'display_name': 'Other', 'color_hex': '#808080'},
+]
 
 
 class TaskTilesView(TaskView):
@@ -51,18 +75,103 @@ class TaskLabelView(TaskView):
     """
     POST /api/plugins/embeddings/task/{task_pk}/label
 
-    Design spec: proxies to label-studio-tapis-auth's API (project create +
-    task import + webhook registration), returns the deep-link URL. See
-    "Label Studio Integration: Full Mechanics" and Decision 10.
+    Design spec: calls label_studio_client.py to create a Label Studio
+    project, import the selected tiles as tasks, and register a webhook --
+    then returns the real deep-link URL. See "Label Studio Integration: Full
+    Mechanics" and Decisions 10/32.
+
+    Two real placeholders, clearly marked below (see the design spec's own
+    scoping of this increment):
+      - label_config is generated from _PHASE1_DEFAULT_LABEL_CLASSES, not a
+        real `label_classes` query (embeddingsdb doesn't exist yet).
+      - each imported task's `meta.tile_observation_id` is set directly from
+        the request body's `tile_ids`, not a real tile_observation_id
+        (there's no tile_grid/tile_observations table yet to resolve one from).
     """
 
     def post(self, request, pk=None):
-        self.get_and_check_task(request, pk)
-        return _not_implemented(
-            'Label Studio proxying is not implemented yet. See design spec '
-            '"Label Studio Integration: Full Mechanics" and Decision 10 '
-            '(docs/design/2026-07-22-geospatial-embeddings-classification.md).'
-        )
+        task = self.get_and_check_task(request, pk)
+
+        if not (getattr(settings, 'WO_LABEL_STUDIO_URL', '') and
+                getattr(settings, 'WO_LABEL_STUDIO_API_TOKEN', '')):
+            return Response(
+                {'error': (
+                    'Label Studio integration is not configured on this '
+                    'WebODM instance -- WO_LABEL_STUDIO_URL and/or '
+                    'WO_LABEL_STUDIO_API_TOKEN are not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        tile_ids = request.data.get('tile_ids') or []
+        if not tile_ids:
+            return Response(
+                {'error': 'tile_ids is required and must be a non-empty list.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_name = task.name or 'unnamed'
+        title = f'{task_name} — {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
+
+        # PLACEHOLDER (see class docstring): real label_classes come from
+        # embeddingsdb once it exists; Phase 1's hardcoded 7-class taxonomy
+        # stands in for it today.
+        label_config = label_studio_client.build_label_config(_PHASE1_DEFAULT_LABEL_CLASSES)
+
+        base_url = request.build_absolute_uri('/').rstrip('/')
+        project_id_str, task_id_str = str(task.project_id), str(task.id)
+
+        # PLACEHOLDER (see class docstring): tile_ids stand in for real
+        # tile_observation_ids. Where a tile_id parses as "z/x/y", build a
+        # real per-tile image URL via WebODM's existing orthophoto tiler
+        # endpoint (app/api/urls.py); otherwise fall back to the task's
+        # whole-orthophoto thumbnail so Label Studio still has something
+        # fetchable to display.
+        ls_tasks = []
+        for tile_id in tile_ids:
+            parts = str(tile_id).split('/')
+            if len(parts) == 3 and all(p.lstrip('-').isdigit() for p in parts):
+                z, x, y = parts
+                image_url = (
+                    f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}'
+                    f'/orthophoto/tiles/{z}/{x}/{y}.png'
+                )
+            else:
+                image_url = f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}/thumbnail'
+
+            ls_tasks.append({
+                'data': {'image': image_url},
+                'meta': {
+                    'tile_observation_id': tile_id,  # PLACEHOLDER: see class docstring
+                    'webodm_task_id': task_id_str,
+                },
+            })
+
+        try:
+            project = label_studio_client.create_project(title=title, label_config=label_config)
+            project_id = project.get('id')
+            if project_id is None:
+                raise label_studio_client.LabelStudioAPIError(
+                    f'Label Studio project creation did not return an id: {project!r}'
+                )
+
+            label_studio_client.import_tasks(project_id, ls_tasks)
+
+            webhook_url = f'{base_url}/api/plugins/embeddings/labelstudio-webhook'
+            webhook_secret = getattr(settings, 'WO_LABELSTUDIO_WEBHOOK_SECRET', '')
+            label_studio_client.register_webhook(project_id, webhook_url, webhook_secret)
+
+            deep_link_url = label_studio_client.project_url(project_id)
+        except label_studio_client.LabelStudioConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except label_studio_client.LabelStudioAPIError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({
+            'project_id': project_id,
+            'label_studio_url': deep_link_url,
+            'tile_count': len(ls_tasks),
+        }, status=status.HTTP_200_OK)
 
 
 class TaskEmbedView(TaskView):

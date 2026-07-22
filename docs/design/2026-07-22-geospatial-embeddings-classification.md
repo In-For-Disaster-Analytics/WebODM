@@ -305,7 +305,9 @@ coreplugins/embeddings/
                                  #   page AND the separate per-model Diagnostics page
   api_views.py                  # DRF endpoints: tile selection, label-studio proxy, embed trigger,
                                  #   status, cross-project browse, train, predictions
-  label_studio_client.py        # Tapis-authenticated proxy to label-studio-tapis-auth's API
+  label_studio_client.py        # Server-to-server client for Label Studio's own REST API,
+                                 #   authenticated with WO_LABEL_STUDIO_API_TOKEN (Decision 32,
+                                 #   NOT a Tapis JWT -- that's only for the human deep-link login)
   embeddings_client.py          # Tapis Actor invocation (embed-generate, model-train) + pgvector queries
   mlflow_client.py               # Proxies the Diagnostics page/endpoint to the mlflow Pod server-side
   stac_client.py                 # DSO STAC API client: anonymous reads (browse/import) + Tapis-JWT
@@ -387,6 +389,7 @@ WO_EMBEDDINGS_DB_URL   = os.environ.get('WO_EMBEDDINGS_DB_URL', '')     # pgvect
 WO_EMBEDDINGS_ACTOR_ID = os.environ.get('WO_EMBEDDINGS_ACTOR_ID', '')   # embed-generate Actor
 WO_MODEL_ACTOR_ID      = os.environ.get('WO_MODEL_ACTOR_ID', '')       # model-train Actor
 WO_LABEL_STUDIO_URL    = os.environ.get('WO_LABEL_STUDIO_URL', '')     # https://labelstudio.pods.portals.tapis.io
+WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')  # Label Studio's OWN Personal Access Token (Bearer) -- see Decision 32. NOT a Tapis JWT.
 WO_LABELSTUDIO_WEBHOOK_SECRET = os.environ.get('WO_LABELSTUDIO_WEBHOOK_SECRET', '')  # shared secret, verifies inbound webhook calls
 WO_MLFLOW_TRACKING_URI = os.environ.get('WO_MLFLOW_TRACKING_URI', '')  # MLflow Pod, used by the diagnostics-proxy endpoint (model-train's own config points its Actor runtime at the same URI)
 WO_STAC_API_URL        = os.environ.get('WO_STAC_API_URL', 'https://stacapi.pods.portals.tapis.io/api/v1')  # DSO STAC API, existing service, read-only from this plugin
@@ -404,10 +407,13 @@ The `sites`/`tile_grid`/`visits`/`tile_observations`/`encoders`/`embeddings`/`co
 Task detail panel — two independent actions, different selection granularity:
   ├─ "Label a sample" → map view, click tiles to select → "Label in Label Studio"
   │    → POST .../label {tile_ids}   -- selective, human-in-the-loop
-  │    → Tapis JWT (user's existing token, same pattern as CKAN plugin Decision 2)
-  │    → POST label-studio-tapis-auth's /api/projects/ (label_config) + task import
+  │    → WO_LABEL_STUDIO_API_TOKEN (Label Studio's own Personal Access Token,
+  │      server-side only — Decision 32, NOT the user's Tapis JWT)
+  │    → POST Label Studio's own /api/projects/ (label_config) + task import
   │      (each task's meta carries tile_observation_id) + webhook registration
-  │    → deep-link opens in a new tab (Tapis SSO, no second login)
+  │    → deep-link opens in a new tab, carrying the user's own Tapis access
+  │      token so label-studio-tapis-auth's TapisOAuth2Backend logs them in
+  │      (SSO, no second login) -- a separate credential from the line above
   │    → user labels tiles; Label Studio POSTs ANNOTATION_CREATED/UPDATED to
   │      .../labelstudio-webhook (shared-secret verified) → upserts `labels` rows
   │    → map view polls the `labels` count for progress ("6 selected · 3 labeled so far")
@@ -502,7 +508,7 @@ User opens the page from the navbar (no task/project context required)
 
 ### Unit tests
 
-1. `label_studio_client.py` — mock the Label Studio API; verify project create/import payload and Tapis JWT header.
+1. `label_studio_client.py` — mock the Label Studio API; verify project create/import payload and the `Authorization: Bearer {WO_LABEL_STUDIO_API_TOKEN}` header (Decision 32 — not a Tapis JWT).
 2. `embeddings_client.py` — mock Actor invocation for both `embed-generate` and `model-train`; verify payload shape, including multi-project `tile_observation_ids` in the train payload.
 3. Encoder registry lookups — verify distinct `(model, version, size, band_config)` tuples never silently collide.
 4. `model_inputs` — verify a model trained across two different `webodm_task_id`s (different projects) is representable and queryable.
@@ -682,6 +688,13 @@ The security-reviewer flagged a real, previously-unaddressed gap: `embed-generat
 Resolves Open Question 15, revisiting the earlier "leave it open" call with new information from the security-review pass: `get_and_check_task` (the same function Decision 23 already leans on) re-evaluates `task.public`/`task.project.public` **on every request** — so the STAC-published asset's *bytes* already self-protect the instant a task flips back to private; there is no durable imagery-exposure gap. The one thing that doesn't self-protect is the STAC item's own *metadata* (its existence, bbox, capture date, item id) persisting anonymously-discoverable after the flip.
 
 Given that narrower, confirmed scope, a full nightly reconciliation job is more than v1 needs. New endpoint, `POST /api/plugins/embeddings/task/{task_pk}/retract-from-stac` — available once a task has been published (`stac_item_id` set), callable by the task owner or an admin — calls `DELETE {WO_STAC_API_URL}/collections/{id}/items/{id}` and clears `visits.stac_collection_id`/`stac_item_id`. A full nightly reconciliation job (comparing every `visits.stac_item_id` against current `public` flags and auto-retracting) remains a legitimate fast-follow, not a v1 blocker — `publish-to-stac` should not ship without this manual endpoint existing alongside it, but does not need to wait for automatic reconciliation.
+
+### Decision 32: `label_studio_client.py`'s server-to-server calls use a Label Studio Personal Access Token, not a Tapis JWT (Approved — 2026-07-22)
+Caught while starting to implement `label_studio_client.py`, the same way Decision 30 caught the missing Actor-credential model: this spec's language throughout (Assumptions, "Label Studio Integration: Full Mechanics", the Plugin File Structure comment) described the project-create/task-import/webhook-registration calls as a "Tapis-authenticated proxy" verifying a "Tapis JWT header" — checked against Label Studio's actual REST API docs, and that's not correct. Label Studio's REST API only accepts its own **Personal Access Token** (`Authorization: Bearer <token>`) or **Legacy Token** (`Authorization: Token <token>`) — it has no support for an external OAuth2/JWT bearer token from a third-party identity provider like Tapis.
+
+This does not contradict the deep-link SSO flow — that part of the spec is correct as written: `label-studio-tapis-auth`'s custom `TapisOAuth2Backend` really does let a human log into Label Studio's *UI* via a Tapis-verified token, with no second login. But that's a completely different code path from `label_studio_client.py`'s server-to-server API calls (create project, import tasks, register webhook), which run with no human in the loop and need a credential Label Studio's REST API actually understands.
+
+Resolution: a new setting, `WO_LABEL_STUDIO_API_TOKEN` — a Label Studio Personal Access Token, generated once by an admin user in the Label Studio instance itself and configured server-side, same "credentials never reach the browser" pattern as everything else in this plugin. `label_studio_client.py` sends it as `Authorization: Bearer {WO_LABEL_STUDIO_API_TOKEN}` on every project/task/webhook API call. The user-facing deep-link URL itself still carries the user's own Tapis access token (query param or session, per `label-studio-tapis-auth`'s own login flow) so the human lands in Label Studio without a second login — that mechanism is unchanged.
 
 ---
 
