@@ -1,0 +1,25 @@
+{% extends "app/plugins/templates/base.html" %}
+{% load i18n %}
+{% block content %}
+
+    <div class="row text-center">
+        <div class="col-md-12 col-sm-12">
+            <h4>{% trans 'Model Diagnostics' %}</h4>
+            <p>{% blocktrans %}Model ID: {{ model_id }}{% endblocktrans %}</p>
+
+            {% if not infra_configured %}
+                <div class="alert alert-warning" role="alert">
+                    {% trans 'This plugin is not fully configured yet. Set WO_EMBEDDINGS_DB_URL and WO_LABEL_STUDIO_URL to enable it.' %}
+                </div>
+            {% endif %}
+
+            <p>
+                {% trans 'This is a placeholder for the per-model Diagnostics page: split strategy, tuned hyperparameters, ROC-AUC, confusion matrix, feature importance, and calibration curve, proxied from MLflow.' %}
+            </p>
+            <p class="text-muted">
+                {% trans 'See Decision 18 in docs/design/2026-07-22-geospatial-embeddings-classification.md.' %}
+            </p>
+        </div>
+    </div>
+
+{% endblock %}

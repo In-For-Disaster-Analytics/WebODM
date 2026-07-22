@@ -1,0 +1,13 @@
+{
+	"name": "Embeddings & Classifier",
+	"webodmMinVersion": "2.6.0",
+	"description": "Generate geospatial embeddings from task imagery, label tiles via Label Studio, and train cross-project classifiers (see docs/design/2026-07-22-geospatial-embeddings-classification.md)",
+	"version": "0.1.0",
+	"author": "DSO / TACC",
+	"email": "",
+	"repository": "https://github.com/In-For-Disaster-Analytics/odm-suite",
+	"tags": ["embeddings", "classification", "labeling", "dso", "tacc"],
+	"homepage": "https://github.com/In-For-Disaster-Analytics/odm-suite",
+	"experimental": true,
+	"deprecated": false
+}

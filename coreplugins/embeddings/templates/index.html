@@ -1,0 +1,25 @@
+{% extends "app/plugins/templates/base.html" %}
+{% load i18n %}
+{% block content %}
+
+    <div class="row text-center">
+        <div class="col-md-12 col-sm-12">
+            <h4>{% trans 'Embeddings & Classifier' %}</h4>
+
+            {% if not infra_configured %}
+                <div class="alert alert-warning" role="alert">
+                    {% trans 'This plugin is not fully configured yet. Set WO_EMBEDDINGS_DB_URL and WO_LABEL_STUDIO_URL to enable it.' %}
+                </div>
+            {% endif %}
+
+            <p>
+                {% trans 'This is a placeholder for the cross-project Embeddings & Classifier workspace.' %}
+                {% trans 'It will let you pick any combination of tasks/projects, train a classifier, and review predictions.' %}
+            </p>
+            <p class="text-muted">
+                {% trans 'See docs/design/2026-07-22-geospatial-embeddings-classification.md for the full design.' %}
+            </p>
+        </div>
+    </div>
+
+{% endblock %}
