@@ -479,6 +479,12 @@ WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')
 # WebODM dependency). Feature is inactive unless WO_EMBEDDINGS_DB_URL is set.
 WO_EMBEDDINGS_DB_URL = os.environ.get('WO_EMBEDDINGS_DB_URL', '')
 
+# Tapis Actor IDs (coreplugins/embeddings) — both Actors are genuinely
+# registered as of this increment (see design spec Decision 37); defaults are
+# the real, confirmed actor_ids, overridable per-deployment via env var.
+WO_EMBEDDINGS_ACTOR_ID = os.environ.get('WO_EMBEDDINGS_ACTOR_ID', 'zO6oAZ488yxGk')  # embed-generate Actor
+WO_MODEL_ACTOR_ID = os.environ.get('WO_MODEL_ACTOR_ID', 'PrGMpgkVzENbp')  # model-train Actor
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

@@ -5,17 +5,20 @@ views) task-level permission resolution are real, via
 app.plugins.views.TaskView (== app.api.tasks.TaskNestedView), the same base
 class coreplugins/ckan and coreplugins/objdetect already use.
 
-Third implementation increment: TaskEmbedView/TaskEmbedStatusView are now
-real, backed by embeddings_client.py against the live `embeddingsdb` Pod
-(Decision 33) -- site selection/creation, the Decision 24/27 zoom-lock check,
-and real `visits`/`tile_observations` reads/writes all happen for real. The
-one piece that stays a stub is the actual `embed-generate` Tapis Actor
-invocation itself (embeddings_client.queue_embed_generate) -- that Actor is
-not registered with Tapis yet, so there is no Actor ID to invoke (see
-embeddings_client.py's own module docstring). TaskLabelView remains real from
-the prior increment, backed by label_studio_client.py. Every other
-endpoint's business logic -- model-train, the DSO STAC API -- is still
-explicitly NOT implemented; see stac_client.py (not created yet).
+Fourth implementation increment (Decision 37): TaskEmbedView.post() now
+genuinely queues the `embed-generate` Tapis Actor -- both Actors are
+registered with Tapis (WO_EMBEDDINGS_ACTOR_ID/WO_MODEL_ACTOR_ID,
+webodm/settings.py), and embeddings_client.apply_embed_generate() is a real,
+self-contained Celery task (queued via run_function_async) that authorizes
+the call with the triggering user's stored TapisOAuth2Token, mirroring
+coreplugins/ckan/publisher.py's apply_ckan_publish() exactly (see
+embeddings_client.py's own docstring, and design spec Decision 37). Site
+selection/creation, the Decision 24/27 zoom-lock check, and real
+`visits`/`tile_observations` reads/writes (Decision 33/34) are unchanged from
+the prior increment. TaskLabelView remains real from an earlier increment,
+backed by label_studio_client.py. model-train (queue_model_train) and the
+DSO STAC API remain explicitly NOT implemented; see embeddings_client.py's
+and stac_client.py's (not created yet) own docstrings.
 """
 
 from datetime import datetime, timezone
@@ -26,6 +29,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.plugins.views import TaskView
+from app.plugins.worker import run_function_async
 
 from . import embeddings_client
 from . import label_studio_client
@@ -188,16 +192,20 @@ class TaskEmbedView(TaskView):
     site_id (Decision 27) and honors zoom_override against a site's locked
     zoom (Decision 24/27).
 
-    Real in this increment (against the live embeddingsdb, Decision 33):
-    site resolution (existing site_id or new_site_name -> create_site()),
-    the Decision 24/27 zoom-lock check via get_site_zoom(), and the real
-    `visits` row via get_or_create_visit(). NOT real: the actual
-    embed-generate Actor invocation (embeddings_client.queue_embed_generate)
-    -- that Actor isn't registered with Tapis yet, so this step alone
-    returns 501, deliberately AFTER the visit row has already been created
-    for real. A visit legitimately exists once a user has committed to
-    embedding a task at a site, whether or not the Actor call itself
-    succeeds -- it is not rolled back just because that last step is a stub.
+    Real in this increment (against the live embeddingsdb, Decision 33, and
+    the real, registered embed-generate Actor, Decision 37): site resolution
+    (existing site_id or new_site_name -> create_site()), the Decision 24/27
+    zoom-lock check via get_site_zoom(), the real `visits` row via
+    get_or_create_visit(), and now the Actor invocation itself --
+    embeddings_client.apply_embed_generate() is queued via
+    run_function_async() (Celery), authorized by the requesting user's
+    stored Tapis OAuth2 token (see embeddings_client.py's own docstring).
+    The Actor call happens asynchronously -- this view does not block on it
+    or know its outcome; it returns 202 once queuing succeeds, same as the
+    CKAN plugin's own async-publish endpoint. A `visits` row is created
+    (via get_or_create_visit(), above) regardless of whether the queued
+    Actor call itself later succeeds -- a user has genuinely committed to
+    embedding a task at a site once that row exists.
     """
 
     def post(self, request, pk=None):
@@ -208,6 +216,15 @@ class TaskEmbedView(TaskView):
                 {'error': (
                     'Embeddings database integration is not configured on '
                     'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if not getattr(settings, 'WO_EMBEDDINGS_ACTOR_ID', ''):
+            return Response(
+                {'error': (
+                    'The embed-generate Tapis Actor is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_ACTOR_ID is not set.'
                 )},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -271,23 +288,22 @@ class TaskEmbedView(TaskView):
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Actor invocation: explicitly NOT implemented (no Actor ID exists yet) ---
-        try:
-            embeddings_client.queue_embed_generate(
-                webodm_task_id=str(task.id),
-                visit_id=visit_id,
-                zoom=zoom,
-                encoder=request.data.get('encoder', 'clay-v1.5-large-rgb'),
-            )
-        except NotImplementedError as e:
-            return Response(
-                {
-                    'error': str(e),
-                    'site_id': site_id,
-                    'visit_id': visit_id,
-                },
-                status=status.HTTP_501_NOT_IMPLEMENTED,
-            )
+        # --- Actor invocation: genuinely queued now (Decision 37) ---
+        # Fire-and-forget, same shape as the CKAN plugin's own async publish
+        # (coreplugins/ckan/api_views.py's PublishView.post() -> run_function_async
+        # (publisher.apply_ckan_publish, ...)) -- this view does not wait on
+        # or know the outcome of the queued Actor call; a real `visits` row
+        # already exists by this point regardless of how that call turns out.
+        run_function_async(
+            embeddings_client.apply_embed_generate,
+            str(task.id),
+            request.user.id,
+            site_id,
+            visit_id,
+            zoom,
+            request.data.get('encoder', 'clay-v1.5-large-rgb'),
+            zoom_override,
+        )
 
         return Response(
             {'site_id': site_id, 'visit_id': visit_id},

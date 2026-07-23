@@ -29,18 +29,23 @@ plugin's own client module talking to an external service, raising clear,
 typed exceptions rather than swallowing errors or returning None/False for a
 real failure.
 
-Scope of this module, this increment:
+Scope of this module, this increment (Decision 37 -- real Actor invocation):
   - REAL, working queries: list_sites, create_site, get_site_zoom,
     get_visit_for_task, get_or_create_visit, count_tile_observations.
-  - Explicitly OUT of scope: queue_embed_generate()/queue_model_train() stay
-    NotImplementedError stubs -- the `embed-generate`/`model-train` Tapis
-    Actors are not registered with Tapis yet (Actor registration is a
-    distinct Tapis subsystem from the Pod registration already done for
-    embeddingsdb itself -- see embeddings-tapis-actors/README.md's own "What
-    is NOT in this increment" / "How a future implementer should proceed",
-    steps 6-7). There is no Actor ID anywhere in WebODM's settings to invoke,
-    so faking a queued call here would be indistinguishable from a real one
-    to a caller -- these raise clearly instead of silently no-op'ing.
+  - REAL Actor invocation: apply_embed_generate() -- both Tapis Actors
+    (`embed-generate`=zO6oAZ488yxGk, `model-train`=PrGMpgkVzENbp) are now
+    genuinely registered (WO_EMBEDDINGS_ACTOR_ID/WO_MODEL_ACTOR_ID,
+    webodm/settings.py). apply_embed_generate() is a fully self-contained
+    Celery task function -- queued via app.plugins.worker.run_function_async,
+    NOT called directly -- that resolves Decision 30's previously-open
+    credential question by mirroring coreplugins/ckan/publisher.py's
+    apply_ckan_publish() EXACTLY: a per-USER stored, refreshable
+    TapisOAuth2Token (app/models/oauth2.py), not a generic "service account"
+    (Decision 30's original speculation was corrected -- see design spec
+    Decision 37). It builds a real tapipy `Tapis(base_url=..., access_token=
+    ...)` client from that token and calls `t.actors.send_message(...)`.
+  - Still a stub: queue_model_train() -- see its own docstring for why
+    (no `POST .../workspace/train` endpoint exists yet to call it from).
 """
 
 import logging
@@ -271,44 +276,142 @@ def count_tile_observations(visit_id):
     return int(row[0]) if row else 0
 
 
-# ── embed-generate / model-train Actor invocation -- NOT IMPLEMENTED ────────
+# ── embed-generate Actor invocation -- REAL (Decision 37) ──────────────────
 
-def queue_embed_generate(webodm_task_id, visit_id, zoom, encoder='clay-v1.5-large-rgb'):
+def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoom_override=False):
     """
-    NOT IMPLEMENTED. Queuing the `embed-generate` Tapis Actor requires a real
-    Tapis Actor ID (`WO_EMBEDDINGS_ACTOR_ID` in the design spec's "New Django
-    settings" list) -- but the Actor itself is not registered with Tapis yet.
-    Actor registration is a distinct Tapis subsystem from the Pod
-    registration already done for embeddingsdb (Decision 33); see
-    `embeddings-tapis-actors/README.md`'s own "What is NOT in this
-    increment" / "How a future implementer should proceed" steps 6-7 for
-    what's still missing before this can be real.
+    Celery task function, called ONLY via
+    `app.plugins.worker.run_function_async(embeddings_client.apply_embed_generate,
+    ...)` from `TaskEmbedView.post()` -- never call this directly.
 
-    Deliberately raises rather than silently no-op'ing or faking a queued
-    job -- a caller (TaskEmbedView.post()) must be able to tell the
-    difference between "this is genuinely queued" and "there is nothing to
-    queue yet".
+    Must be fully self-contained -- run_function_async serialises only this
+    function's own source via `inspect.getsource()` and `exec()`s it fresh in
+    a Celery worker (see app/plugins/worker.py's own docstring: "Functions
+    should import any required library at the top of the function body").
+    Every import used below is therefore INSIDE this function body, not at
+    module level -- this is not stylistic, it will break at runtime
+    otherwise, exactly as coreplugins/ckan/publisher.py's apply_ckan_publish()
+    (the precedent this mirrors) already documents.
+
+    Resolves Decision 30 (previously unresolved: what credential authorizes
+    the async embed-generate/model-train Actor calls) for real, by mirroring
+    apply_ckan_publish()'s existing pattern EXACTLY rather than inventing a
+    new one: looks up the active TapisOAuth2Client, the triggering user's own
+    TapisOAuth2Token, and calls get_or_refresh_access_token() to get a live,
+    refreshed JWT -- even though this runs asynchronously via Celery with no
+    live HTTP request in flight. This is a per-USER stored, refreshable
+    OAuth2 token, NOT a generic "service account" (the design spec's original
+    Decision 30 wording speculated the latter -- corrected in Decision 37).
+
+    Builds a real tapipy `Tapis(base_url=..., access_token=<jwt>)` client
+    (confirmed against the actually-installed tapipy package's own
+    `Tapis.__init__` signature, not just its docs -- see Decision 37) and
+    invokes `t.actors.send_message(actor_id=settings.WO_EMBEDDINGS_ACTOR_ID,
+    request_body={'message': json.dumps({...})})` (confirmed against
+    tapipy's own bundled OpenAPI spec for the Actors API,
+    `operationId: send_message`). The message payload matches
+    `embed_generate/main.py`'s own `read_actor_message()` docstring in the
+    embeddings-tapis-actors repo EXACTLY: visit_id, site_id, zoom,
+    zoom_override, encoder -- no extra keys invented (webodm_task_id is not
+    part of that contract; the Actor resolves it via visit_id -> visits ->
+    webodm_task_id in embeddingsdb, not from the message itself).
+
+    Does not touch GlobalDataStore for status tracking -- unlike
+    apply_ckan_publish() (which has no other way to report async progress to
+    the frontend), embed-generate's progress already has a real, non-redundant
+    channel: `TaskEmbedStatusView.get()` polls embeddingsdb directly via
+    `count_tile_observations()` (see that view + get_visit_for_task() above).
+    Adding a second, GlobalDataStore-based status mechanism here would just
+    be two sources of truth for the same fact -- skipped deliberately, not
+    an oversight.
+
+    Raises RuntimeError with a message mirroring apply_ckan_publish()'s own
+    error style if the user/client/token/actor-id lookups fail. Runs
+    fire-and-forget from the caller's perspective (TaskEmbedView.post()
+    returns 202 without waiting on this) -- any exception here surfaces only
+    in the Celery worker's own logs, matching apply_ckan_publish()'s
+    fire-and-forget shape (that one also has no caller waiting on its return
+    value; unlike apply_ckan_publish, this function does not currently write
+    a GlobalDataStore error record either -- see note above on why a second
+    status channel was skipped).
     """
-    raise NotImplementedError(
-        'queue_embed_generate() cannot run yet: the embed-generate Tapis '
-        'Actor is not registered with Tapis, so there is no Actor ID to '
-        'invoke. embeddingsdb itself is live (Decision 33) and the visit '
-        'this call would have queued embedding for has already been '
-        'recorded -- only the Actor invocation itself is not implemented. '
-        'See embeddings-tapis-actors/README.md "How a future implementer '
-        'should proceed", steps 6-7.'
+    import json
+    import logging
+
+    from django.conf import settings as _settings
+    from django.contrib.auth.models import User
+
+    from tapipy.tapis import Tapis
+
+    from app.models.oauth2 import TapisOAuth2Client, TapisOAuth2Token
+
+    _logger = logging.getLogger('app.logger')
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        raise RuntimeError(f'No such WebODM user (id={user_id!r}) to authorize embed-generate.')
+
+    client = TapisOAuth2Client.objects.filter(is_active=True).first()
+    if not client:
+        raise RuntimeError('No active Tapis OAuth2 client is configured in WebODM.')
+
+    try:
+        token_obj = TapisOAuth2Token.objects.get(user=user, client=client)
+    except TapisOAuth2Token.DoesNotExist:
+        raise RuntimeError(
+            f'No Tapis token found for user {user.username}. '
+            'Please re-authenticate with Tapis before generating embeddings.'
+        )
+
+    jwt = token_obj.get_or_refresh_access_token()
+    if not jwt:
+        raise RuntimeError(
+            f'Tapis token for {user.username} is expired and could not be refreshed.'
+        )
+
+    actor_id = getattr(_settings, 'WO_EMBEDDINGS_ACTOR_ID', '')
+    if not actor_id:
+        raise RuntimeError('WO_EMBEDDINGS_ACTOR_ID is not configured -- cannot invoke embed-generate.')
+
+    t = Tapis(base_url=_settings.TAPIS_BASE_URL, access_token=jwt)
+
+    message = {
+        'visit_id': visit_id,
+        'site_id': site_id,
+        'zoom': zoom,
+        'zoom_override': bool(zoom_override),
+        'encoder': encoder,
+    }
+
+    _logger.info(
+        'Sending embed-generate Actor message for task %s (visit %s, site %s, zoom %s)',
+        task_id, visit_id, site_id, zoom,
     )
+    t.actors.send_message(actor_id=actor_id, request_body={'message': json.dumps(message)})
 
+
+# ── model-train Actor invocation -- NOT IMPLEMENTED ─────────────────────────
 
 def queue_model_train(task_type, algorithm, encoder, tile_observation_ids, split_strategy):
     """
-    NOT IMPLEMENTED, for the same reason as queue_embed_generate() above: the
-    model-train Tapis Actor is not registered with Tapis yet (no
-    `WO_MODEL_ACTOR_ID` exists to invoke).
+    NOT IMPLEMENTED -- there is no `POST .../workspace/train` API endpoint
+    yet to call this from (only TaskEmbedView/TaskEmbedStatusView are wired
+    so far; see design spec "Files Likely Affected" -- api_views.py's
+    workspace/* views don't exist in this increment).
+
+    Decision 30's credential question IS now resolved in principle for this
+    function too (Decision 37): the same pattern apply_embed_generate() uses
+    -- a per-user, stored, refreshable TapisOAuth2Token, mirroring
+    apply_ckan_publish() -- would apply here as well, invoking
+    `t.actors.send_message(actor_id=settings.WO_MODEL_ACTOR_ID, ...)`. Wiring
+    it for real (as its own `apply_model_train()` self-contained Celery task
+    function, called via run_function_async from a future `.../workspace/train`
+    view) is later work, not done in this increment.
     """
     raise NotImplementedError(
-        'queue_model_train() cannot run yet: the model-train Tapis Actor is '
-        'not registered with Tapis, so there is no Actor ID to invoke. See '
-        'embeddings-tapis-actors/README.md "How a future implementer should '
-        'proceed", steps 6-7.'
+        'queue_model_train() cannot run yet: there is no POST '
+        '.../workspace/train endpoint yet to call it from. Decision 30\'s '
+        'credential question is resolved in principle (see Decision 37 and '
+        'apply_embed_generate() above) -- only the wiring itself is later work.'
     )
