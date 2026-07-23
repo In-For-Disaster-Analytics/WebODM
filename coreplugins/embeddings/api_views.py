@@ -5,14 +5,17 @@ views) task-level permission resolution are real, via
 app.plugins.views.TaskView (== app.api.tasks.TaskNestedView), the same base
 class coreplugins/ckan and coreplugins/objdetect already use.
 
-Second implementation increment: TaskLabelView is now real, backed by
-label_studio_client.py (project create + task import + webhook registration
-against Label Studio's actual REST API -- Decisions 10/32). Every other
-endpoint's business logic -- queuing the embed-generate/model-train Tapis
-Actors, writing to the (not yet existing) embeddingsdb Pod, calling the DSO
-STAC API -- is still explicitly NOT implemented; see embeddings_client.py/
-stac_client.py (not created yet; those Pods/Actors don't exist yet per the
-spec's own infrastructure sequencing).
+Third implementation increment: TaskEmbedView/TaskEmbedStatusView are now
+real, backed by embeddings_client.py against the live `embeddingsdb` Pod
+(Decision 33) -- site selection/creation, the Decision 24/27 zoom-lock check,
+and real `visits`/`tile_observations` reads/writes all happen for real. The
+one piece that stays a stub is the actual `embed-generate` Tapis Actor
+invocation itself (embeddings_client.queue_embed_generate) -- that Actor is
+not registered with Tapis yet, so there is no Actor ID to invoke (see
+embeddings_client.py's own module docstring). TaskLabelView remains real from
+the prior increment, backed by label_studio_client.py. Every other
+endpoint's business logic -- model-train, the DSO STAC API -- is still
+explicitly NOT implemented; see stac_client.py (not created yet).
 """
 
 from datetime import datetime, timezone
@@ -24,6 +27,7 @@ from rest_framework.views import APIView
 
 from app.plugins.views import TaskView
 
+from . import embeddings_client
 from . import label_studio_client
 
 
@@ -183,14 +187,111 @@ class TaskEmbedView(TaskView):
     tile_ids, whole-task by design (Decision 9). Requires a user-chosen
     site_id (Decision 27) and honors zoom_override against a site's locked
     zoom (Decision 24/27).
+
+    Real in this increment (against the live embeddingsdb, Decision 33):
+    site resolution (existing site_id or new_site_name -> create_site()),
+    the Decision 24/27 zoom-lock check via get_site_zoom(), and the real
+    `visits` row via get_or_create_visit(). NOT real: the actual
+    embed-generate Actor invocation (embeddings_client.queue_embed_generate)
+    -- that Actor isn't registered with Tapis yet, so this step alone
+    returns 501, deliberately AFTER the visit row has already been created
+    for real. A visit legitimately exists once a user has committed to
+    embedding a task at a site, whether or not the Actor call itself
+    succeeds -- it is not rolled back just because that last step is a stub.
     """
 
     def post(self, request, pk=None):
-        self.get_and_check_task(request, pk)
-        return _not_implemented(
-            'Embedding generation is not implemented yet -- the embed-generate '
-            'Tapis Actor and embeddingsdb Pod do not exist yet. See design '
-            'spec Decisions 9, 24, 27 and the New Infrastructure table.'
+        task = self.get_and_check_task(request, pk)
+
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # --- Validate zoom (required int) ---
+        raw_zoom = request.data.get('zoom')
+        if raw_zoom is None:
+            return Response(
+                {'error': 'zoom is required (integer tile zoom level).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            zoom = int(raw_zoom)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': f'zoom must be an integer, got {raw_zoom!r}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Validate site_id / new_site_name (required -- Decision 27: user-chosen, never inferred) ---
+        site_id = request.data.get('site_id')
+        new_site_name = request.data.get('new_site_name')
+        if not site_id and not new_site_name:
+            return Response(
+                {'error': (
+                    'Either site_id (an existing site) or new_site_name '
+                    '(to create one) is required -- site is never inferred '
+                    'from task/project metadata (Decision 27).'
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        zoom_override = bool(request.data.get('zoom_override', False))
+
+        try:
+            if not site_id:
+                site_id = embeddings_client.create_site(new_site_name)
+
+            # --- Decision 24/27: zoom-lock check ---
+            existing_zoom = embeddings_client.get_site_zoom(site_id)
+            if existing_zoom is not None and existing_zoom != zoom and not zoom_override:
+                return Response(
+                    {'error': (
+                        f'This site already has embeddings at zoom {existing_zoom} -- '
+                        f'using zoom {zoom} will not match existing tiles for change '
+                        f'detection. Set zoom_override: true to proceed anyway.'
+                    )},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            capture_date = request.data.get('capture_date') or (
+                task.created_at.date() if task.created_at else None
+            )
+            visit_id = embeddings_client.get_or_create_visit(
+                site_id, str(task.id), capture_date=capture_date,
+            )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # --- Actor invocation: explicitly NOT implemented (no Actor ID exists yet) ---
+        try:
+            embeddings_client.queue_embed_generate(
+                webodm_task_id=str(task.id),
+                visit_id=visit_id,
+                zoom=zoom,
+                encoder=request.data.get('encoder', 'clay-v1.5-large-rgb'),
+            )
+        except NotImplementedError as e:
+            return Response(
+                {
+                    'error': str(e),
+                    'site_id': site_id,
+                    'visit_id': visit_id,
+                },
+                status=status.HTTP_501_NOT_IMPLEMENTED,
+            )
+
+        return Response(
+            {'site_id': site_id, 'visit_id': visit_id},
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -200,14 +301,55 @@ class TaskEmbedStatusView(TaskView):
 
     Design spec: polled by the frontend while embed-generate runs; includes
     total tile count at the selected zoom.
+
+    Real in this increment: looks up whether a `visits` row already exists
+    for this task (embeddings_client.get_visit_for_task -- a read-only
+    lookup, distinct from get_or_create_visit(), so polling this endpoint
+    never creates database rows) and, if so, the real
+    count_tile_observations() result. Reports a clear "not started" response
+    if embed has never been triggered for this task.
+
+    NOT real in this increment: the total tile count expected at the
+    selected zoom (M in "N of M tiles processed") -- that requires
+    enumerating WebODM's own tiler coverage (app/api/tiler.py, Decision 9),
+    which is out of scope for this increment's DB-layer work. Only N (tiles
+    actually processed so far) is real here.
     """
 
     def get(self, request, pk=None):
-        self.get_and_check_task(request, pk)
-        return _not_implemented(
-            'Embedding status polling is not implemented yet -- depends on '
-            'the embed-generate Actor (see design spec "API Endpoints").'
-        )
+        task = self.get_and_check_task(request, pk)
+
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            visit = embeddings_client.get_visit_for_task(str(task.id))
+            if visit is None:
+                return Response({
+                    'status': 'not_started',
+                    'site_id': None,
+                    'visit_id': None,
+                    'tile_observation_count': 0,
+                }, status=status.HTTP_200_OK)
+
+            tile_count = embeddings_client.count_tile_observations(visit['id'])
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({
+            'status': 'running',
+            'site_id': visit['site_id'],
+            'visit_id': visit['id'],
+            'tile_observation_count': tile_count,
+        }, status=status.HTTP_200_OK)
 
 
 class TaskPublishToSTACView(TaskView):

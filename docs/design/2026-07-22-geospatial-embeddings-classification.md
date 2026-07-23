@@ -2,7 +2,7 @@
 
 ## Status
 
-**Approved** — passed a 5-reviewer spec-review pass (Decisions 26-31); implementation may begin.
+**Implementing** — passed a 5-reviewer spec-review pass (Decisions 26-31); implementation underway. See Decision 34 for this increment's real-vs-stub scope.
 
 ## Objective
 
@@ -702,6 +702,16 @@ The New Infrastructure table originally planned `embeddingsdb` as a custom `pgve
 Real fix, verified end-to-end rather than assumed: `postgresql-17-pgvector` is a real PGDG apt package, installable on top of the template's own Debian/Postgres 17 base — confirmed first in a local Docker build (`postgis/postgis:17-3.5` + the same apt package, both `CREATE EXTENSION postgis` and `CREATE EXTENSION vector` working, including a real vector distance query), then for real against the live Pod itself via Tapis's `exec_pod_commands` API (`embeddings-tapis-actors/tapis/install_pgvector.py`), which turned out to have root/apt access inside the container — not guaranteed by Tapis's own docs, verified empirically before relying on it. `schema/embeddingsdb.sql` was then applied via a plain `psql -f`; all 13 tables and 11 indexes confirmed present.
 
 One real, unresolved discrepancy worth flagging rather than smoothing over: the Pod's actual external hostname (`embeddingsdb.pods.portals.tapis.io`, no suffix) doesn't match what Tapis's generic Pods networking docs implied for a non-`"default"`-keyed interface (a `-postgres` suffix) — `embeddings-tapis-actors/tapis/register_pod.py` and `.env.example` were corrected to the observed value, but *why* a template-created Pod's hostname doesn't follow that pattern isn't explained, just documented as fact. `register_pod.py` itself has been rewritten to use `template="17postgis3.5"` (matching reality) so it stays useful if the Pod ever needs recreating, but is explicitly marked as not itself live-tested — only the manually-created Pod and `install_pgvector.py` have been.
+
+### Decision 34: `embeddings_client.py` implemented for real against the live `embeddingsdb`, Actor invocation stays a stub (Approved — 2026-07-23)
+
+Implementation increment following Decision 33 (`embeddingsdb` going live): `coreplugins/embeddings/embeddings_client.py` was added with real, working `psycopg2` queries against the live Pod (`WO_EMBEDDINGS_DB_URL`, added to `webodm/settings.py` matching the `WO_LABEL_STUDIO_URL` block's style) — `list_sites`, `create_site`, `get_site_zoom` (Decision 24's zoom-lock check), `get_visit_for_task` (read-only, for polling), `get_or_create_visit`, and `count_tile_observations`. Every query's column names/types were read directly from `embeddings-tapis-actors/schema/embeddingsdb.sql`, and connectivity plus every query shape (including both write paths) were verified against the real, live Pod in a transaction that was rolled back afterward — confirmed 0 rows persisted.
+
+`psycopg2` needed no new dependency: WebODM's own `requirements.txt` already pins `psycopg2-binary==2.8.6` (used for `webodm_dev`) and `embeddings_client.py` reuses it.
+
+`TaskEmbedView.post()` and `TaskEmbedStatusView.get()` (`coreplugins/embeddings/api_views.py`) were wired to this client for real: site resolution (existing `site_id` or `new_site_name`), the Decision 24/27 zoom-lock check (409 on mismatch without `zoom_override: true`), and a real `visits` row via `get_or_create_visit()`. `TaskEmbedStatusView` uses the read-only `get_visit_for_task()` (never creates a row on a GET) plus a real `count_tile_observations()`; it does not yet report the total tile count expected at a zoom (`M` in "N of M") since that requires enumerating WebODM's own tiler coverage (Decision 9), out of scope for this increment.
+
+Deliberately still a stub, per this increment's own scoping: `embeddings_client.queue_embed_generate()`/`queue_model_train()` raise `NotImplementedError` — the `embed-generate`/`model-train` Tapis Actors are not registered with Tapis yet (a separate Tapis subsystem from the Pod registration Decision 33 already completed), so there is no Actor ID anywhere to invoke. `TaskEmbedView.post()` calls this last, after the real `visits` row is already committed — a 501 from the Actor-queuing step does not roll back the visit, since a user has genuinely committed to embedding a task at a site regardless of whether the Actor call itself can run yet.
 
 ---
 

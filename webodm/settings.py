@@ -471,6 +471,14 @@ WO_LABEL_STUDIO_URL = os.environ.get('WO_LABEL_STUDIO_URL', '')
 # calls (project create/import/webhook-register); never sent to the browser.
 WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')
 
+# embeddingsdb — Postgres+PostGIS+pgvector Tapis Pod (coreplugins/embeddings),
+# live as of 2026-07-23 (see docs/design/2026-07-22-geospatial-embeddings-classification.md,
+# Decision 33). A SEPARATE Postgres instance from WebODM's own database
+# (Decision 26 — zero WebODM-database schema changes); connected to only via
+# coreplugins/embeddings/embeddings_client.py, using psycopg2 (already a
+# WebODM dependency). Feature is inactive unless WO_EMBEDDINGS_DB_URL is set.
+WO_EMBEDDINGS_DB_URL = os.environ.get('WO_EMBEDDINGS_DB_URL', '')
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 
