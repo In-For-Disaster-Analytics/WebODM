@@ -728,6 +728,13 @@ Implementation increment following Decision 34 (`embeddings_client.py` going liv
 
 **Decision 30's credential question is explicitly NOT resolved by this increment** — `tapis/register_actor.py`'s `default_environment` is static configuration baked in at registration time, not a live per-request credential; it cannot by itself determine how `embed-generate`/`model-train` authorize themselves against embeddingsdb/Tapis once Celery queues them asynchronously (stored service token vs. some other mechanism). The script's own docstring and `--dry-run` output both state this rather than silently implying otherwise.
 
+### Decision 36: Correction to Decision 35 — Actor images use GHCR, not Docker Hub (Approved — 2026-07-23)
+Decision 35 stated, citing Tapis's own readthedocs page verbatim, that Abaco requires Actor images on public Docker Hub. **Directly corrected by the project owner**, who has real, hands-on Tapis account experience this session's own doc fetches don't have — the same readthedocs page had already proven wrong or incomplete elsewhere in this project (it didn't know about the real `17postgis3.5` Pod template, Decision 33, or the real Pod hostname behavior, both only discovered by direct experimentation against a live tenant). GHCR works for Actors the same way it already does for Pods (`label-studio-tapis-auth`).
+
+Resolution: `tapis/register_actor.py`'s image references switched from a required `--dockerhub-org` placeholder to a real default, `ghcr.io/in-for-disaster-analytics/embeddings-tapis-actors`, tagged `embed-generate-latest`/`model-train-latest`. A new `.github/workflows/docker-build.yml`, mirroring `label-studio-tapis-auth`'s own proven workflow, builds and pushes both Actor images to GHCR on push to `main` (matrixed over the `ACTOR` build-arg, since both Actors share one Dockerfile). The GHCR package still needs to be set public after the first push (Abaco pulls anonymously, same requirement as the Pods precedent) — the exact `gh api` command is documented in the workflow file's own comments. Neither the push nor a real Tapis registration has been run yet — this increment only corrects the plan and prepares the real mechanism (CI-driven build, not a manual local push) to execute it.
+
+**Lesson worth stating plainly**: a docs page being explicit and quoted verbatim twice is not the same as it being current or complete — this is the second time in this project a generic Tapis doc fetch was superseded by someone's real, direct account experience (the first being the Pod hostname/template discrepancy in Decision 33). Prefer direct verification or a domain expert's correction over a re-fetched doc page when the two conflict.
+
 ---
 
 ## User Feedback / Decisions
