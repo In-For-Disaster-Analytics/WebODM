@@ -5,20 +5,35 @@ views) task-level permission resolution are real, via
 app.plugins.views.TaskView (== app.api.tasks.TaskNestedView), the same base
 class coreplugins/ckan and coreplugins/objdetect already use.
 
-Fourth implementation increment (Decision 37): TaskEmbedView.post() now
-genuinely queues the `embed-generate` Tapis Actor -- both Actors are
-registered with Tapis (WO_EMBEDDINGS_ACTOR_ID/WO_MODEL_ACTOR_ID,
-webodm/settings.py), and embeddings_client.apply_embed_generate() is a real,
+Fourth implementation increment (Decision 37, superseded by Decision 45):
+TaskEmbedView.post() genuinely queues embed-generate -- as of Decision 45,
+this submits a real Tapis Job against TACC's `ls6` system
+(WO_EMBED_GENERATE_APP_ID, webodm/settings.py), not a Tapis Actor (Abaco's
+worker pool cannot provision for this workload's image size on this
+tenant -- confirmed by live testing, see design spec Decision 45).
+model-train still uses its registered Actor (WO_MODEL_ACTOR_ID) --
+untouched by Decision 45, no evidence of the same problem since it isn't
+implemented yet. embeddings_client.apply_embed_generate() is a real,
 self-contained Celery task (queued via run_function_async) that authorizes
 the call with the triggering user's stored TapisOAuth2Token, mirroring
 coreplugins/ckan/publisher.py's apply_ckan_publish() exactly (see
-embeddings_client.py's own docstring, and design spec Decision 37). Site
+embeddings_client.py's own docstring, and design spec Decisions 37/45). Site
 selection/creation, the Decision 24/27 zoom-lock check, and real
 `visits`/`tile_observations` reads/writes (Decision 33/34) are unchanged from
 the prior increment. TaskLabelView remains real from an earlier increment,
 backed by label_studio_client.py. model-train (queue_model_train) and the
 DSO STAC API remain explicitly NOT implemented; see embeddings_client.py's
 and stac_client.py's (not created yet) own docstrings.
+
+Fifth implementation increment (Decision 38 -- the first real frontend
+component, EmbeddingsPanel.jsx): adds `SitesView`
+(`GET /api/plugins/embeddings/sites`), a real, NOT task-scoped endpoint --
+sites are global to the whole embeddings system, matching how
+`LabelClassesView` below is already registered as a non-task-scoped route.
+Closes a real gap: `embeddings_client.list_sites()` has worked against the
+live embeddingsdb since Decision 34, but was never exposed via an API
+endpoint until now -- needed so the new task-panel UI's "existing site"
+dropdown has something real to populate itself from.
 """
 
 from datetime import datetime, timezone
@@ -186,25 +201,27 @@ class TaskEmbedView(TaskView):
     """
     POST /api/plugins/embeddings/task/{task_pk}/embed
 
-    Design spec: queues the embed-generate Tapis Actor over every valid
-    (z, x, y) at the requested zoom for this task's orthophoto -- no
-    tile_ids, whole-task by design (Decision 9). Requires a user-chosen
-    site_id (Decision 27) and honors zoom_override against a site's locked
-    zoom (Decision 24/27).
+    Design spec: queues embed-generate over every valid (z, x, y) at the
+    requested zoom for this task's orthophoto -- no tile_ids, whole-task by
+    design (Decision 9). Requires a user-chosen site_id (Decision 27) and
+    honors zoom_override against a site's locked zoom (Decision 24/27).
 
     Real in this increment (against the live embeddingsdb, Decision 33, and
-    the real, registered embed-generate Actor, Decision 37): site resolution
-    (existing site_id or new_site_name -> create_site()), the Decision 24/27
-    zoom-lock check via get_site_zoom(), the real `visits` row via
-    get_or_create_visit(), and now the Actor invocation itself --
+    the real, registered embed-generate ls6 Tapis App, Decision 45): site
+    resolution (existing site_id or new_site_name -> create_site()), the
+    Decision 24/27 zoom-lock check via get_site_zoom(), the real `visits`
+    row via get_or_create_visit(), and now the Job submission itself --
     embeddings_client.apply_embed_generate() is queued via
     run_function_async() (Celery), authorized by the requesting user's
     stored Tapis OAuth2 token (see embeddings_client.py's own docstring).
-    The Actor call happens asynchronously -- this view does not block on it
-    or know its outcome; it returns 202 once queuing succeeds, same as the
-    CKAN plugin's own async-publish endpoint. A `visits` row is created
-    (via get_or_create_visit(), above) regardless of whether the queued
-    Actor call itself later succeeds -- a user has genuinely committed to
+    embed-generate runs as a Tapis Job on TACC's `ls6` (Decision 45), not an
+    Actor -- Abaco's worker pool cannot provision for this workload's image
+    size on this tenant, confirmed by live testing. The submission happens
+    asynchronously -- this view does not block on it or know its outcome;
+    it returns 202 once queuing succeeds, same as the CKAN plugin's own
+    async-publish endpoint. A `visits` row is created (via
+    get_or_create_visit(), above) regardless of whether the queued Job
+    submission itself later succeeds -- a user has genuinely committed to
     embedding a task at a site once that row exists.
     """
 
@@ -220,11 +237,11 @@ class TaskEmbedView(TaskView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        if not getattr(settings, 'WO_EMBEDDINGS_ACTOR_ID', ''):
+        if not getattr(settings, 'WO_EMBED_GENERATE_APP_ID', ''):
             return Response(
                 {'error': (
-                    'The embed-generate Tapis Actor is not configured on '
-                    'this WebODM instance -- WO_EMBEDDINGS_ACTOR_ID is not set.'
+                    'The embed-generate ls6 Tapis App is not configured on '
+                    'this WebODM instance -- WO_EMBED_GENERATE_APP_ID is not set.'
                 )},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -279,7 +296,7 @@ class TaskEmbedView(TaskView):
                 task.created_at.date() if task.created_at else None
             )
             visit_id = embeddings_client.get_or_create_visit(
-                site_id, str(task.id), capture_date=capture_date,
+                site_id, str(task.id), task.project_id, capture_date=capture_date,
             )
         except embeddings_client.EmbeddingsDBConfigError as e:
             return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -302,6 +319,7 @@ class TaskEmbedView(TaskView):
             visit_id,
             zoom,
             request.data.get('encoder', 'clay-v1.5-large-rgb'),
+            task.project_id,
             zoom_override,
         )
 
@@ -446,6 +464,48 @@ class LabelStudioWebhookView(APIView):
             'spec Decisions 10 and 29 (shared-secret verification via '
             'hmac.compare_digest, tile_observation_id scope validation) -- '
             'neither is wired up yet, so this endpoint accepts nothing.'
+        )
+
+
+class SitesView(APIView):
+    """
+    GET /api/plugins/embeddings/sites
+
+    Design spec, Decision 38: real, NOT task-scoped -- sites are global to
+    the whole embeddings system (a site can span many WebODM tasks/projects
+    over time, Decision 27), matching how LabelClassesView below is already
+    registered as a non-task-scoped route rather than nested under
+    `task/(?P<pk>...)`.
+
+    Calls embeddings_client.list_sites() for real, against the live
+    embeddingsdb (Decision 33/34) -- not a stub. Populates the task panel's
+    "existing site" dropdown in EmbeddingsPanel.jsx.
+
+    Response: 200 {"sites": [{"id": <str>, "name": <str>}, ...]}
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            sites = embeddings_client.list_sites()
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response(
+            {'sites': [{'id': site_id, 'name': name} for site_id, name in sites]},
+            status=status.HTTP_200_OK,
         )
 
 

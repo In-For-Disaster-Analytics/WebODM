@@ -29,23 +29,36 @@ plugin's own client module talking to an external service, raising clear,
 typed exceptions rather than swallowing errors or returning None/False for a
 real failure.
 
-Scope of this module, this increment (Decision 37 -- real Actor invocation):
+Scope of this module, this increment (Decision 45 -- embed-generate moved
+off the Actor onto a Tapis Job on ls6):
   - REAL, working queries: list_sites, create_site, get_site_zoom,
     get_visit_for_task, get_or_create_visit, count_tile_observations.
-  - REAL Actor invocation: apply_embed_generate() -- both Tapis Actors
-    (`embed-generate`=zO6oAZ488yxGk, `model-train`=PrGMpgkVzENbp) are now
-    genuinely registered (WO_EMBEDDINGS_ACTOR_ID/WO_MODEL_ACTOR_ID,
-    webodm/settings.py). apply_embed_generate() is a fully self-contained
-    Celery task function -- queued via app.plugins.worker.run_function_async,
-    NOT called directly -- that resolves Decision 30's previously-open
+  - REAL Tapis Job submission: apply_embed_generate() -- embed-generate no
+    longer runs as a Tapis Actor (Abaco) at all. Live testing (Decision 45)
+    found Abaco's worker pool cannot provision for this workload's image
+    size on this tenant (confirmed with two differently-sized real images,
+    both failing identically -- zero workers ever provisioned). It now
+    submits a real Tapis Job against TACC's `ls6` system instead
+    (`WO_EMBED_GENERATE_APP_ID`/`WO_EMBED_GENERATE_APP_VERSION`,
+    webodm/settings.py; see `embeddings-tapis-actors/ls6/` for the App
+    definition and job script, mirroring the working `nodeodm-ls6`
+    pattern). apply_embed_generate() is a fully self-contained Celery task
+    function -- queued via app.plugins.worker.run_function_async, NOT
+    called directly -- that resolves Decision 30's previously-open
     credential question by mirroring coreplugins/ckan/publisher.py's
     apply_ckan_publish() EXACTLY: a per-USER stored, refreshable
     TapisOAuth2Token (app/models/oauth2.py), not a generic "service account"
     (Decision 30's original speculation was corrected -- see design spec
     Decision 37). It builds a real tapipy `Tapis(base_url=..., access_token=
-    ...)` client from that token and calls `t.actors.send_message(...)`.
-  - Still a stub: queue_model_train() -- see its own docstring for why
-    (no `POST .../workspace/train` endpoint exists yet to call it from).
+    ...)` client from that token and calls `t.jobs.submitJob(...)` (method/
+    kwarg shape confirmed against the installed tapipy the same way
+    Decision 43 confirmed sendMessage's shape, before this decision replaced
+    sendMessage with submitJob entirely).
+  - `model-train`'s Actor (`WO_MODEL_ACTOR_ID`) is untouched by Decision 45
+    -- it has no evidence of the same image-size problem (it isn't
+    implemented yet at all). queue_model_train() remains a stub -- see its
+    own docstring for why (no `POST .../workspace/train` endpoint exists
+    yet to call it from).
 """
 
 import logging
@@ -210,7 +223,7 @@ def get_visit_for_task(webodm_task_id):
     return {'id': str(row[0]), 'site_id': str(row[1]), 'capture_date': row[2]}
 
 
-def get_or_create_visit(site_id, webodm_task_id, capture_date=None):
+def get_or_create_visit(site_id, webodm_task_id, project_pk, capture_date=None):
     """
     Real upsert-style logic (Decision 26): find the existing `visits` row for
     this (site_id, webodm_task_id) pair with source='webodm', or insert a new
@@ -226,6 +239,12 @@ def get_or_create_visit(site_id, webodm_task_id, capture_date=None):
     one (site_id, webodm_task_id, source='webodm') combination from silently
     multiplying into duplicate `visits` rows across repeated calls.
 
+    `project_pk` (Decision 41, new column) is the WebODM Project.id this task
+    belongs to -- required so embed-generate can construct WebODM's
+    project-nested tiler URL from visit_id alone. Only set on INSERT, not
+    backfilled onto an existing row (a task cannot move projects mid-flight
+    in a way this function needs to react to).
+
     Returns the visit's id (str, uuid).
     """
     existing = _execute(
@@ -238,9 +257,9 @@ def get_or_create_visit(site_id, webodm_task_id, capture_date=None):
         return str(existing[0])
 
     row = _execute(
-        "INSERT INTO visits (site_id, source, webodm_task_id, capture_date) "
-        "VALUES (%s, 'webodm', %s, %s) RETURNING id;",
-        (site_id, webodm_task_id, capture_date),
+        "INSERT INTO visits (site_id, source, webodm_task_id, project_pk, capture_date) "
+        "VALUES (%s, 'webodm', %s, %s, %s) RETURNING id;",
+        (site_id, webodm_task_id, project_pk, capture_date),
         fetch='one',
         commit=True,
     )
@@ -276,9 +295,9 @@ def count_tile_observations(visit_id):
     return int(row[0]) if row else 0
 
 
-# ── embed-generate Actor invocation -- REAL (Decision 37) ──────────────────
+# ── embed-generate Tapis Job submission -- REAL (Decision 45) ──────────────
 
-def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoom_override=False):
+def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, project_pk, zoom_override=False):
     """
     Celery task function, called ONLY via
     `app.plugins.worker.run_function_async(embeddings_client.apply_embed_generate,
@@ -294,7 +313,7 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoo
     (the precedent this mirrors) already documents.
 
     Resolves Decision 30 (previously unresolved: what credential authorizes
-    the async embed-generate/model-train Actor calls) for real, by mirroring
+    the async embed-generate/model-train calls) for real, by mirroring
     apply_ckan_publish()'s existing pattern EXACTLY rather than inventing a
     new one: looks up the active TapisOAuth2Client, the triggering user's own
     TapisOAuth2Token, and calls get_or_refresh_access_token() to get a live,
@@ -306,15 +325,29 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoo
     Builds a real tapipy `Tapis(base_url=..., access_token=<jwt>)` client
     (confirmed against the actually-installed tapipy package's own
     `Tapis.__init__` signature, not just its docs -- see Decision 37) and
-    invokes `t.actors.send_message(actor_id=settings.WO_EMBEDDINGS_ACTOR_ID,
-    request_body={'message': json.dumps({...})})` (confirmed against
-    tapipy's own bundled OpenAPI spec for the Actors API,
-    `operationId: send_message`). The message payload matches
-    `embed_generate/main.py`'s own `read_actor_message()` docstring in the
-    embeddings-tapis-actors repo EXACTLY: visit_id, site_id, zoom,
-    zoom_override, encoder -- no extra keys invented (webodm_task_id is not
-    part of that contract; the Actor resolves it via visit_id -> visits ->
-    webodm_task_id in embeddingsdb, not from the message itself).
+    submits a real Tapis Job via `t.jobs.submitJob(**job_spec)` against
+    `WO_EMBED_GENERATE_APP_ID` on TACC's `ls6` system -- **not** an Actor
+    invocation, per Decision 45: live testing found Abaco's worker pool
+    cannot provision for this workload's image size on this tenant
+    (confirmed with two differently-sized real images, both failing
+    identically -- zero workers ever provisioned). `submitJob`'s call shape
+    (each top-level job-spec key as its own kwarg, not a single
+    `request_body=`) was confirmed against the installed tapipy the same way
+    Decision 43 confirmed `sendMessage`'s shape.
+
+    The message payload set as the Job's `MSG` environment variable
+    (`parameterSet.envVariables`) is byte-for-byte
+    `embed_generate/main.py`'s unchanged `read_actor_message()` contract
+    (Decision 41's fields: visit_id, site_id, zoom, zoom_override, encoder,
+    project_pk, webodm_jwt) -- `main.py` itself needed zero changes for this
+    move, since it already read its whole payload from a single `MSG` env
+    var (Abaco's convention, but nothing about the code was Abaco-specific
+    once the message was in `os.environ`). `webodm_jwt` (Decision 44,
+    correcting Decision 41) is a genuine WebODM-native JWT minted for this
+    SAME Django `user` below -- NOT the Tapis access token used to submit
+    the job itself; those are different tokens with different signing
+    secrets (confirmed directly: the Tapis token fails against WebODM's own
+    tiler endpoint).
 
     Does not touch GlobalDataStore for status tracking -- unlike
     apply_ckan_publish() (which has no other way to report async progress to
@@ -326,7 +359,7 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoo
     an oversight.
 
     Raises RuntimeError with a message mirroring apply_ckan_publish()'s own
-    error style if the user/client/token/actor-id lookups fail. Runs
+    error style if the user/client/token/app-id lookups fail. Runs
     fire-and-forget from the caller's perspective (TaskEmbedView.post()
     returns 202 without waiting on this) -- any exception here surfaces only
     in the Celery worker's own logs, matching apply_ckan_publish()'s
@@ -370,11 +403,33 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoo
             f'Tapis token for {user.username} is expired and could not be refreshed.'
         )
 
-    actor_id = getattr(_settings, 'WO_EMBEDDINGS_ACTOR_ID', '')
-    if not actor_id:
-        raise RuntimeError('WO_EMBEDDINGS_ACTOR_ID is not configured -- cannot invoke embed-generate.')
+    app_id = getattr(_settings, 'WO_EMBED_GENERATE_APP_ID', '')
+    if not app_id:
+        raise RuntimeError('WO_EMBED_GENERATE_APP_ID is not configured -- cannot invoke embed-generate.')
+    app_version = getattr(_settings, 'WO_EMBED_GENERATE_APP_VERSION', '1.0.0')
 
     t = Tapis(base_url=_settings.TAPIS_BASE_URL, access_token=jwt)
+
+    # Decision 44 correction to Decision 41: the per-user TAPIS access token
+    # (`jwt` above) authorizes calling the *Tapis Actors API* (t.actors.
+    # sendMessage) -- it is NOT accepted by WebODM's own tiler endpoint.
+    # Confirmed directly: forwarding the raw Tapis token as
+    # .../tiles.json?jwt=<tapis token> returns "Incorrect authentication
+    # credentials." WebODM's `JSONWebTokenAuthenticationQS` (app/api/
+    # authentication.py) verifies a JWT signed with WebODM's OWN
+    # SECRET_KEY (via rest_framework_jwt) -- a fundamentally different
+    # token from a Tapis OAuth2 access token, not an interchangeable one.
+    # Fix: mint a genuine, short-lived WebODM JWT for this SAME Django
+    # `user` (already resolved above) using rest_framework_jwt's own
+    # encode helpers -- the identical mechanism WebODM's own
+    # `/api/token-auth/` login view uses (`app/api/urls.py`) -- and send
+    # THAT to the Actor as `webodm_jwt`, distinct from the Tapis `jwt`
+    # field name to avoid re-confusing the two again. Verified for real:
+    # a token minted this way was confirmed to authenticate successfully
+    # against a live task's `tiles.json` endpoint.
+    from rest_framework_jwt.settings import api_settings as _jwt_settings
+    webodm_jwt_payload = _jwt_settings.JWT_PAYLOAD_HANDLER(user)
+    webodm_jwt = _jwt_settings.JWT_ENCODE_HANDLER(webodm_jwt_payload)
 
     message = {
         'visit_id': visit_id,
@@ -382,13 +437,53 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, zoo
         'zoom': zoom,
         'zoom_override': bool(zoom_override),
         'encoder': encoder,
+        'project_pk': project_pk,
+        'webodm_jwt': webodm_jwt,
     }
 
     _logger.info(
-        'Sending embed-generate Actor message for task %s (visit %s, site %s, zoom %s)',
-        task_id, visit_id, site_id, zoom,
+        'Submitting embed-generate ls6 Job for task %s (visit %s, site %s, '
+        'project %s, zoom %s)',
+        task_id, visit_id, site_id, project_pk, zoom,
     )
-    t.actors.send_message(actor_id=actor_id, request_body={'message': json.dumps(message)})
+    # Decision 45: moved off the Actor (Abaco) entirely -- live testing found
+    # Abaco's worker pool cannot provision for this workload's image size on
+    # this tenant (confirmed: both an ~11.4GB image with the Clay v1.5
+    # checkpoint baked in, and a ~6.21GB image without it, failed identically
+    # -- zero workers ever provisioned, empty logs, per getExecution()/
+    # listWorkers()). Runs as a real Tapis Job on TACC's ls6 instead
+    # (embeddings-tapis-actors/ls6/, mirroring the working nodeodm-ls6
+    # pattern), submitted via t.jobs.submitJob(**job_spec) -- confirmed
+    # against the installed tapipy the same way Decision 43 confirmed
+    # sendMessage's shape: submitJob's requestBody schema has non-empty
+    # `properties` (name, appId, execSystemId, parameterSet, ...), so each
+    # top-level job-spec key is its own kwarg, not a single `request_body=`.
+    #
+    # embed_generate/main.py itself needs ZERO changes for this: it already
+    # reads its whole invocation payload from a single MSG environment
+    # variable (Abaco's convention) -- a Tapis Job's parameterSet.
+    # envVariables sets that exact same variable in the job script's
+    # environment (ls6/tapisjob_app.sh), so the message contract below is
+    # byte-for-byte identical to what the Actor used to receive.
+    job_spec = {
+        'name': f'embed-generate-{task_id}-{visit_id}',
+        'appId': app_id,
+        'appVersion': app_version,
+        'execSystemId': 'ls6',
+        'execSystemLogicalQueue': 'vm-small',
+        'archiveOnAppError': True,
+        'parameterSet': {
+            'envVariables': [
+                {'key': 'MSG', 'value': json.dumps(message)},
+                {'key': 'EMBEDDINGSDB_URL', 'value': _settings.WO_EMBEDDINGS_DB_URL},
+                {'key': 'WEBODM_URL', 'value': _settings.WO_URL},
+            ],
+            'schedulerOptions': [
+                {'arg': f'-A {_settings.TAS_DEFAULT_ALLOCATION}'},
+            ],
+        },
+    }
+    t.jobs.submitJob(**job_spec)
 
 
 # ── model-train Actor invocation -- NOT IMPLEMENTED ─────────────────────────
@@ -404,8 +499,9 @@ def queue_model_train(task_type, algorithm, encoder, tile_observation_ids, split
     function too (Decision 37): the same pattern apply_embed_generate() uses
     -- a per-user, stored, refreshable TapisOAuth2Token, mirroring
     apply_ckan_publish() -- would apply here as well, invoking
-    `t.actors.send_message(actor_id=settings.WO_MODEL_ACTOR_ID, ...)`. Wiring
-    it for real (as its own `apply_model_train()` self-contained Celery task
+    `t.actors.sendMessage(actor_id=settings.WO_MODEL_ACTOR_ID, message=...)`
+    (Decision 43's corrected call shape). Wiring it for real (as its own
+    `apply_model_train()` self-contained Celery task
     function, called via run_function_async from a future `.../workspace/train`
     view) is later work, not done in this increment.
     """

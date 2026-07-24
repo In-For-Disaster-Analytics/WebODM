@@ -15,6 +15,7 @@ from .api_views import (
     TaskLabelsImportGeoJSONView,
     LabelStudioWebhookView,
     LabelClassesView,
+    SitesView,
 )
 
 # First implementation increment of the design spec at
@@ -73,17 +74,31 @@ class Plugin(PluginBase):
         # resolves permissions from the task's own project -- no separate
         # project_pk segment is used anywhere else in this codebase for
         # task-nested plugin routes.
+        # Every pattern below is anchored with a trailing $. Without it, a
+        # leaf URLPattern's resolve() doesn't require the whole path to
+        # match (Django only checks match.end() for include()d resolvers,
+        # not final view patterns) -- so an earlier, shorter pattern that's
+        # a prefix of a later one silently wins. Discovered for real: task/
+        # {pk}/embed (POST-only) was shadowing task/{pk}/embed-status (GET),
+        # producing "Method Not Allowed" on every status poll, and task/
+        # {pk}/label was shadowing task/{pk}/labels/import-geojson even more
+        # dangerously -- silently misrouting a GeoJSON import to the wrong
+        # view instead of erroring. `load_buttons.js$` (below) already had
+        # this right; the task-scoped ones didn't.
         return [
-            MountPoint('task/(?P<pk>[^/.]+)/tiles', TaskTilesView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/label', TaskLabelView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/embed', TaskEmbedView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/embed-status', TaskEmbedStatusView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/publish-to-stac', TaskPublishToSTACView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/retract-from-stac', TaskRetractFromSTACView.as_view()),
-            MountPoint('task/(?P<pk>[^/.]+)/labels/import-geojson', TaskLabelsImportGeoJSONView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/tiles$', TaskTilesView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/label$', TaskLabelView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/embed$', TaskEmbedView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/embed-status$', TaskEmbedStatusView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/publish-to-stac$', TaskPublishToSTACView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/retract-from-stac$', TaskRetractFromSTACView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/labels/import-geojson$', TaskLabelsImportGeoJSONView.as_view()),
             # Not task-scoped: the webhook is called by Label Studio itself
-            # (shared-secret auth, Decisions 10/29) and label-classes is
-            # site-scoped, falling back to instance-wide defaults (Decision 12).
-            MountPoint('labelstudio-webhook', LabelStudioWebhookView.as_view()),
-            MountPoint('label-classes', LabelClassesView.as_view()),
+            # (shared-secret auth, Decisions 10/29), label-classes is
+            # site-scoped falling back to instance-wide defaults (Decision 12),
+            # and sites are global to the whole embeddings system, not to any
+            # one task/project (Decision 38).
+            MountPoint('labelstudio-webhook$', LabelStudioWebhookView.as_view()),
+            MountPoint('label-classes$', LabelClassesView.as_view()),
+            MountPoint('sites$', SitesView.as_view()),
         ]

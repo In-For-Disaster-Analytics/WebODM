@@ -57,6 +57,11 @@ services:
       - WO_TAS_ALLOCATION_CACHE_SECONDS
       - WO_DSO_AGENT_URL
       - WO_URL
+      - WO_LABEL_STUDIO_URL
+      - WO_LABEL_STUDIO_API_TOKEN
+      - WO_EMBEDDINGS_DB_URL
+      - WO_EMBEDDINGS_ACTOR_ID
+      - WO_MODEL_ACTOR_ID
       # Prevent numpy/GDAL from each spawning their own thread pool per
       # gunicorn worker; under concurrent raster requests this oversubscribes
       # CPU cores and causes severe slowdowns.
@@ -108,6 +113,11 @@ services:
       - WO_TAS_ALLOCATION_CACHE_SECONDS
       - WO_DSO_AGENT_URL
       - WO_URL
+      - WO_LABEL_STUDIO_URL
+      - WO_LABEL_STUDIO_API_TOKEN
+      - WO_EMBEDDINGS_DB_URL
+      - WO_EMBEDDINGS_ACTOR_ID
+      - WO_MODEL_ACTOR_ID
       # Prevent numpy/GDAL from each spawning their own thread pool per
       # worker process; under concurrent raster tasks this oversubscribes
       # CPU cores and causes severe slowdowns.

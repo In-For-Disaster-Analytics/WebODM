@@ -479,11 +479,21 @@ WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')
 # WebODM dependency). Feature is inactive unless WO_EMBEDDINGS_DB_URL is set.
 WO_EMBEDDINGS_DB_URL = os.environ.get('WO_EMBEDDINGS_DB_URL', '')
 
-# Tapis Actor IDs (coreplugins/embeddings) — both Actors are genuinely
-# registered as of this increment (see design spec Decision 37); defaults are
-# the real, confirmed actor_ids, overridable per-deployment via env var.
-WO_EMBEDDINGS_ACTOR_ID = os.environ.get('WO_EMBEDDINGS_ACTOR_ID', 'zO6oAZ488yxGk')  # embed-generate Actor
+# model-train's Tapis Actor (coreplugins/embeddings) — genuinely registered
+# (design spec Decision 37); not yet invoked from anywhere (queue_model_train()
+# is still a stub -- no workspace/train endpoint exists yet).
 WO_MODEL_ACTOR_ID = os.environ.get('WO_MODEL_ACTOR_ID', 'PrGMpgkVzENbp')  # model-train Actor
+
+# embed-generate's Tapis App (coreplugins/embeddings) — Decision 45: moved off
+# the Actor (Abaco) entirely. Live testing found Abaco's worker pool cannot
+# provision for this workload's image size on this tenant (confirmed: both an
+# ~11.4GB image with the Clay v1.5 checkpoint baked in, and a ~6.21GB image
+# without it, failed identically -- zero workers ever provisioned). Runs as a
+# real Tapis Job on TACC's ls6 instead (see embeddings-tapis-actors/ls6/,
+# mirroring the working nodeodm-ls6 pattern) -- WO_EMBEDDINGS_ACTOR_ID is
+# genuinely unused now and has been removed, not kept as a dead setting.
+WO_EMBED_GENERATE_APP_ID = os.environ.get('WO_EMBED_GENERATE_APP_ID', 'embed-generate-ls6')
+WO_EMBED_GENERATE_APP_VERSION = os.environ.get('WO_EMBED_GENERATE_APP_VERSION', '1.0.0')
 
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
