@@ -551,13 +551,24 @@ update(){
 		fi
 	fi
 
-	command="$docker_compose -f docker-compose.yml"
+	# Build from our own Dockerfile (docker-compose.build.yml -- the same
+	# overlay rebuild() already uses, targeting the real "app" production
+	# stage), never `docker-compose ... pull`. This fork carries real,
+	# substantial modifications (Tapis OAuth2, coreplugins/embeddings, etc.)
+	# that the public opendronemap/webodm_webapp image on Docker Hub does
+	# not have -- pulling it would silently discard every local change,
+	# replacing this fork's image with upstream's unmodified one.
+	command="$docker_compose -f docker-compose.yml -f docker-compose.build.yml"
 
 	if [[ $load_micmac_node = true ]]; then
 		command+=" -f docker-compose.nodemicmac.yml"
 	fi
 
-	command+=" pull"
+	if [[ $dev_mode = true ]]; then
+		command+=" -f docker-compose.dev.yml"
+	fi
+
+	command+=" build"
 	run "$command"
 }
 
