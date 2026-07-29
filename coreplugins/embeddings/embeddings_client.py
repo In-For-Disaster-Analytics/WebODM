@@ -368,6 +368,7 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
     a GlobalDataStore error record either -- see note above on why a second
     status channel was skipped).
     """
+    import base64
     import json
     import logging
 
@@ -459,12 +460,27 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
     # `properties` (name, appId, execSystemId, parameterSet, ...), so each
     # top-level job-spec key is its own kwarg, not a single `request_body=`.
     #
-    # embed_generate/main.py itself needs ZERO changes for this: it already
-    # reads its whole invocation payload from a single MSG environment
-    # variable (Abaco's convention) -- a Tapis Job's parameterSet.
-    # envVariables sets that exact same variable in the job script's
-    # environment (ls6/tapisjob_app.sh), so the message contract below is
-    # byte-for-byte identical to what the Actor used to receive.
+    # embed_generate/main.py needed no changes to its OWN logic for this
+    # move -- it already reads its whole invocation payload from a single
+    # MSG environment variable (Abaco's convention), and a Tapis Job's
+    # parameterSet.envVariables sets that exact same variable inside the
+    # SINGULARITY-run container (Tapis pulls & runs
+    # ghcr.io/.../embed-generate-latest directly via Apptainer, executing
+    # its own ENTRYPOINT -- no wrapper script, see ls6/app.json).
+    #
+    # MSG is base64-encoded here, NOT plain JSON -- a real bug found via a
+    # live ls6 Job run, not assumed: Tapis's SINGULARITY runtime joins
+    # EVERY env var (its own _tapisXxx ones plus ours) into a single
+    # comma-separated `apptainer run --env k1=v1,k2=v2,...` argument. A
+    # plain-JSON MSG value (commas between keys, quoted strings) breaks
+    # that naive join -- confirmed from the failed job's own tapisjob.out:
+    # "parse error ... bare \" in non-quoted-field". Abaco never had this
+    # problem (a real standalone process env var, no joining) -- this is
+    # specific to the SINGULARITY/Tapis-Job delivery path. Base64 has no
+    # commas/quotes, so it survives untouched; embed_generate/main.py's
+    # read_actor_message() decodes it back before json.loads().
+    encoded_message = base64.b64encode(json.dumps(message).encode('utf-8')).decode('ascii')
+
     job_spec = {
         'name': f'embed-generate-{task_id}-{visit_id}',
         'appId': app_id,
@@ -474,7 +490,7 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
         'archiveOnAppError': True,
         'parameterSet': {
             'envVariables': [
-                {'key': 'MSG', 'value': json.dumps(message)},
+                {'key': 'MSG', 'value': encoded_message},
                 {'key': 'EMBEDDINGSDB_URL', 'value': _settings.WO_EMBEDDINGS_DB_URL},
                 {'key': 'WEBODM_URL', 'value': _settings.WO_URL},
             ],
