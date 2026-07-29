@@ -9,6 +9,7 @@ surfaces are a later increment (out of scope here, see the design spec's
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.http import HttpResponseForbidden
 from django.shortcuts import render
 
 # Template paths mirror PluginBase.template_path()'s output for a coreplugin
@@ -16,6 +17,21 @@ from django.shortcuts import render
 # via app.plugins.functions.get_plugin_by_name(), which re-scans installed
 # plugins on every call (see its own TODO comment in app/plugins/views.py).
 _TEMPLATE_DIR = "coreplugins/embeddings/templates"
+
+
+def _forbidden_response():
+    # Decision 46: the embeddings plugin is restricted to superusers only
+    # while it's still being validated in production. `PluginBase.
+    # main_menu()` has no access to `request` (confirmed by reading its
+    # real signature, app/plugins/plugin_base.py), so the top-nav
+    # "Embeddings" link itself cannot be conditionally hidden per-user --
+    # real enforcement happens here instead (a 403 for non-admins), which
+    # achieves the same practical restriction even though the nav entry
+    # stays visible to everyone.
+    return HttpResponseForbidden(
+        "The Embeddings & Classifier workspace is currently limited to "
+        "administrators while it's being validated."
+    )
 
 
 def _infra_configured():
@@ -40,6 +56,8 @@ def workspace_index(request):
     trigger. Those depend on the embeddingsdb Pod and model-train Actor,
     which do not exist yet per the spec's own infrastructure sequencing.
     """
+    if not request.user.is_superuser:
+        return _forbidden_response()
     template_args = {
         'title': 'Embeddings & Classifier',
         'infra_configured': _infra_configured(),
@@ -58,6 +76,8 @@ def model_diagnostics(request, model_id=None):
     Placeholder shell only in this increment -- no MLflow proxy call yet
     (mlflow_client.py is out of scope; the mlflow Pod does not exist yet).
     """
+    if not request.user.is_superuser:
+        return _forbidden_response()
     template_args = {
         'title': 'Model Diagnostics',
         'model_id': model_id,

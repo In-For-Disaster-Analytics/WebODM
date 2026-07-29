@@ -36,6 +36,7 @@ endpoint until now -- needed so the new task-panel UI's "existing site"
 dropdown has something real to populate itself from.
 """
 
+import os
 from datetime import datetime, timezone
 
 from django.conf import settings
@@ -43,11 +44,55 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from app.api import tiler
 from app.plugins.views import TaskView
 from app.plugins.worker import run_function_async
+from app.raster_utils import ZOOM_EXTRA_LEVELS
+from rio_tiler.io import COGReader
 
 from . import embeddings_client
 from . import label_studio_client
+
+
+class IsEmbeddingsAdmin(permissions.BasePermission):
+    """
+    Design spec Decision 46: the embeddings plugin is restricted to
+    superusers only while it's still being validated in production, before
+    being made available to all users. Real 403 enforcement at the DRF
+    permission layer -- not just hiding UI -- since `TaskView` (==
+    `app.api.tasks.TaskNestedView`) deliberately sets its own
+    `permission_classes = (AllowAny,)` for its task-visibility logic
+    (`get_and_check_task()`'s own public/guardian checks), this class is
+    applied on top, overriding that default on each view that opts in.
+    Deliberately NOT applied to `LabelStudioWebhookView` -- that endpoint is
+    called server-to-server by Label Studio itself (shared-secret auth,
+    Decisions 10/29), not by a WebODM user, so "admin only" doesn't apply.
+    """
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+
+
+def _compute_max_zoom(task):
+    """
+    Decision 46: the zoom level for `POST .../embed` is no longer a
+    client-supplied value -- it's always the task's own orthophoto's
+    highest available resolution, computed the same way WebODM's own
+    `TileJson` view does (`app/api/tiler.py`: `get_zoom_safe()` +
+    `ZOOM_EXTRA_LEVELS`), so it matches exactly what `tiles.json` itself
+    reports (and therefore what `embed_generate.webodm_client.
+    get_tile_coverage()` reads on the Actor/ls6 side).
+
+    Raises FileNotFoundError if the task has no orthophoto yet.
+    """
+    raster_path = tiler.get_raster_path(task, 'orthophoto')
+    if not os.path.isfile(raster_path):
+        raise FileNotFoundError(
+            'This task has no orthophoto yet -- cannot determine a zoom level.'
+        )
+    with COGReader(raster_path) as src:
+        _minzoom, maxzoom = tiler.get_zoom_safe(src)
+    return maxzoom + ZOOM_EXTRA_LEVELS
 
 
 def _not_implemented(message):
@@ -84,6 +129,8 @@ class TaskTilesView(TaskView):
     (Decision 9) -- this endpoint is the selective, human-in-the-loop side.
     """
 
+    permission_classes = (IsEmbeddingsAdmin,)
+
     def get(self, request, pk=None):
         self.get_and_check_task(request, pk)
         return _not_implemented(
@@ -111,6 +158,8 @@ class TaskLabelView(TaskView):
         the request body's `tile_ids`, not a real tile_observation_id
         (there's no tile_grid/tile_observations table yet to resolve one from).
     """
+
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def post(self, request, pk=None):
         task = self.get_and_check_task(request, pk)
@@ -202,9 +251,15 @@ class TaskEmbedView(TaskView):
     POST /api/plugins/embeddings/task/{task_pk}/embed
 
     Design spec: queues embed-generate over every valid (z, x, y) at the
-    requested zoom for this task's orthophoto -- no tile_ids, whole-task by
-    design (Decision 9). Requires a user-chosen site_id (Decision 27) and
-    honors zoom_override against a site's locked zoom (Decision 24/27).
+    task's orthophoto's own highest available resolution -- no tile_ids,
+    whole-task by design (Decision 9). Requires a user-chosen site_id
+    (Decision 27) and honors zoom_override against a site's locked zoom
+    (Decision 24/27).
+
+    Decision 46: zoom is no longer a client-supplied value -- `_compute_max_zoom()`
+    always uses the task's own orthophoto's real highest resolution (the
+    same computation `TileJson` itself uses), so embeddings are never
+    generated at a lower resolution than what's actually available.
 
     Real in this increment (against the live embeddingsdb, Decision 33, and
     the real, registered embed-generate ls6 Tapis App, Decision 45): site
@@ -224,6 +279,8 @@ class TaskEmbedView(TaskView):
     submission itself later succeeds -- a user has genuinely committed to
     embedding a task at a site once that row exists.
     """
+
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def post(self, request, pk=None):
         task = self.get_and_check_task(request, pk)
@@ -246,20 +303,11 @@ class TaskEmbedView(TaskView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # --- Validate zoom (required int) ---
-        raw_zoom = request.data.get('zoom')
-        if raw_zoom is None:
-            return Response(
-                {'error': 'zoom is required (integer tile zoom level).'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # --- Zoom: always the task's own highest available resolution (Decision 46) ---
         try:
-            zoom = int(raw_zoom)
-        except (TypeError, ValueError):
-            return Response(
-                {'error': f'zoom must be an integer, got {raw_zoom!r}.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            zoom = _compute_max_zoom(task)
+        except FileNotFoundError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # --- Validate site_id / new_site_name (required -- Decision 27: user-chosen, never inferred) ---
         site_id = request.data.get('site_id')
@@ -305,11 +353,11 @@ class TaskEmbedView(TaskView):
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Actor invocation: genuinely queued now (Decision 37) ---
+        # --- Job submission: genuinely queued now (Decisions 37/45) ---
         # Fire-and-forget, same shape as the CKAN plugin's own async publish
         # (coreplugins/ckan/api_views.py's PublishView.post() -> run_function_async
         # (publisher.apply_ckan_publish, ...)) -- this view does not wait on
-        # or know the outcome of the queued Actor call; a real `visits` row
+        # or know the outcome of the queued Job submission; a real `visits` row
         # already exists by this point regardless of how that call turns out.
         run_function_async(
             embeddings_client.apply_embed_generate,
@@ -349,6 +397,8 @@ class TaskEmbedStatusView(TaskView):
     which is out of scope for this increment's DB-layer work. Only N (tiles
     actually processed so far) is real here.
     """
+
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def get(self, request, pk=None):
         task = self.get_and_check_task(request, pk)
@@ -397,6 +447,8 @@ class TaskPublishToSTACView(TaskView):
     (Decision 23).
     """
 
+    permission_classes = (IsEmbeddingsAdmin,)
+
     def post(self, request, pk=None):
         self.get_and_check_task(request, pk)
         return _not_implemented(
@@ -414,6 +466,8 @@ class TaskRetractFromSTACView(TaskView):
     visit's stac_collection_id/stac_item_id.
     """
 
+    permission_classes = (IsEmbeddingsAdmin,)
+
     def post(self, request, pk=None):
         self.get_and_check_task(request, pk)
         return _not_implemented(
@@ -430,6 +484,8 @@ class TaskLabelsImportGeoJSONView(TaskView):
     matches features to tile_grid cells, flags unrecognized label values for
     confirm/remap, then upserts `labels` rows with source='geojson_import'.
     """
+
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def post(self, request, pk=None):
         self.get_and_check_task(request, pk)
@@ -484,7 +540,7 @@ class SitesView(APIView):
     Response: 200 {"sites": [{"id": <str>, "name": <str>}, ...]}
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def get(self, request):
         if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
@@ -518,7 +574,7 @@ class LabelClassesView(APIView):
     authenticated WebODM user (see "API Endpoints" preamble).
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = (IsEmbeddingsAdmin,)
 
     def get(self, request):
         return _not_implemented(

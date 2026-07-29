@@ -47,10 +47,14 @@ class Plugin(PluginBase):
         def load_buttons_view(request):
             infra_configured = bool(getattr(settings, 'WO_EMBEDDINGS_DB_URL', '')) and \
                 bool(getattr(settings, 'WO_LABEL_STUDIO_URL', ''))
+            # Decision 46: restricted to superusers only while the plugin
+            # is still being validated in production -- the task-detail
+            # button itself never even registers for non-admins.
+            is_admin = bool(request.user and request.user.is_authenticated and request.user.is_superuser)
             return render(
                 request,
                 plugin.template_path('load_buttons.js'),
-                {'infra_configured': infra_configured},
+                {'infra_configured': infra_configured, 'is_admin': is_admin},
                 content_type='text/javascript',
             )
 

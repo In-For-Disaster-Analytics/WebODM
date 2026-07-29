@@ -43,7 +43,6 @@ const INITIAL_STATE = {
     siteMode: 'existing',   // 'existing' | 'new'
     siteId: '',
     newSiteName: '',
-    zoom: 19,
     zoomOverride: false,
     embedStatus: 'idle',    // idle | submitting | running | error
     embedError: '',
@@ -168,12 +167,8 @@ export default class EmbeddingsPanel extends React.Component {
 
     handleSubmitEmbed = () => {
         const { task } = this.props;
-        const { siteMode, siteId, newSiteName, zoom, zoomOverride } = this.state;
+        const { siteMode, siteId, newSiteName, zoomOverride } = this.state;
 
-        if (zoom === '' || zoom === null || isNaN(parseInt(zoom, 10))) {
-            this.setState({ embedError: 'Zoom level is required and must be an integer.' });
-            return;
-        }
         if (siteMode === 'existing' && !siteId) {
             this.setState({ embedError: 'Select an existing site, or switch to "New site".' });
             return;
@@ -185,8 +180,10 @@ export default class EmbeddingsPanel extends React.Component {
 
         this.setState({ embedStatus: 'submitting', embedError: '' });
 
+        // Decision 46: zoom is no longer sent by the client at all -- the
+        // server always computes the task's own orthophoto's highest
+        // available resolution (api_views.py's _compute_max_zoom()).
         const payload = {
-            zoom: parseInt(zoom, 10),
             site_id: siteMode === 'existing' ? siteId : null,
             new_site_name: siteMode === 'new' ? newSiteName.trim() : null,
             zoom_override: !!zoomOverride,
@@ -253,7 +250,7 @@ export default class EmbeddingsPanel extends React.Component {
     renderGenerateEmbeddingsSection() {
         const {
             sites, sitesLoading, sitesError,
-            siteMode, siteId, newSiteName, zoom, zoomOverride,
+            siteMode, siteId, newSiteName, zoomOverride,
             embedStatus, embedError, embedConflict,
             tileObservationCount,
         } = this.state;
@@ -263,14 +260,18 @@ export default class EmbeddingsPanel extends React.Component {
         return (
             <div style={styles.section}>
                 <div style={styles.sectionTitle}>Generate Embeddings</div>
+                <div style={styles.hint}>
+                    Always uses this task's own orthophoto at its highest available
+                    resolution (Decision 46) — not a user-chosen setting.
+                </div>
 
                 {(embedStatus === 'running') && (
                     <div style={styles.progressBox}>
                         <i className="fa fa-circle-notch fa-spin" /> Running — {tileObservationCount} tile{tileObservationCount === 1 ? '' : 's'} observed so far.
                         <div style={styles.hint}>
                             Status keeps polling while this panel is open (see design spec — the
-                            embed-generate Actor invocation is real, but the Actor itself doesn't
-                            yet report a terminal "done" state).
+                            embed-generate Job submission is real, but the pipeline doesn't yet
+                            report a terminal "done" state).
                         </div>
                     </div>
                 )}
@@ -285,22 +286,11 @@ export default class EmbeddingsPanel extends React.Component {
                                     checked={zoomOverride}
                                     onChange={e => this.setState({ zoomOverride: e.target.checked })}
                                 />
-                                {' '}Use zoom anyway
+                                {' '}Use this resolution anyway
                             </label>
                         </div>
                     </div>
                 )}
-
-                <div style={styles.formRow}>
-                    <label style={styles.label}>Zoom level</label>
-                    <input
-                        type="number"
-                        style={styles.numberInput}
-                        value={zoom}
-                        disabled={formDisabled}
-                        onChange={e => this.setState({ zoom: e.target.value })}
-                    />
-                </div>
 
                 <div style={styles.formRow}>
                     <label style={styles.label}>Site</label>
@@ -537,13 +527,6 @@ const styles = {
     checkboxLabel: {
         fontSize: 12,
         fontWeight: 'normal',
-    },
-    numberInput: {
-        width: 90,
-        border: '1px solid #ccc',
-        borderRadius: 3,
-        padding: '3px 6px',
-        fontSize: 13,
     },
     textInput: {
         width: '100%',
