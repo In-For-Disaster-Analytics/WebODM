@@ -315,9 +315,9 @@ class TaskEmbedView(TaskView):
         if not site_id and not new_site_name:
             return Response(
                 {'error': (
-                    'Either site_id (an existing site) or new_site_name '
-                    '(to create one) is required -- site is never inferred '
-                    'from task/project metadata (Decision 27).'
+                    'Select an existing site, or provide a name for a new '
+                    'one -- a site can\'t be inferred automatically from the '
+                    'task or project.'
                 )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -333,9 +333,10 @@ class TaskEmbedView(TaskView):
             if existing_zoom is not None and existing_zoom != zoom and not zoom_override:
                 return Response(
                     {'error': (
-                        f'This site already has embeddings at zoom {existing_zoom} -- '
-                        f'using zoom {zoom} will not match existing tiles for change '
-                        f'detection. Set zoom_override: true to proceed anyway.'
+                        f'This site already has embeddings at zoom {existing_zoom}. '
+                        f'This task\'s highest available resolution is zoom {zoom}, '
+                        f'which won\'t line up with those existing tiles -- '
+                        f'comparisons across visits at this site could be affected.'
                     )},
                     status=status.HTTP_409_CONFLICT,
                 )
