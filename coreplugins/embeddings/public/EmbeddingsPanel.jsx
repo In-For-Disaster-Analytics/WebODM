@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'ReactDOM';
 import PropTypes from 'prop-types';
 import $ from 'jquery';
+import L from 'leaflet';
+import { tileBoundsLatLng } from './tileMath';
 
 // First real UI increment for this plugin (Decision 38,
 // docs/design/2026-07-22-geospatial-embeddings-classification.md). Scoped to
@@ -25,9 +27,9 @@ import $ from 'jquery';
 //     labeling gets its own real tile_grid/tile_observation rows, decoupled
 //     from whether embed-generate has run for this task.)
 //   - GET    .../task/{pk}/tiles          -> 200 {zoom, tiles: [{x, y, tile_observation_id}, ...]}
-//     (Decision 49: real now -- not yet called from this panel; the map-based
-//     tile picker that would consume it is a fast-follow, tile ids are still
-//     typed in by hand this increment.)
+//     (Decision 49: real, and now the real map-based tile picker's data
+//     source -- a standalone Leaflet map, refetched whenever the chosen
+//     site changes since a different site can have a different locked zoom.)
 //   - GET    .../sites                    -> 200 {sites: [{id, name}, ...]} (Decision 38)
 //
 // Note on `embed-status`: the backend contract only defines 'not_started' and
@@ -66,7 +68,14 @@ const INITIAL_STATE = {
     labelSiteMode: 'existing',   // 'existing' | 'new'
     labelSiteId: '',
     labelNewSiteName: '',
-    tileIdsText: '',
+    // Map-based tile picker (GET .../tiles) -- replaces the earlier
+    // free-text "z/x/y" input entirely, per the design spec's own "Tile
+    // Selection UI: Map, Not a Flat Thumbnail Grid" section.
+    tilesLoading: false,
+    tilesError: '',
+    tilesZoom: null,
+    candidateTiles: [],   // [{x, y, tile_observation_id}]
+    selectedTiles: [],    // [{x, y}]
     labelStatus: 'idle',    // idle | submitting | success | error
     labelError: '',
     labelResult: null,      // {project_id, label_studio_url, tile_count}
@@ -85,6 +94,9 @@ export default class EmbeddingsPanel extends React.Component {
         super(props);
         this.state = { ...INITIAL_STATE };
         this._pollTimer = null;
+        this._map = null;
+        this._tileLayerGroup = null;
+        this._hasFitBounds = false;
     }
 
     componentWillUnmount() {
@@ -98,6 +110,7 @@ export default class EmbeddingsPanel extends React.Component {
         // than show stale/wrong progress.
         if (prevProps.task && this.props.task && prevProps.task.id !== this.props.task.id) {
             this._stopPolling();
+            this._hasFitBounds = false;
             this.setState({ ...INITIAL_STATE });
         }
     }
@@ -138,6 +151,7 @@ export default class EmbeddingsPanel extends React.Component {
         this.setState({ panelOpen: true });
         this._loadSites();
         this._checkInitialEmbedStatus();
+        this._loadCandidateTiles();
     }
 
     handleClosePanel = () => {
@@ -177,6 +191,119 @@ export default class EmbeddingsPanel extends React.Component {
         }).fail(() => {
             // silent -- the form still works even if this check fails
         });
+    }
+
+    // ── Map-based tile picker ("Label a Sample") ────────────────────────────
+    // Decision 49: GET .../tiles is real -- fetches every candidate tile at
+    // the effective (site-zoom-lock-aware) zoom, drawn as a clickable grid
+    // over the task's own orthophoto. Refetched whenever the chosen site
+    // changes, since a different site can have a different locked zoom
+    // (and different already-observed tiles) for the same task.
+
+    _loadCandidateTiles = () => {
+        const { task } = this.props;
+        const { labelSiteMode, labelSiteId } = this.state;
+
+        this.setState({ tilesLoading: true, tilesError: '' });
+        this._hasFitBounds = false;
+
+        const params = {};
+        if (labelSiteMode === 'existing' && labelSiteId) {
+            params.site_id = labelSiteId;
+        }
+
+        $.ajax({
+            type: 'GET',
+            url: `/api/plugins/embeddings/task/${task.id}/tiles`,
+            data: params,
+        }).done(data => {
+            this.setState({
+                candidateTiles: data.tiles || [],
+                tilesZoom: data.zoom,
+                tilesLoading: false,
+                selectedTiles: [],
+            }, this._renderTileOverlay);
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            this.setState({ tilesError: msg, tilesLoading: false, candidateTiles: [] }, this._renderTileOverlay);
+        });
+    }
+
+    // Callback ref: creates the standalone Leaflet map once when the modal
+    // (re)opens, and tears it down when it closes -- React calls this with
+    // `null` right as the container unmounts (the whole panel tree is
+    // conditionally rendered on `panelOpen`), so there's no separate
+    // componentWillUnmount bookkeeping needed for the map itself.
+    _setMapEl = (el) => {
+        if (!el) {
+            if (this._map) {
+                this._map.remove();
+                this._map = null;
+                this._tileLayerGroup = null;
+            }
+            return;
+        }
+        if (this._map) return;
+
+        const { task } = this.props;
+        this._map = L.map(el, {
+            zoomControl: true,
+            attributionControl: false,
+            minZoom: 0,
+            maxZoom: 24,
+        });
+        this._map.setView([0, 0], 2);
+
+        L.tileLayer(
+            `/api/projects/${task.project}/tasks/${task.id}/orthophoto/tiles/{z}/{x}/{y}.png`,
+            { maxNativeZoom: 24, maxZoom: 24, minZoom: 0 },
+        ).addTo(this._map);
+
+        this._tileLayerGroup = L.layerGroup().addTo(this._map);
+        this._renderTileOverlay();
+    }
+
+    _renderTileOverlay = () => {
+        if (!this._map || !this._tileLayerGroup) return;
+        this._tileLayerGroup.clearLayers();
+
+        const { candidateTiles, tilesZoom, selectedTiles } = this.state;
+        if (!candidateTiles.length || tilesZoom == null) return;
+
+        const selectedKeys = new Set(selectedTiles.map(t => `${t.x},${t.y}`));
+        let allBounds = null;
+
+        candidateTiles.forEach(tile => {
+            const bounds = tileBoundsLatLng(tile.x, tile.y, tilesZoom);
+            const isSelected = selectedKeys.has(`${tile.x},${tile.y}`);
+            const isObserved = !!tile.tile_observation_id;
+
+            const rect = L.rectangle(bounds, {
+                color: isSelected ? '#2d7a2d' : (isObserved ? '#4363d8' : '#999'),
+                weight: 1,
+                fillOpacity: isSelected ? 0.45 : (isObserved ? 0.25 : 0.05),
+            });
+            rect.on('click', () => this._toggleTile(tile.x, tile.y));
+            rect.addTo(this._tileLayerGroup);
+
+            allBounds = allBounds ? allBounds.extend(bounds) : L.latLngBounds(bounds);
+        });
+
+        if (allBounds && !this._hasFitBounds) {
+            this._map.fitBounds(allBounds);
+            this._hasFitBounds = true;
+        }
+    }
+
+    _toggleTile = (x, y) => {
+        this.setState(prevState => {
+            const key = `${x},${y}`;
+            const exists = prevState.selectedTiles.some(t => `${t.x},${t.y}` === key);
+            const selectedTiles = exists
+                ? prevState.selectedTiles.filter(t => `${t.x},${t.y}` !== key)
+                : [...prevState.selectedTiles, { x, y }];
+            return { selectedTiles };
+        }, this._renderTileOverlay);
     }
 
     handleSubmitEmbed = () => {
@@ -230,11 +357,10 @@ export default class EmbeddingsPanel extends React.Component {
 
     handleSubmitLabel = () => {
         const { task } = this.props;
-        const { tileIdsText, labelSiteMode, labelSiteId, labelNewSiteName } = this.state;
-        const tileIds = tileIdsText.split(',').map(s => s.trim()).filter(Boolean);
+        const { selectedTiles, tilesZoom, labelSiteMode, labelSiteId, labelNewSiteName } = this.state;
 
-        if (!tileIds.length) {
-            this.setState({ labelError: 'Enter at least one tile id (comma-separated).' });
+        if (!selectedTiles.length) {
+            this.setState({ labelError: 'Click at least one tile on the map to select it.' });
             return;
         }
         if (labelSiteMode === 'existing' && !labelSiteId) {
@@ -249,7 +375,7 @@ export default class EmbeddingsPanel extends React.Component {
         this.setState({ labelStatus: 'submitting', labelError: '' });
 
         const payload = {
-            tile_ids: tileIds,
+            tile_ids: selectedTiles.map(t => `${tilesZoom}/${t.x}/${t.y}`),
             site_id: labelSiteMode === 'existing' ? labelSiteId : null,
             new_site_name: labelSiteMode === 'new' ? labelNewSiteName.trim() : null,
         };
@@ -260,7 +386,11 @@ export default class EmbeddingsPanel extends React.Component {
             contentType: 'application/json',
             data: JSON.stringify(payload),
         }).done(data => {
-            this.setState({ labelStatus: 'success', labelResult: data, labelError: '' });
+            this.setState({ labelStatus: 'success', labelResult: data, labelError: '', selectedTiles: [] });
+            this._renderTileOverlay();
+            // Refresh so the map reflects the tile_observation_ids that now
+            // exist for whichever tiles were just submitted.
+            this._loadCandidateTiles();
         }).fail(xhr => {
             const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
             this.setState({ labelStatus: 'error', labelError: msg, labelResult: null });
@@ -397,7 +527,8 @@ export default class EmbeddingsPanel extends React.Component {
         const {
             sites, sitesLoading, sitesError,
             labelSiteMode, labelSiteId, labelNewSiteName,
-            tileIdsText, labelStatus, labelError, labelResult,
+            tilesLoading, tilesError, selectedTiles,
+            labelStatus, labelError, labelResult,
         } = this.state;
         const submitting = labelStatus === 'submitting';
 
@@ -405,10 +536,8 @@ export default class EmbeddingsPanel extends React.Component {
             <div style={styles.section}>
                 <div style={styles.sectionTitle}>Label a Sample</div>
                 <div style={styles.hint}>
-                    Send specific tiles to Label Studio for manual labeling. Enter
-                    each tile as <code>zoom/x/y</code> (e.g. 19/1234/5678),
-                    separated by commas. A map for picking tiles visually is
-                    planned for a future update. Labeling has its own site — it
+                    Click tiles on the map below to select them for manual
+                    labeling in Label Studio. Labeling has its own site — it
                     doesn't require embeddings to have been generated first.
                 </div>
 
@@ -421,7 +550,7 @@ export default class EmbeddingsPanel extends React.Component {
                                 name="labelSiteMode"
                                 checked={labelSiteMode === 'existing'}
                                 disabled={submitting}
-                                onChange={() => this.setState({ labelSiteMode: 'existing' })}
+                                onChange={() => this.setState({ labelSiteMode: 'existing' }, this._loadCandidateTiles)}
                             />
                             {' '}Existing site
                         </label>
@@ -432,7 +561,7 @@ export default class EmbeddingsPanel extends React.Component {
                                 name="labelSiteMode"
                                 checked={labelSiteMode === 'new'}
                                 disabled={submitting}
-                                onChange={() => this.setState({ labelSiteMode: 'new' })}
+                                onChange={() => this.setState({ labelSiteMode: 'new' }, this._loadCandidateTiles)}
                             />
                             {' '}New site
                         </label>
@@ -444,7 +573,7 @@ export default class EmbeddingsPanel extends React.Component {
                                 style={styles.select}
                                 value={labelSiteId}
                                 disabled={submitting || sitesLoading}
-                                onChange={e => this.setState({ labelSiteId: e.target.value })}
+                                onChange={e => this.setState({ labelSiteId: e.target.value }, this._loadCandidateTiles)}
                             >
                                 <option value="">
                                     {sitesLoading ? 'Loading sites…' : '— select a site —'}
@@ -468,15 +597,12 @@ export default class EmbeddingsPanel extends React.Component {
                 </div>
 
                 <div style={styles.formRow}>
-                    <label style={styles.label}>Tile ids (comma-separated)</label>
-                    <input
-                        type="text"
-                        style={styles.textInput}
-                        placeholder="e.g. 19/1234/5678, 19/1234/5679"
-                        value={tileIdsText}
-                        disabled={submitting}
-                        onChange={e => this.setState({ tileIdsText: e.target.value })}
-                    />
+                    <label style={styles.label}>
+                        Tiles {selectedTiles.length > 0 && `(${selectedTiles.length} selected)`}
+                    </label>
+                    <div style={styles.mapContainer} ref={this._setMapEl} />
+                    {tilesLoading && <div style={styles.hint}>Loading candidate tiles…</div>}
+                    {tilesError && <div style={styles.errorMsg}>{tilesError}</div>}
                 </div>
 
                 {labelError && <div style={styles.errorMsg}>{labelError}</div>}
@@ -493,7 +619,7 @@ export default class EmbeddingsPanel extends React.Component {
                 <button
                     className="btn btn-sm btn-primary"
                     onClick={this.handleSubmitLabel}
-                    disabled={submitting}
+                    disabled={submitting || !selectedTiles.length}
                 >
                     {submitting
                         ? <span><i className="fa fa-circle-notch fa-spin" /> Sending…</span>
@@ -552,7 +678,7 @@ const styles = {
     },
     panel: {
         position: 'relative',
-        width: 480,
+        width: 640,
         maxWidth: '92vw',
         maxHeight: '85vh',
         background: '#fff',
@@ -581,7 +707,7 @@ const styles = {
     body: {
         flex: 1,
         overflowY: 'auto',
-        maxHeight: 480,
+        maxHeight: 620,
         padding: 12,
     },
     section: {
@@ -633,6 +759,14 @@ const styles = {
         padding: '3px 6px',
         fontSize: 13,
         marginTop: 4,
+    },
+    mapContainer: {
+        width: '100%',
+        height: 360,
+        marginTop: 4,
+        border: '1px solid #ccc',
+        borderRadius: 3,
+        background: '#eee',
     },
     hint: {
         fontSize: 11,
