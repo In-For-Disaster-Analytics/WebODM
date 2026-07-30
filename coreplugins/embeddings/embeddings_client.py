@@ -487,8 +487,16 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
     # read_actor_message() decodes it back before json.loads().
     encoded_message = base64.b64encode(json.dumps(message).encode('utf-8')).decode('ascii')
 
+    # Tapis's Jobs API caps `name` at 64 characters (confirmed via a real,
+    # live submission on this instance: the full `embed-generate-{task_id}-
+    # {visit_id}` form with both as full UUIDs is 88 chars, rejected with
+    # "TAPIS_JSON_VALIDATION_FAILURE ... #/name: expected maxLength: 64,
+    # actual: 88"). `name` is only a human-readable label -- the real
+    # identity key is the job's own server-assigned uuid -- so an 8-char
+    # id prefix (32 chars total) is enough to eyeball which task/visit a
+    # job belongs to without needing global uniqueness.
     job_spec = {
-        'name': f'embed-generate-{task_id}-{visit_id}',
+        'name': f'embed-generate-{task_id[:8]}-{visit_id[:8]}',
         'appId': app_id,
         'appVersion': app_version,
         'execSystemId': 'ls6',
