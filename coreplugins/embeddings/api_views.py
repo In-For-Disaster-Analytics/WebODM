@@ -178,9 +178,12 @@ class TaskTilesView(TaskView):
     check WebODM's own `Tiles` view already uses (Decision 9). If `site_id`
     is supplied and a visit already exists for (site_id, this task), each
     tile also reports its real `tile_observation_id` where one already
-    exists (already labeled and/or embedded), so the frontend map can show
-    those differently. Omitting `site_id` (a genuinely new site, not chosen
-    yet) returns the raw candidate list with no observation linkage.
+    exists (already labeled and/or embedded), plus its CURRENT
+    `label_value`/`label_color` if one has been applied (Decision 50: the
+    map-based paint UI renders each tile in its real, current label color,
+    not just an "observed or not" flag). Omitting `site_id` (a genuinely
+    new site, not chosen yet) returns the raw candidate list with no
+    observation/label linkage.
     """
 
     permission_classes = (IsEmbeddingsAdmin,)
@@ -206,7 +209,7 @@ class TaskTilesView(TaskView):
         if site_id:
             try:
                 visit_id = embeddings_client.get_visit_for_site_and_task(site_id, str(task.id))
-                observed = embeddings_client.get_tile_observation_ids_for_visit(visit_id)
+                observed = embeddings_client.get_tile_observations_for_visit(visit_id)
             except embeddings_client.EmbeddingsDBConfigError as e:
                 return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             except embeddings_client.EmbeddingsDBError as e:
@@ -218,10 +221,13 @@ class TaskTilesView(TaskView):
             for x, y in tile_math.candidate_tiles(bounds, zoom):
                 if not src.tile_exists(zoom, x, y):
                     continue
+                info = observed.get((x, y)) or {}
                 tiles.append({
                     'x': x,
                     'y': y,
-                    'tile_observation_id': observed.get((x, y)),
+                    'tile_observation_id': info.get('tile_observation_id'),
+                    'label_value': info.get('label_value'),
+                    'label_color': info.get('label_color'),
                 })
 
         return Response({'zoom': zoom, 'tiles': tiles}, status=status.HTTP_200_OK)
@@ -445,6 +451,228 @@ class TaskLabelView(TaskView):
             'project_id': project_id,
             'label_studio_url': deep_link_url,
             'tile_count': len(ls_tasks),
+        }, status=status.HTTP_200_OK)
+
+
+class TaskLabelApplyView(TaskView):
+    """
+    POST /api/plugins/embeddings/task/{task_pk}/labels/apply
+
+    Design spec, Decision 50: "paint a label directly in the modal" --
+    instead of sending an unlabeled batch to Label Studio for a human to
+    annotate there (TaskLabelView, below -- kept, for open-ended human
+    annotation), this applies ONE chosen label_classes value to a batch of
+    tiles immediately. Creates real tile_grid/tile_observations rows (same
+    as TaskLabelView), ensures a Label Studio project + imported tasks
+    exist for those tiles -- reusing ONE project across a whole paint
+    session via the optional `label_studio_project_id` request field, not
+    one project per drag stroke -- creates a REAL annotation on each tile
+    via `label_studio_client.create_annotation()` (so Label Studio remains
+    the true system of record, per the user's own "fully integrate Label
+    Studio through WebODM" framing), and immediately upserts the
+    corresponding `labels` row locally rather than waiting on the
+    ANNOTATION_CREATED webhook round-trip (which still fires harmlessly
+    and re-upserts the same value when it arrives).
+    """
+
+    permission_classes = (IsEmbeddingsAdmin,)
+
+    def post(self, request, pk=None):
+        task = self.get_and_check_task(request, pk)
+
+        if not (getattr(settings, 'WO_LABEL_STUDIO_URL', '') and
+                getattr(settings, 'WO_LABEL_STUDIO_API_TOKEN', '')):
+            return Response(
+                {'error': (
+                    'Label Studio integration is not configured on this '
+                    'WebODM instance -- WO_LABEL_STUDIO_URL and/or '
+                    'WO_LABEL_STUDIO_API_TOKEN are not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        if not getattr(settings, 'WO_LABEL_STUDIO_WEBHOOK_SECRET', ''):
+            return Response(
+                {'error': (
+                    'Label Studio webhook verification is not configured on '
+                    'this WebODM instance -- WO_LABEL_STUDIO_WEBHOOK_SECRET '
+                    'is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        value = request.data.get('value')
+        tile_ids = request.data.get('tile_ids') or []
+        if not value:
+            return Response({'error': 'value is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not tile_ids:
+            return Response(
+                {'error': 'tile_ids is required and must be a non-empty list.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        site_id = request.data.get('site_id')
+        new_site_name = request.data.get('new_site_name')
+        if not site_id and not new_site_name:
+            return Response(
+                {'error': (
+                    'Select an existing site, or provide a name for a new '
+                    'one -- a site can\'t be inferred automatically from the '
+                    'task or project.'
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            zoom = _compute_effective_zoom(site_id, task)
+        except FileNotFoundError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_tiles = []
+        for tile_id in tile_ids:
+            parts = str(tile_id).split('/')
+            if len(parts) != 3 or not all(p.lstrip('-').isdigit() for p in parts):
+                return Response(
+                    {'error': f'Invalid tile id {tile_id!r} -- expected "z/x/y".'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            z, x, y = (int(p) for p in parts)
+            if z != zoom:
+                return Response(
+                    {'error': (
+                        f'Tile {tile_id} is at zoom {z}, but this site\'s '
+                        f'effective zoom is {zoom} -- select tiles from '
+                        f'GET .../tiles, which always reports the effective zoom.'
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            parsed_tiles.append((z, x, y))
+
+        try:
+            if not site_id:
+                site_id = embeddings_client.create_site(new_site_name)
+
+            # Reject an unrecognized label value up front, before any
+            # writes -- same posture as the webhook handler.
+            valid_values = {lc['value'] for lc in embeddings_client.list_label_classes(site_id)}
+            if value not in valid_values:
+                return Response(
+                    {'error': f'{value!r} does not match any registered label class for this site.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            capture_date = request.data.get('capture_date') or (
+                task.created_at.date() if task.created_at else None
+            )
+            visit_id = embeddings_client.get_or_create_visit(
+                site_id, str(task.id), task.project_id, capture_date=capture_date,
+            )
+
+            tile_observation_ids = []
+            for z, x, y in parsed_tiles:
+                bounds_wkt = tile_math.tile_bounds_wkt(x, y, zoom)
+                tile_grid_id = embeddings_client.get_or_create_tile_grid(site_id, zoom, x, y, bounds_wkt)
+                center_lat, _center_lon = tile_math.tile_center_lonlat(x, y, zoom)
+                pixel_size = tile_math.meters_per_pixel(zoom, center_lat)
+                tile_observation_ids.append(
+                    embeddings_client.get_or_create_tile_observation(tile_grid_id, visit_id, pixel_size)
+                )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_url = request.build_absolute_uri('/').rstrip('/')
+        project_id_str, task_id_str = str(task.project_id), str(task.id)
+
+        try:
+            # --- Reuse one Label Studio project across a whole paint session ---
+            project_id = request.data.get('label_studio_project_id')
+            if not project_id:
+                title = (
+                    f'{task.name or "unnamed"} — paint session '
+                    f'{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
+                )
+                label_classes = embeddings_client.list_label_classes(site_id)
+                label_config = label_studio_client.build_label_config(label_classes)
+                project = label_studio_client.create_project(title=title, label_config=label_config)
+                project_id = project.get('id')
+                if project_id is None:
+                    raise label_studio_client.LabelStudioAPIError(
+                        f'Label Studio project creation did not return an id: {project!r}'
+                    )
+
+                project_secret = _derive_project_webhook_secret(project_id)
+                webhook_url = f'{base_url}/api/plugins/embeddings/labelstudio-webhook'
+                label_studio_client.register_webhook(project_id, webhook_url, project_secret)
+
+            # --- Import any tiles not already imported into THIS project ---
+            to_import = []
+            for (z, x, y), tobs_id in zip(parsed_tiles, tile_observation_ids):
+                if embeddings_client.get_label_studio_task_id(project_id, tobs_id) is not None:
+                    continue
+                image_url = (
+                    f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}'
+                    f'/orthophoto/tiles/{z}/{x}/{y}.png'
+                )
+                to_import.append({
+                    'data': {'image': image_url},
+                    'meta': {'tile_observation_id': tobs_id, 'webodm_task_id': task_id_str},
+                })
+
+            if to_import:
+                label_studio_client.import_tasks(project_id, to_import)
+                listing = label_studio_client.list_tasks(project_id, page_size=max(len(to_import), 100))
+                ls_task_list = listing.get('tasks') or []
+                if listing.get('total', len(ls_task_list)) > len(ls_task_list):
+                    logger.error(
+                        'Label Studio project %s has more tasks (%s) than this '
+                        'page fetched (%d) during paint-import.',
+                        project_id, listing.get('total'), len(ls_task_list),
+                    )
+                for ls_task in ls_task_list:
+                    tobs_id = (ls_task.get('meta') or {}).get('tile_observation_id')
+                    ls_task_id = ls_task.get('id')
+                    if tobs_id and ls_task_id is not None:
+                        embeddings_client.register_label_studio_task(project_id, ls_task_id, tobs_id)
+
+            # --- Create a real annotation + upsert the label, per tile ---
+            result = [{
+                'from_name': 'label',
+                'to_name': 'image',
+                'type': 'choices',
+                'value': {'choices': [value]},
+            }]
+            applied = 0
+            for tobs_id in tile_observation_ids:
+                ls_task_id = embeddings_client.get_label_studio_task_id(project_id, tobs_id)
+                if ls_task_id is None:
+                    logger.error(
+                        'No Label Studio task id for tile_observation_id=%s in '
+                        'project=%s after import -- skipping annotation for this tile.',
+                        tobs_id, project_id,
+                    )
+                    continue
+                label_studio_client.create_annotation(ls_task_id, result)
+                embeddings_client.upsert_label(
+                    tobs_id, 'category', value, source='label_studio',
+                    created_by=request.user.username,
+                )
+                applied += 1
+        except label_studio_client.LabelStudioConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except label_studio_client.LabelStudioAPIError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        return Response({
+            'label_studio_project_id': project_id,
+            'label_studio_url': label_studio_client.project_url(project_id),
+            'applied_count': applied,
         }, status=status.HTTP_200_OK)
 
 

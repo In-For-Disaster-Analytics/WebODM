@@ -374,23 +374,53 @@ def get_or_create_tile_observation(tile_grid_id, visit_id, pixel_size=None):
     return str(row[0])
 
 
-def get_tile_observation_ids_for_visit(visit_id):
+def get_tile_observations_for_visit(visit_id):
     """
-    Returns {(x, y): tile_observation_id (str)} for every tile_observations
-    row that already exists for this visit, joined through tile_grid --
-    lets TaskTilesView tell the frontend which candidate tiles already have
-    a real tile_observation_id (already labeled and/or embedded).
+    Returns {(x, y): {'tile_observation_id': str, 'label_value': str|None,
+    'label_color': str|None}} for every tile_observations row that already
+    exists for this visit, joined through tile_grid -- lets TaskTilesView
+    tell the frontend both which candidate tiles already have a real
+    tile_observation_id (already labeled and/or embedded) AND, if labeled,
+    the CURRENT label value/color (Decision 50: the map-based paint UI
+    needs this to render existing labels accurately, not just an
+    "observed or not" flag).
+
+    "Current" label = the most recently created `labels` row for that
+    tile_observation_id, regardless of source (label_studio/manual/
+    geojson_import) -- matches upsert_label()'s own "one row per
+    (tile_observation_id, source)" semantics extended across sources: the
+    single newest row across all sources is the one that actually reflects
+    reality right now. `label_color` resolves via label_classes, preferring
+    a site-specific class over an instance-wide default of the same value
+    (the same site-then-null precedence list_label_classes() already uses).
     """
     if not visit_id:
         return {}
     rows = _execute(
-        "SELECT tg.x, tg.y, tobs.id FROM tile_observations tobs "
+        "SELECT tg.x, tg.y, tobs.id, l.value, lc.color_hex "
+        "FROM tile_observations tobs "
         "JOIN tile_grid tg ON tg.id = tobs.tile_grid_id "
+        "LEFT JOIN LATERAL ("
+        "    SELECT value FROM labels WHERE tile_observation_id = tobs.id "
+        "    ORDER BY created_at DESC LIMIT 1"
+        ") l ON true "
+        "LEFT JOIN LATERAL ("
+        "    SELECT color_hex FROM label_classes "
+        "    WHERE value = l.value AND (site_id = tg.site_id OR site_id IS NULL) "
+        "    ORDER BY (site_id IS NULL) ASC LIMIT 1"
+        ") lc ON l.value IS NOT NULL "
         "WHERE tobs.visit_id = %s;",
         (visit_id,),
         fetch='all',
     )
-    return {(row[0], row[1]): str(row[2]) for row in (rows or [])}
+    return {
+        (row[0], row[1]): {
+            'tile_observation_id': str(row[2]),
+            'label_value': row[3],
+            'label_color': row[4],
+        }
+        for row in (rows or [])
+    }
 
 
 # ── label_classes (Decision 12) ─────────────────────────────────────────────
@@ -566,6 +596,29 @@ def get_tile_observation_for_label_studio_task(project_id, task_id):
         fetch='one',
     )
     return str(row[0]) if row else None
+
+
+def get_label_studio_task_id(project_id, tile_observation_id):
+    """
+    Reverse of get_tile_observation_for_label_studio_task() above: has THIS
+    tile_observation already been imported into THIS specific Label Studio
+    project? Used by the in-modal "paint a label" flow (Decision 50) to
+    decide whether a tile needs a fresh import_tasks() call or already has
+    a real Label Studio task id to create an annotation against directly --
+    a paint session reuses one project across many tiles/strokes, so a
+    tile painted a second time (e.g. relabeled) must not be re-imported as
+    a duplicate task.
+
+    Returns the task's real id (int) or None if not yet imported into this
+    project.
+    """
+    row = _execute(
+        'SELECT label_studio_task_id FROM label_studio_tasks '
+        'WHERE label_studio_project_id = %s AND tile_observation_id = %s;',
+        (project_id, tile_observation_id),
+        fetch='one',
+    )
+    return row[0] if row else None
 
 
 # ── embed-generate Tapis Job submission -- REAL (Decision 45) ──────────────

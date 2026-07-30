@@ -8,6 +8,7 @@ from . import views
 from .api_views import (
     TaskTilesView,
     TaskLabelView,
+    TaskLabelApplyView,
     TaskEmbedView,
     TaskEmbedStatusView,
     TaskPublishToSTACView,
@@ -92,6 +93,7 @@ class Plugin(PluginBase):
         return [
             MountPoint('task/(?P<pk>[^/.]+)/tiles$', TaskTilesView.as_view()),
             MountPoint('task/(?P<pk>[^/.]+)/label$', TaskLabelView.as_view()),
+            MountPoint('task/(?P<pk>[^/.]+)/labels/apply$', TaskLabelApplyView.as_view()),
             MountPoint('task/(?P<pk>[^/.]+)/embed$', TaskEmbedView.as_view()),
             MountPoint('task/(?P<pk>[^/.]+)/embed-status$', TaskEmbedStatusView.as_view()),
             MountPoint('task/(?P<pk>[^/.]+)/publish-to-stac$', TaskPublishToSTACView.as_view()),

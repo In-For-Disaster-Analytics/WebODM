@@ -18,19 +18,26 @@ import { tileBoundsLatLng } from './tileMath';
 // (not fetch), a status-polling pattern via setInterval, and a
 // ReactDOM.createPortal modal with a plain inline `styles` object.
 //
+// Decision 50: two tabs -- "Embedding" (Generate Embeddings) and "Labels"
+// (site selector + map-based tile picker + a label-class palette for
+// paint-to-label). Labeling now happens directly in this modal: painting a
+// tile creates a REAL Label Studio annotation via label_studio_client
+// .create_annotation() (Label Studio stays the true system of record, per
+// the user's own "fully integrate Label Studio through WebODM" framing) and
+// immediately upserts the local `labels` row, rather than requiring a human
+// to open Label Studio's own UI. Label Studio access itself (deep link) is
+// still available via `labelStudioUrl` once a paint session's project
+// exists, for anyone who wants to do more complex/freehand annotation there.
+//
 // Built against the real API contracts in api_views.py, verified by reading
 // that module directly (not assumed):
-//   - POST   .../task/{pk}/embed         -> 202 {site_id, visit_id} | 400 | 409 | 503
-//   - GET    .../task/{pk}/embed-status  -> 200 {status: 'not_started'|'running', site_id, visit_id, tile_observation_count}
-//   - POST   .../task/{pk}/label         -> 200 {project_id, label_studio_url, tile_count} | 400 | 502 | 503
-//     (Decision 49: now requires site_id/new_site_name too, same as /embed --
-//     labeling gets its own real tile_grid/tile_observation rows, decoupled
-//     from whether embed-generate has run for this task.)
-//   - GET    .../task/{pk}/tiles          -> 200 {zoom, tiles: [{x, y, tile_observation_id}, ...]}
-//     (Decision 49: real, and now the real map-based tile picker's data
-//     source -- a standalone Leaflet map, refetched whenever the chosen
-//     site changes since a different site can have a different locked zoom.)
-//   - GET    .../sites                    -> 200 {sites: [{id, name}, ...]} (Decision 38)
+//   - POST   .../task/{pk}/embed            -> 202 {site_id, visit_id} | 400 | 409 | 503
+//   - GET    .../task/{pk}/embed-status     -> 200 {status: 'not_started'|'running', site_id, visit_id, tile_observation_count}
+//   - GET    .../task/{pk}/tiles             -> 200 {zoom, tiles: [{x, y, tile_observation_id, label_value, label_color}, ...]}
+//   - GET    .../label-classes               -> 200 {label_classes: [{value, display_name, color_hex}, ...]}
+//   - POST   .../task/{pk}/labels/apply     -> 200 {label_studio_project_id, label_studio_url, applied_count} | 400 | 502 | 503
+//     (Decision 50: applies ONE label value to a batch of painted tiles immediately.)
+//   - GET    .../sites                       -> 200 {sites: [{id, name}, ...]} (Decision 38)
 //
 // Note on `embed-status`: the backend contract only defines 'not_started' and
 // 'running' -- there is no terminal "done"/"success" status to poll for yet,
@@ -44,8 +51,9 @@ const POLL_INTERVAL = 3000;
 
 const INITIAL_STATE = {
     panelOpen: false,
+    activeTab: 'embedding',   // 'embedding' | 'labels'
 
-    // "Generate Embeddings" section
+    // "Embedding" tab
     sites: [],
     sitesLoading: false,
     sitesError: '',
@@ -60,25 +68,26 @@ const INITIAL_STATE = {
     currentVisitId: null,
     tileObservationCount: 0,
 
-    // "Label a Sample" section
-    // Decision 49: labeling has its own site selector, independent of
-    // whether embedding has run for this task -- reuses the same `sites`
-    // list loaded above, but tracks its own mode/selection state since a
-    // user may label against a different site than they embedded against.
+    // "Labels" tab -- own site selector (Decision 49: decoupled from embedding)
     labelSiteMode: 'existing',   // 'existing' | 'new'
     labelSiteId: '',
     labelNewSiteName: '',
-    // Map-based tile picker (GET .../tiles) -- replaces the earlier
-    // free-text "z/x/y" input entirely, per the design spec's own "Tile
-    // Selection UI: Map, Not a Flat Thumbnail Grid" section.
+
+    // Map-based tile picker (Decision 49/50)
     tilesLoading: false,
     tilesError: '',
     tilesZoom: null,
-    candidateTiles: [],   // [{x, y, tile_observation_id}]
-    selectedTiles: [],    // [{x, y}]
-    labelStatus: 'idle',    // idle | submitting | success | error
-    labelError: '',
-    labelResult: null,      // {project_id, label_studio_url, tile_count}
+    candidateTiles: [],   // [{x, y, tile_observation_id, label_value, label_color}]
+
+    // Label-class palette + paint session (Decision 50)
+    labelClasses: [],
+    labelClassesLoading: false,
+    labelClassesError: '',
+    armedLabelValue: null,        // non-null while a label is "armed" for painting
+    labelStudioProjectId: null,   // reused across paint strokes for this session
+    labelStudioUrl: null,
+    paintStatus: 'idle',          // idle | submitting | error
+    paintError: '',
 };
 
 export default class EmbeddingsPanel extends React.Component {
@@ -97,10 +106,15 @@ export default class EmbeddingsPanel extends React.Component {
         this._map = null;
         this._tileLayerGroup = null;
         this._hasFitBounds = false;
+        this._painting = false;
+        this._pendingPaintTiles = [];
+        this._pendingPaintKeys = new Set();
+        this._pendingPaintColor = null;
     }
 
     componentWillUnmount() {
         this._stopPolling();
+        document.removeEventListener('mouseup', this._endPaint);
     }
 
     componentDidUpdate(prevProps) {
@@ -110,9 +124,17 @@ export default class EmbeddingsPanel extends React.Component {
         // than show stale/wrong progress.
         if (prevProps.task && this.props.task && prevProps.task.id !== this.props.task.id) {
             this._stopPolling();
-            this._hasFitBounds = false;
+            this._resetPaintState();
             this.setState({ ...INITIAL_STATE });
         }
+    }
+
+    _resetPaintState() {
+        this._hasFitBounds = false;
+        this._painting = false;
+        this._pendingPaintTiles = [];
+        this._pendingPaintKeys = new Set();
+        this._pendingPaintColor = null;
     }
 
     _stopPolling() {
@@ -152,6 +174,7 @@ export default class EmbeddingsPanel extends React.Component {
         this._loadSites();
         this._checkInitialEmbedStatus();
         this._loadCandidateTiles();
+        this._loadLabelClasses();
     }
 
     handleClosePanel = () => {
@@ -193,12 +216,20 @@ export default class EmbeddingsPanel extends React.Component {
         });
     }
 
-    // ── Map-based tile picker ("Label a Sample") ────────────────────────────
-    // Decision 49: GET .../tiles is real -- fetches every candidate tile at
-    // the effective (site-zoom-lock-aware) zoom, drawn as a clickable grid
-    // over the task's own orthophoto. Refetched whenever the chosen site
-    // changes, since a different site can have a different locked zoom
-    // (and different already-observed tiles) for the same task.
+    // ── "Labels" tab: map-based tile picker + paint-to-label ────────────────
+    // Decision 49/50: GET .../tiles is real -- fetches every candidate tile
+    // at the effective (site-zoom-lock-aware) zoom, drawn as a grid over the
+    // task's own orthophoto, each colored by its CURRENT label (if any).
+    // Picking a label class "arms" it; dragging across the map paints every
+    // tile the cursor touches with that value in one batched request on
+    // mouse-up. Refetched whenever the chosen site changes, since a
+    // different site can have a different locked zoom/labels for this task.
+
+    _onLabelSiteChanged = () => {
+        this._disarmLabel();
+        this._loadCandidateTiles();
+        this._loadLabelClasses();
+    }
 
     _loadCandidateTiles = () => {
         const { task } = this.props;
@@ -221,7 +252,6 @@ export default class EmbeddingsPanel extends React.Component {
                 candidateTiles: data.tiles || [],
                 tilesZoom: data.zoom,
                 tilesLoading: false,
-                selectedTiles: [],
             }, this._renderTileOverlay);
         }).fail(xhr => {
             const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
@@ -229,14 +259,48 @@ export default class EmbeddingsPanel extends React.Component {
         });
     }
 
-    // Callback ref: creates the standalone Leaflet map once when the modal
-    // (re)opens, and tears it down when it closes -- React calls this with
-    // `null` right as the container unmounts (the whole panel tree is
-    // conditionally rendered on `panelOpen`), so there's no separate
-    // componentWillUnmount bookkeeping needed for the map itself.
+    _loadLabelClasses = () => {
+        const { labelSiteMode, labelSiteId } = this.state;
+        this.setState({ labelClassesLoading: true, labelClassesError: '' });
+
+        const params = {};
+        if (labelSiteMode === 'existing' && labelSiteId) {
+            params.site_id = labelSiteId;
+        }
+
+        $.ajax({
+            type: 'GET',
+            url: '/api/plugins/embeddings/label-classes',
+            data: params,
+        }).done(data => {
+            this.setState({ labelClasses: data.label_classes || [], labelClassesLoading: false });
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            this.setState({ labelClassesError: msg, labelClassesLoading: false });
+        });
+    }
+
+    _armLabel = (value) => {
+        this.setState({ armedLabelValue: value }, () => {
+            if (this._map) this._map.dragging.disable();
+        });
+    }
+
+    _disarmLabel = () => {
+        this.setState({ armedLabelValue: null }, () => {
+            if (this._map) this._map.dragging.enable();
+        });
+    }
+
+    // Callback ref: creates the standalone Leaflet map once when the Labels
+    // tab (re)mounts its map container, and tears it down when it unmounts
+    // -- switching tabs conditionally renders this element, so React calls
+    // this with `null` on every tab-away, `el` again on tab-back. Cheaper
+    // to recreate than to keep a hidden map alive off-screen.
     _setMapEl = (el) => {
         if (!el) {
             if (this._map) {
+                this._map.off();
                 this._map.remove();
                 this._map = null;
                 this._tileLayerGroup = null;
@@ -253,6 +317,7 @@ export default class EmbeddingsPanel extends React.Component {
             maxZoom: 24,
         });
         this._map.setView([0, 0], 2);
+        if (this.state.armedLabelValue) this._map.dragging.disable();
 
         L.tileLayer(
             `/api/projects/${task.project}/tasks/${task.id}/orthophoto/tiles/{z}/{x}/{y}.png`,
@@ -260,6 +325,7 @@ export default class EmbeddingsPanel extends React.Component {
         ).addTo(this._map);
 
         this._tileLayerGroup = L.layerGroup().addTo(this._map);
+        document.addEventListener('mouseup', this._endPaint);
         this._renderTileOverlay();
     }
 
@@ -267,23 +333,32 @@ export default class EmbeddingsPanel extends React.Component {
         if (!this._map || !this._tileLayerGroup) return;
         this._tileLayerGroup.clearLayers();
 
-        const { candidateTiles, tilesZoom, selectedTiles } = this.state;
+        const { candidateTiles, tilesZoom } = this.state;
         if (!candidateTiles.length || tilesZoom == null) return;
 
-        const selectedKeys = new Set(selectedTiles.map(t => `${t.x},${t.y}`));
         let allBounds = null;
 
         candidateTiles.forEach(tile => {
             const bounds = tileBoundsLatLng(tile.x, tile.y, tilesZoom);
-            const isSelected = selectedKeys.has(`${tile.x},${tile.y}`);
-            const isObserved = !!tile.tile_observation_id;
+            const key = `${tile.x},${tile.y}`;
+            const isPending = this._pendingPaintKeys.has(key);
 
-            const rect = L.rectangle(bounds, {
-                color: isSelected ? '#2d7a2d' : (isObserved ? '#4363d8' : '#999'),
-                weight: 1,
-                fillOpacity: isSelected ? 0.45 : (isObserved ? 0.25 : 0.05),
-            });
-            rect.on('click', () => this._toggleTile(tile.x, tile.y));
+            let color = '#999';
+            let fillOpacity = 0.05;
+            if (isPending) {
+                color = this._pendingPaintColor || '#2d7a2d';
+                fillOpacity = 0.55;
+            } else if (tile.label_value) {
+                color = tile.label_color || '#4363d8';
+                fillOpacity = 0.35;
+            } else if (tile.tile_observation_id) {
+                color = '#4363d8';
+                fillOpacity = 0.15;
+            }
+
+            const rect = L.rectangle(bounds, { color, weight: 1, fillOpacity });
+            rect.on('mousedown', () => this._startPaint(tile));
+            rect.on('mouseover', () => this._continuePaint(tile));
             rect.addTo(this._tileLayerGroup);
 
             allBounds = allBounds ? allBounds.extend(bounds) : L.latLngBounds(bounds);
@@ -295,15 +370,80 @@ export default class EmbeddingsPanel extends React.Component {
         }
     }
 
-    _toggleTile = (x, y) => {
-        this.setState(prevState => {
-            const key = `${x},${y}`;
-            const exists = prevState.selectedTiles.some(t => `${t.x},${t.y}` === key);
-            const selectedTiles = exists
-                ? prevState.selectedTiles.filter(t => `${t.x},${t.y}` !== key)
-                : [...prevState.selectedTiles, { x, y }];
-            return { selectedTiles };
-        }, this._renderTileOverlay);
+    _startPaint = (tile) => {
+        const { armedLabelValue, labelClasses } = this.state;
+        if (!armedLabelValue) return;
+        this._painting = true;
+        this._pendingPaintTiles = [];
+        this._pendingPaintKeys = new Set();
+        const swatch = labelClasses.find(lc => lc.value === armedLabelValue);
+        this._pendingPaintColor = (swatch && swatch.color_hex) || '#2d7a2d';
+        this._continuePaint(tile);
+    }
+
+    _continuePaint = (tile) => {
+        if (!this._painting) return;
+        const key = `${tile.x},${tile.y}`;
+        if (this._pendingPaintKeys.has(key)) return;
+        this._pendingPaintKeys.add(key);
+        this._pendingPaintTiles.push(tile);
+        this._renderTileOverlay();
+    }
+
+    _endPaint = () => {
+        if (!this._painting) return;
+        this._painting = false;
+        const tiles = this._pendingPaintTiles;
+        const value = this.state.armedLabelValue;
+        this._pendingPaintTiles = [];
+        this._pendingPaintKeys = new Set();
+        this._renderTileOverlay();
+        if (tiles.length && value) {
+            this._submitPaint(tiles, value);
+        }
+    }
+
+    _submitPaint = (tiles, value) => {
+        const { task } = this.props;
+        const { labelSiteMode, labelSiteId, labelNewSiteName, labelStudioProjectId, tilesZoom } = this.state;
+
+        if (labelSiteMode === 'existing' && !labelSiteId) {
+            this.setState({ paintStatus: 'error', paintError: 'Select an existing site, or switch to "New site", before labeling.' });
+            return;
+        }
+        if (labelSiteMode === 'new' && !labelNewSiteName.trim()) {
+            this.setState({ paintStatus: 'error', paintError: 'Enter a name for the new site before labeling.' });
+            return;
+        }
+
+        this.setState({ paintStatus: 'submitting', paintError: '' });
+
+        const payload = {
+            value,
+            tile_ids: tiles.map(t => `${tilesZoom}/${t.x}/${t.y}`),
+            site_id: labelSiteMode === 'existing' ? labelSiteId : null,
+            new_site_name: labelSiteMode === 'new' ? labelNewSiteName.trim() : null,
+            label_studio_project_id: labelStudioProjectId || null,
+        };
+
+        $.ajax({
+            type: 'POST',
+            url: `/api/plugins/embeddings/task/${task.id}/labels/apply`,
+            contentType: 'application/json',
+            data: JSON.stringify(payload),
+        }).done(data => {
+            this.setState({
+                paintStatus: 'idle',
+                paintError: '',
+                labelStudioProjectId: data.label_studio_project_id,
+                labelStudioUrl: data.label_studio_url,
+            });
+            this._loadCandidateTiles();
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            this.setState({ paintStatus: 'error', paintError: msg });
+            this._loadCandidateTiles(); // resync the map with real server state either way
+        });
     }
 
     handleSubmitEmbed = () => {
@@ -355,48 +495,6 @@ export default class EmbeddingsPanel extends React.Component {
         });
     }
 
-    handleSubmitLabel = () => {
-        const { task } = this.props;
-        const { selectedTiles, tilesZoom, labelSiteMode, labelSiteId, labelNewSiteName } = this.state;
-
-        if (!selectedTiles.length) {
-            this.setState({ labelError: 'Click at least one tile on the map to select it.' });
-            return;
-        }
-        if (labelSiteMode === 'existing' && !labelSiteId) {
-            this.setState({ labelError: 'Select an existing site, or switch to "New site".' });
-            return;
-        }
-        if (labelSiteMode === 'new' && !labelNewSiteName.trim()) {
-            this.setState({ labelError: 'Enter a name for the new site.' });
-            return;
-        }
-
-        this.setState({ labelStatus: 'submitting', labelError: '' });
-
-        const payload = {
-            tile_ids: selectedTiles.map(t => `${tilesZoom}/${t.x}/${t.y}`),
-            site_id: labelSiteMode === 'existing' ? labelSiteId : null,
-            new_site_name: labelSiteMode === 'new' ? labelNewSiteName.trim() : null,
-        };
-
-        $.ajax({
-            type: 'POST',
-            url: `/api/plugins/embeddings/task/${task.id}/label`,
-            contentType: 'application/json',
-            data: JSON.stringify(payload),
-        }).done(data => {
-            this.setState({ labelStatus: 'success', labelResult: data, labelError: '', selectedTiles: [] });
-            this._renderTileOverlay();
-            // Refresh so the map reflects the tile_observation_ids that now
-            // exist for whichever tiles were just submitted.
-            this._loadCandidateTiles();
-        }).fail(xhr => {
-            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
-            this.setState({ labelStatus: 'error', labelError: msg, labelResult: null });
-        });
-    }
-
     renderButton() {
         return (
             <button className="btn btn-sm btn-primary" onClick={this.handleOpenPanel}>
@@ -417,7 +515,6 @@ export default class EmbeddingsPanel extends React.Component {
 
         return (
             <div style={styles.section}>
-                <div style={styles.sectionTitle}>Generate Embeddings</div>
                 <div style={styles.hint}>
                     Splits this task's orthophoto into tiles and generates a vector
                     embedding for each one using a pretrained image model, at the
@@ -527,18 +624,18 @@ export default class EmbeddingsPanel extends React.Component {
         const {
             sites, sitesLoading, sitesError,
             labelSiteMode, labelSiteId, labelNewSiteName,
-            tilesLoading, tilesError, selectedTiles,
-            labelStatus, labelError, labelResult,
+            tilesLoading, tilesError,
+            labelClasses, labelClassesLoading, labelClassesError, armedLabelValue,
+            paintStatus, paintError, labelStudioUrl,
         } = this.state;
-        const submitting = labelStatus === 'submitting';
+        const busy = paintStatus === 'submitting';
 
         return (
             <div style={styles.section}>
-                <div style={styles.sectionTitle}>Label a Sample</div>
                 <div style={styles.hint}>
-                    Click tiles on the map below to select them for manual
-                    labeling in Label Studio. Labeling has its own site — it
-                    doesn't require embeddings to have been generated first.
+                    Pick a label below, then click or drag across the map to paint
+                    tiles with it — Label Studio records the real annotation behind
+                    the scenes, no need to leave WebODM.
                 </div>
 
                 <div style={styles.formRow}>
@@ -549,8 +646,8 @@ export default class EmbeddingsPanel extends React.Component {
                                 type="radio"
                                 name="labelSiteMode"
                                 checked={labelSiteMode === 'existing'}
-                                disabled={submitting}
-                                onChange={() => this.setState({ labelSiteMode: 'existing' }, this._loadCandidateTiles)}
+                                disabled={busy}
+                                onChange={() => this.setState({ labelSiteMode: 'existing' }, this._onLabelSiteChanged)}
                             />
                             {' '}Existing site
                         </label>
@@ -560,8 +657,8 @@ export default class EmbeddingsPanel extends React.Component {
                                 type="radio"
                                 name="labelSiteMode"
                                 checked={labelSiteMode === 'new'}
-                                disabled={submitting}
-                                onChange={() => this.setState({ labelSiteMode: 'new' }, this._loadCandidateTiles)}
+                                disabled={busy}
+                                onChange={() => this.setState({ labelSiteMode: 'new' }, this._onLabelSiteChanged)}
                             />
                             {' '}New site
                         </label>
@@ -572,8 +669,8 @@ export default class EmbeddingsPanel extends React.Component {
                             <select
                                 style={styles.select}
                                 value={labelSiteId}
-                                disabled={submitting || sitesLoading}
-                                onChange={e => this.setState({ labelSiteId: e.target.value }, this._loadCandidateTiles)}
+                                disabled={busy || sitesLoading}
+                                onChange={e => this.setState({ labelSiteId: e.target.value }, this._onLabelSiteChanged)}
                             >
                                 <option value="">
                                     {sitesLoading ? 'Loading sites…' : '— select a site —'}
@@ -590,46 +687,63 @@ export default class EmbeddingsPanel extends React.Component {
                             style={styles.textInput}
                             placeholder="New site name"
                             value={labelNewSiteName}
-                            disabled={submitting}
+                            disabled={busy}
                             onChange={e => this.setState({ labelNewSiteName: e.target.value })}
                         />
                     )}
                 </div>
 
                 <div style={styles.formRow}>
-                    <label style={styles.label}>
-                        Tiles {selectedTiles.length > 0 && `(${selectedTiles.length} selected)`}
-                    </label>
+                    <label style={styles.label}>Labels</label>
+                    {labelClassesLoading && <div style={styles.hint}>Loading label classes…</div>}
+                    {labelClassesError && <div style={styles.errorMsg}>{labelClassesError}</div>}
+                    <div style={styles.palette}>
+                        {labelClasses.map(lc => (
+                            <button
+                                key={lc.value}
+                                type="button"
+                                title={lc.display_name}
+                                style={{
+                                    ...styles.paletteSwatch,
+                                    background: lc.color_hex || '#999',
+                                    outline: armedLabelValue === lc.value ? '3px solid #333' : 'none',
+                                }}
+                                onClick={() => armedLabelValue === lc.value ? this._disarmLabel() : this._armLabel(lc.value)}
+                            >
+                                {lc.display_name}
+                            </button>
+                        ))}
+                    </div>
+                    {armedLabelValue && (
+                        <div style={styles.hint}>
+                            Click or drag on the map to paint tiles as this label. Click the
+                            swatch again to stop.
+                        </div>
+                    )}
+                </div>
+
+                <div style={styles.formRow}>
                     <div style={styles.mapContainer} ref={this._setMapEl} />
                     {tilesLoading && <div style={styles.hint}>Loading candidate tiles…</div>}
                     {tilesError && <div style={styles.errorMsg}>{tilesError}</div>}
                 </div>
 
-                {labelError && <div style={styles.errorMsg}>{labelError}</div>}
+                {busy && <div style={styles.hint}><i className="fa fa-circle-notch fa-spin" /> Applying label…</div>}
+                {paintError && <div style={styles.errorMsg}>{paintError}</div>}
 
-                {labelStatus === 'success' && labelResult && (
-                    <div style={styles.successMsg}>
-                        Sent {labelResult.tile_count} tile{labelResult.tile_count === 1 ? '' : 's'} to Label Studio.{' '}
-                        <a href={labelResult.label_studio_url} target="_blank" rel="noopener noreferrer">
-                            Open in Label Studio →
+                {labelStudioUrl && (
+                    <div style={styles.hint}>
+                        <a href={labelStudioUrl} target="_blank" rel="noopener noreferrer">
+                            Open this session in Label Studio →
                         </a>
                     </div>
                 )}
-
-                <button
-                    className="btn btn-sm btn-primary"
-                    onClick={this.handleSubmitLabel}
-                    disabled={submitting || !selectedTiles.length}
-                >
-                    {submitting
-                        ? <span><i className="fa fa-circle-notch fa-spin" /> Sending…</span>
-                        : 'Label Selected in Label Studio'}
-                </button>
             </div>
         );
     }
 
     renderPanel() {
+        const { activeTab } = this.state;
         const modal = (
             <div style={styles.backdrop} onClick={this.handleClosePanel}>
                 <div style={styles.panel} onClick={e => e.stopPropagation()}>
@@ -638,10 +752,24 @@ export default class EmbeddingsPanel extends React.Component {
                         <button style={styles.closeBtn} onClick={this.handleClosePanel}>✕</button>
                     </div>
 
+                    <div style={styles.tabBar}>
+                        <div
+                            style={{ ...styles.tab, ...(activeTab === 'embedding' ? styles.tabActive : {}) }}
+                            onClick={() => this.setState({ activeTab: 'embedding' })}
+                        >
+                            Embedding
+                        </div>
+                        <div
+                            style={{ ...styles.tab, ...(activeTab === 'labels' ? styles.tabActive : {}) }}
+                            onClick={() => this.setState({ activeTab: 'labels' })}
+                        >
+                            Labels
+                        </div>
+                    </div>
+
                     <div style={styles.body}>
-                        {this.renderGenerateEmbeddingsSection()}
-                        <div style={styles.divider} />
-                        {this.renderLabelSampleSection()}
+                        {activeTab === 'embedding' && this.renderGenerateEmbeddingsSection()}
+                        {activeTab === 'labels' && this.renderLabelSampleSection()}
                     </div>
                 </div>
             </div>
@@ -704,6 +832,27 @@ const styles = {
         cursor: 'pointer',
         fontSize: 16,
     },
+    tabBar: {
+        display: 'flex',
+        borderBottom: '1px solid #eee',
+        background: '#fafafa',
+    },
+    tab: {
+        flex: 1,
+        textAlign: 'center',
+        padding: '8px 0',
+        cursor: 'pointer',
+        fontSize: 12,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        color: '#888',
+        borderBottom: '2px solid transparent',
+    },
+    tabActive: {
+        color: '#333',
+        borderBottom: '2px solid #337ab7',
+    },
     body: {
         flex: 1,
         overflowY: 'auto',
@@ -712,14 +861,6 @@ const styles = {
     },
     section: {
         marginBottom: 4,
-    },
-    sectionTitle: {
-        fontWeight: 700,
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-        marginBottom: 8,
     },
     divider: {
         borderTop: '1px solid #eee',
@@ -767,6 +908,22 @@ const styles = {
         border: '1px solid #ccc',
         borderRadius: 3,
         background: '#eee',
+    },
+    palette: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginTop: 4,
+    },
+    paletteSwatch: {
+        border: '1px solid rgba(0,0,0,0.2)',
+        borderRadius: 3,
+        padding: '4px 8px',
+        fontSize: 11,
+        fontWeight: 600,
+        color: '#fff',
+        textShadow: '0 1px 1px rgba(0,0,0,0.4)',
+        cursor: 'pointer',
     },
     hint: {
         fontSize: 11,

@@ -276,6 +276,42 @@ def list_tasks(project_id, page_size=1000):
     return _request('GET', '/api/tasks/', params={'project': project_id, 'page_size': page_size})
 
 
+def create_annotation(task_id, result):
+    """
+    POST /api/tasks/{task_id}/annotations/ -- creates a real annotation on
+    an existing Label Studio task, server-side, on the user's behalf (not
+    via Label Studio's own UI). Confirmed against Label Studio's real API
+    reference, not guessed.
+
+    This is what makes "paint a label directly in WebODM's modal" a genuine
+    Label Studio integration rather than a bypass: Label Studio remains the
+    real system of record for every label regardless of whether a human
+    opened its own UI or painted a tile from inside WebODM. The
+    corresponding `labels` row is written separately, immediately, by the
+    caller (`embeddings_client.upsert_label()`) rather than waiting on the
+    ANNOTATION_CREATED webhook round-trip -- the webhook still fires (Label
+    Studio doesn't distinguish API-created annotations from UI-created
+    ones for webhook purposes) and will harmlessly re-upsert the same value
+    when it arrives, per that view's own idempotent upsert semantics.
+
+    `result`: Label Studio's own annotation result array shape. For a
+    single Choices classification (the only kind this plugin builds via
+    `build_label_config()`):
+        [{"from_name": "label", "to_name": "image", "type": "choices",
+          "value": {"choices": ["<canonical label_classes.value>"]}}]
+    `from_name`/`to_name` match `build_label_config()`'s own
+    `<Choices name="label" toName="image">` tag exactly -- the value sent
+    here should already be the canonical `label_classes.value` (the
+    alias), not display text, matching what the webhook path itself reads.
+
+    Returns Label Studio's own response dict (includes 'id', the new
+    annotation's id).
+    """
+    if not result:
+        raise ValueError('create_annotation() requires a non-empty result.')
+    return _request('POST', f'/api/tasks/{task_id}/annotations/', json={'result': result})
+
+
 def register_webhook(project_id, webhook_url, secret):
     """
     POST /api/webhooks/ -- register a webhook scoped to `project_id` (via the
