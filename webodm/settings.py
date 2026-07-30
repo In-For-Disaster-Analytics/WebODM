@@ -17,6 +17,27 @@ import datetime
 import tzlocal
 from django.contrib.messages import constants as messages
 
+# psycopg2>=2.9 (bumped for embeddingsdb, requirements.txt) passes a
+# timedelta to tzinfo_factory instead of an int, so Django 2.2's own
+# utc_tzinfo_factory (offset != 0 -- always true for timedelta(0)) raises
+# "AssertionError: database connection isn't set to UTC" on every query
+# once USE_TZ=True, breaking the whole app, not just one connection.
+# Django never fixed this on the 2.2 branch (wontfix, extended-support
+# only -- https://code.djangoproject.com/ticket/32856); this is the same
+# monkeypatch other 2.2-era projects (e.g. readthedocs.org) apply.
+import datetime as _datetime
+from django.utils.timezone import utc as _utc
+from django.db.backends.postgresql import base as _pg_base
+
+
+def _utc_tzinfo_factory(offset):
+    if offset != _datetime.timedelta(0):
+        raise AssertionError("database connection isn't set to UTC")
+    return _utc
+
+
+_pg_base.utc_tzinfo_factory = _utc_tzinfo_factory
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
