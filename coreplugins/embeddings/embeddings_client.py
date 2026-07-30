@@ -20,8 +20,14 @@ rolled back -- confirmed 0 rows persisted afterward. See this increment's own
 notes for the exact commands run; not claimed from memory.
 
 Uses `psycopg2` (already a WebODM dependency -- see `requirements.txt`:
-`psycopg2-binary==2.8.6`, used for WebODM's own `webodm_dev` connection --
-reused here rather than adding a second Postgres driver).
+`psycopg2-binary==2.9.9`, used for WebODM's own `webodm_dev` connection --
+reused here rather than adding a second Postgres driver). Bumped from
+2.8.6 after a real, confirmed production failure: that version's bundled
+libpq (11.5) predates Postgres 17's newer "direct SSL"/ALPN connection
+negotiation, which embeddingsdb (Postgres 17.5) uses -- causing
+`psycopg2.connect()` to fail with an ambiguous "SSL SYSCALL error: Success"
+while the system's own (newer) `psql` connected fine with the identical
+DSN, on the same host, same container.
 
 Structure and error-handling style mirror `label_studio_client.py` /
 `coreplugins/ckan/publisher.py` -- the existing precedents in this repo for a

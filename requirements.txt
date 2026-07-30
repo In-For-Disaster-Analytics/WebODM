@@ -32,7 +32,15 @@ piexif==1.0.13
 pilkit==2.0
 Pillow==8.3.2
 pip-autoremove==0.9.0
-psycopg2-binary==2.8.6
+# Bumped from 2.8.6 -- that version's bundled libpq (11.5, confirmed via
+# `psycopg2.__libpq_version__`) predates Postgres 17's newer "direct SSL"
+# connection negotiation (ALPN-based), which embeddingsdb (Postgres 17.5,
+# coreplugins/embeddings) uses -- causing a silent, ambiguous
+# "SSL SYSCALL error: Success" from psycopg2.connect() while the system's
+# own (newer) `psql` connected fine with the identical DSN, on the same
+# host, same container. Confirmed directly, not assumed: `psql --version`
+# there reported PostgreSQL 14.23; a newer bundled libpq resolves it.
+psycopg2-binary==2.9.9
 PyJWT==1.7.1
 pydantic==1.10.8
 pyodm==1.5.11
