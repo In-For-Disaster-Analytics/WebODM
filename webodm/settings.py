@@ -492,6 +492,18 @@ WO_LABEL_STUDIO_URL = os.environ.get('WO_LABEL_STUDIO_URL', '')
 # calls (project create/import/webhook-register); never sent to the browser.
 WO_LABEL_STUDIO_API_TOKEN = os.environ.get('WO_LABEL_STUDIO_API_TOKEN', '')
 
+# Server-wide key `.../labelstudio-webhook` derives a PER-PROJECT secret from
+# (Decision 49, security-review finding: a single static instance-wide secret
+# sent identically to every Label Studio project would let anyone who
+# obtains it forge a call for a DIFFERENT project than their own). Never
+# sent anywhere directly — LabelStudioWebhookView.post() and
+# TaskLabelView.post() both derive the actual per-project header value from
+# this via HMAC-SHA256(project_id), so this key itself never needs to be
+# configured per-project. LabelStudioWebhookView must fail CLOSED (503) if
+# this is unset — never let an empty/missing secret become a comparison
+# target (see that view's own docstring).
+WO_LABEL_STUDIO_WEBHOOK_SECRET = os.environ.get('WO_LABEL_STUDIO_WEBHOOK_SECRET', '')
+
 # embeddingsdb — Postgres+PostGIS+pgvector Tapis Pod (coreplugins/embeddings),
 # live as of 2026-07-23 (see docs/design/2026-07-22-geospatial-embeddings-classification.md,
 # Decision 33). A SEPARATE Postgres instance from WebODM's own database

@@ -21,7 +21,14 @@ import $ from 'jquery';
 //   - POST   .../task/{pk}/embed         -> 202 {site_id, visit_id} | 400 | 409 | 503
 //   - GET    .../task/{pk}/embed-status  -> 200 {status: 'not_started'|'running', site_id, visit_id, tile_observation_count}
 //   - POST   .../task/{pk}/label         -> 200 {project_id, label_studio_url, tile_count} | 400 | 502 | 503
-//   - GET    .../sites                    -> 200 {sites: [{id, name}, ...]} (new endpoint, Decision 38)
+//     (Decision 49: now requires site_id/new_site_name too, same as /embed --
+//     labeling gets its own real tile_grid/tile_observation rows, decoupled
+//     from whether embed-generate has run for this task.)
+//   - GET    .../task/{pk}/tiles          -> 200 {zoom, tiles: [{x, y, tile_observation_id}, ...]}
+//     (Decision 49: real now -- not yet called from this panel; the map-based
+//     tile picker that would consume it is a fast-follow, tile ids are still
+//     typed in by hand this increment.)
+//   - GET    .../sites                    -> 200 {sites: [{id, name}, ...]} (Decision 38)
 //
 // Note on `embed-status`: the backend contract only defines 'not_started' and
 // 'running' -- there is no terminal "done"/"success" status to poll for yet,
@@ -52,6 +59,13 @@ const INITIAL_STATE = {
     tileObservationCount: 0,
 
     // "Label a Sample" section
+    // Decision 49: labeling has its own site selector, independent of
+    // whether embedding has run for this task -- reuses the same `sites`
+    // list loaded above, but tracks its own mode/selection state since a
+    // user may label against a different site than they embedded against.
+    labelSiteMode: 'existing',   // 'existing' | 'new'
+    labelSiteId: '',
+    labelNewSiteName: '',
     tileIdsText: '',
     labelStatus: 'idle',    // idle | submitting | success | error
     labelError: '',
@@ -216,21 +230,35 @@ export default class EmbeddingsPanel extends React.Component {
 
     handleSubmitLabel = () => {
         const { task } = this.props;
-        const { tileIdsText } = this.state;
+        const { tileIdsText, labelSiteMode, labelSiteId, labelNewSiteName } = this.state;
         const tileIds = tileIdsText.split(',').map(s => s.trim()).filter(Boolean);
 
         if (!tileIds.length) {
             this.setState({ labelError: 'Enter at least one tile id (comma-separated).' });
             return;
         }
+        if (labelSiteMode === 'existing' && !labelSiteId) {
+            this.setState({ labelError: 'Select an existing site, or switch to "New site".' });
+            return;
+        }
+        if (labelSiteMode === 'new' && !labelNewSiteName.trim()) {
+            this.setState({ labelError: 'Enter a name for the new site.' });
+            return;
+        }
 
         this.setState({ labelStatus: 'submitting', labelError: '' });
+
+        const payload = {
+            tile_ids: tileIds,
+            site_id: labelSiteMode === 'existing' ? labelSiteId : null,
+            new_site_name: labelSiteMode === 'new' ? labelNewSiteName.trim() : null,
+        };
 
         $.ajax({
             type: 'POST',
             url: `/api/plugins/embeddings/task/${task.id}/label`,
             contentType: 'application/json',
-            data: JSON.stringify({ tile_ids: tileIds }),
+            data: JSON.stringify(payload),
         }).done(data => {
             this.setState({ labelStatus: 'success', labelResult: data, labelError: '' });
         }).fail(xhr => {
@@ -366,7 +394,11 @@ export default class EmbeddingsPanel extends React.Component {
     }
 
     renderLabelSampleSection() {
-        const { tileIdsText, labelStatus, labelError, labelResult } = this.state;
+        const {
+            sites, sitesLoading, sitesError,
+            labelSiteMode, labelSiteId, labelNewSiteName,
+            tileIdsText, labelStatus, labelError, labelResult,
+        } = this.state;
         const submitting = labelStatus === 'submitting';
 
         return (
@@ -376,7 +408,63 @@ export default class EmbeddingsPanel extends React.Component {
                     Send specific tiles to Label Studio for manual labeling. Enter
                     each tile as <code>zoom/x/y</code> (e.g. 19/1234/5678),
                     separated by commas. A map for picking tiles visually is
-                    planned for a future update.
+                    planned for a future update. Labeling has its own site — it
+                    doesn't require embeddings to have been generated first.
+                </div>
+
+                <div style={styles.formRow}>
+                    <label style={styles.label}>Site</label>
+                    <div>
+                        <label style={styles.radioLabel}>
+                            <input
+                                type="radio"
+                                name="labelSiteMode"
+                                checked={labelSiteMode === 'existing'}
+                                disabled={submitting}
+                                onChange={() => this.setState({ labelSiteMode: 'existing' })}
+                            />
+                            {' '}Existing site
+                        </label>
+                        {' '}
+                        <label style={styles.radioLabel}>
+                            <input
+                                type="radio"
+                                name="labelSiteMode"
+                                checked={labelSiteMode === 'new'}
+                                disabled={submitting}
+                                onChange={() => this.setState({ labelSiteMode: 'new' })}
+                            />
+                            {' '}New site
+                        </label>
+                    </div>
+
+                    {labelSiteMode === 'existing' ? (
+                        <div>
+                            <select
+                                style={styles.select}
+                                value={labelSiteId}
+                                disabled={submitting || sitesLoading}
+                                onChange={e => this.setState({ labelSiteId: e.target.value })}
+                            >
+                                <option value="">
+                                    {sitesLoading ? 'Loading sites…' : '— select a site —'}
+                                </option>
+                                {sites.map(s => (
+                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                            </select>
+                            {sitesError && <div style={styles.errorMsg}>{sitesError}</div>}
+                        </div>
+                    ) : (
+                        <input
+                            type="text"
+                            style={styles.textInput}
+                            placeholder="New site name"
+                            value={labelNewSiteName}
+                            disabled={submitting}
+                            onChange={e => this.setState({ labelNewSiteName: e.target.value })}
+                        />
+                    )}
                 </div>
 
                 <div style={styles.formRow}>

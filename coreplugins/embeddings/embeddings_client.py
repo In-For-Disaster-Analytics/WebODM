@@ -229,6 +229,25 @@ def get_visit_for_task(webodm_task_id):
     return {'id': str(row[0]), 'site_id': str(row[1]), 'capture_date': row[2]}
 
 
+def get_visit_for_site_and_task(site_id, webodm_task_id):
+    """
+    Read-only lookup, scoped to a SPECIFIC (site_id, webodm_task_id) pair --
+    distinct from get_visit_for_task() above (task-only, most-recent-wins),
+    needed now that Decision 49 lets a task be labeled against a different
+    site than whichever one it may already be embedded under. Does NOT
+    insert a row (same "GET never writes" discipline as get_visit_for_task).
+
+    Returns the visit's id (str, uuid) or None.
+    """
+    row = _execute(
+        "SELECT id FROM visits WHERE site_id = %s AND webodm_task_id = %s "
+        "AND source = 'webodm' LIMIT 1;",
+        (site_id, webodm_task_id),
+        fetch='one',
+    )
+    return str(row[0]) if row else None
+
+
 def get_or_create_visit(site_id, webodm_task_id, project_pk, capture_date=None):
     """
     Real upsert-style logic (Decision 26): find the existing `visits` row for
@@ -299,6 +318,254 @@ def count_tile_observations(visit_id):
         fetch='one',
     )
     return int(row[0]) if row else 0
+
+
+# ── tile_grid / tile_observations (labeling, decoupled from embedding) ─────
+# Decision 49: "Label a Sample" gets its own site selector, independent of
+# whether embed-generate has run for this task -- these two functions let
+# WebODM's own Django views create real tile_grid/tile_observations rows for
+# labeling alone. Mirrors embed_generate/db.py's get_or_create_tile_grid()/
+# write_tile_observation() SQL exactly (same ON CONFLICT upsert against the
+# same UNIQUE constraints) -- both write paths share these tables, so they
+# share the same upsert shape rather than each inventing their own.
+
+def get_or_create_tile_grid(site_id, z, x, y, bounds_wkt):
+    """
+    Real upsert of one `tile_grid` row, keyed on `UNIQUE (site_id, z, x, y)`.
+    `bounds_wkt`: a WKT Polygon string (SRID 4326), computed by the caller
+    via `tile_math.tile_bounds_wkt()` -- not looked up here.
+
+    Returns the row's id (str, uuid).
+    """
+    row = _execute(
+        "INSERT INTO tile_grid (site_id, z, x, y, bounds) "
+        "VALUES (%s, %s, %s, %s, ST_GeomFromText(%s, 4326)) "
+        "ON CONFLICT (site_id, z, x, y) DO UPDATE SET z = EXCLUDED.z "
+        "RETURNING id;",
+        (site_id, z, x, y, bounds_wkt),
+        fetch='one',
+        commit=True,
+    )
+    return str(row[0])
+
+
+def get_or_create_tile_observation(tile_grid_id, visit_id, pixel_size=None):
+    """
+    Real upsert of one `tile_observations` row, keyed on
+    `UNIQUE (tile_grid_id, visit_id)`. Unlike embed-generate's own
+    write_tile_observation() (always written alongside a real embedding,
+    inside its per-tile loop), this is called for labeling ALONE, with no
+    embedding required or implied -- Decision 49's decoupling. A later
+    embed-generate run against the same (site, task) reuses this exact row
+    (same tile_grid_id/visit_id pair) rather than creating a duplicate.
+
+    Returns the row's id (str, uuid).
+    """
+    row = _execute(
+        "INSERT INTO tile_observations (tile_grid_id, visit_id, pixel_size) "
+        "VALUES (%s, %s, %s) "
+        "ON CONFLICT (tile_grid_id, visit_id) "
+        "DO UPDATE SET pixel_size = COALESCE(tile_observations.pixel_size, EXCLUDED.pixel_size) "
+        "RETURNING id;",
+        (tile_grid_id, visit_id, pixel_size),
+        fetch='one',
+        commit=True,
+    )
+    return str(row[0])
+
+
+def get_tile_observation_ids_for_visit(visit_id):
+    """
+    Returns {(x, y): tile_observation_id (str)} for every tile_observations
+    row that already exists for this visit, joined through tile_grid --
+    lets TaskTilesView tell the frontend which candidate tiles already have
+    a real tile_observation_id (already labeled and/or embedded).
+    """
+    if not visit_id:
+        return {}
+    rows = _execute(
+        "SELECT tg.x, tg.y, tobs.id FROM tile_observations tobs "
+        "JOIN tile_grid tg ON tg.id = tobs.tile_grid_id "
+        "WHERE tobs.visit_id = %s;",
+        (visit_id,),
+        fetch='all',
+    )
+    return {(row[0], row[1]): str(row[2]) for row in (rows or [])}
+
+
+# ── label_classes (Decision 12) ─────────────────────────────────────────────
+
+# Phase 1's 7 land-cover classes, seeded as instance-wide defaults
+# (site_id IS NULL) the first time list_label_classes() is ever called and
+# finds none -- embeddingsdb has no migration framework to run a one-off
+# seed script against (Decision 33's own gap), so lazy, idempotent seeding
+# here is more robust than a manual step someone has to remember to run.
+_PHASE1_DEFAULT_LABEL_CLASSES = [
+    ('structure', 'Structure', '#e6194b'),
+    ('vegetation', 'Vegetation', '#3cb44b'),
+    ('bare_ground', 'Bare Ground', '#ffe119'),
+    ('water', 'Water', '#4363d8'),
+    ('road_paved', 'Road / Paved Surface', '#911eb4'),
+    ('damage_debris', 'Damage / Debris', '#f58231'),
+    ('other', 'Other', '#808080'),
+]
+
+
+def _ensure_default_label_classes():
+    row = _execute('SELECT COUNT(*) FROM label_classes WHERE site_id IS NULL;', fetch='one')
+    if row and int(row[0]) > 0:
+        return
+    for value, display_name, color_hex in _PHASE1_DEFAULT_LABEL_CLASSES:
+        _execute(
+            "INSERT INTO label_classes (site_id, value, display_name, color_hex, created_by) "
+            "VALUES (NULL, %s, %s, %s, 'system:phase1-default') "
+            "ON CONFLICT DO NOTHING;",
+            (value, display_name, color_hex),
+            commit=True,
+        )
+
+
+def list_label_classes(site_id=None):
+    """
+    Returns every instance-wide default label class (site_id IS NULL) plus
+    any classes added specifically for `site_id`, as a list of dicts
+    ({'value', 'display_name', 'color_hex'}) -- the shape
+    `label_studio_client.build_label_config()` already expects. Seeds
+    Phase 1's 7 defaults on first real use (see _ensure_default_label_classes
+    above) rather than requiring a manual one-off script.
+    """
+    _ensure_default_label_classes()
+    rows = _execute(
+        "SELECT value, display_name, color_hex FROM label_classes "
+        "WHERE site_id IS NULL OR site_id = %s "
+        "ORDER BY (site_id IS NULL) DESC, display_name;",
+        (site_id,),
+        fetch='all',
+    )
+    return [
+        {'value': row[0], 'display_name': row[1], 'color_hex': row[2]}
+        for row in (rows or [])
+    ]
+
+
+def create_label_class(site_id, value, display_name, color_hex=None, created_by=None):
+    """
+    INSERT INTO label_classes -- the "+ Add label class" path (Decision 12).
+    `site_id` is required here (None would silently create a new
+    instance-wide default, which only _ensure_default_label_classes() above
+    should ever do) -- LabelClassesView is responsible for rejecting a
+    missing site_id before calling this, not this function.
+
+    Returns the new row's id (str, uuid).
+    """
+    if not site_id:
+        raise ValueError('create_label_class() requires a site_id.')
+    if not value or not str(value).strip():
+        raise ValueError('create_label_class() requires a non-empty value.')
+    row = _execute(
+        "INSERT INTO label_classes (site_id, value, display_name, color_hex, created_by) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id;",
+        (site_id, str(value).strip(), display_name or value, color_hex, created_by),
+        fetch='one',
+        commit=True,
+    )
+    return str(row[0])
+
+
+# ── labels + label_studio_tasks (Decision 29/49) ────────────────────────────
+
+def upsert_label(tile_observation_id, value_type, value, source, created_by=None):
+    """
+    Upserts a `labels` row for (tile_observation_id, source): updates the
+    existing row for that pair if one exists, else inserts. This is what
+    makes a Label Studio ANNOTATION_UPDATED event correctly overwrite the
+    prior value rather than appending a duplicate history row (design spec
+    "Label Studio Integration: Full Mechanics" item 4's own "upserts a
+    labels row" wording). `labels` has no UNIQUE constraint enforcing this
+    at the DB level (continuous/manual/geojson_import labels may
+    legitimately have several rows per observation) -- this function's own
+    SELECT-then-UPDATE-or-INSERT is what keeps it an upsert specifically for
+    the (tile_observation_id, source) pair, matching this module's existing
+    get_or_create_visit()-style pattern for tables without a DB-level upsert
+    constraint.
+
+    Returns the row's id (str, uuid).
+    """
+    existing = _execute(
+        'SELECT id FROM labels WHERE tile_observation_id = %s AND source = %s;',
+        (tile_observation_id, source),
+        fetch='one',
+    )
+    if existing:
+        _execute(
+            'UPDATE labels SET value_type = %s, value = %s, created_by = %s WHERE id = %s;',
+            (value_type, value, created_by, existing[0]),
+            commit=True,
+        )
+        return str(existing[0])
+    row = _execute(
+        "INSERT INTO labels (tile_observation_id, value_type, value, source, created_by) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id;",
+        (tile_observation_id, value_type, value, source, created_by),
+        fetch='one',
+        commit=True,
+    )
+    return str(row[0])
+
+
+def register_label_studio_task(project_id, task_id, tile_observation_id):
+    """
+    INSERT INTO label_studio_tasks -- WebODM's own ledger of which real
+    tile_observation_id a given Label Studio (project, task) pair was
+    imported for (Decision 49), written by TaskLabelView.post() right after
+    a successful import_tasks() call. This is what
+    LabelStudioWebhookView.post() looks up instead of trusting an incoming
+    payload's own claimed tile_observation_id (Decision 29).
+    """
+    _execute(
+        "INSERT INTO label_studio_tasks "
+        "(label_studio_project_id, label_studio_task_id, tile_observation_id) "
+        "VALUES (%s, %s, %s) "
+        "ON CONFLICT (label_studio_project_id, label_studio_task_id) "
+        "DO UPDATE SET tile_observation_id = EXCLUDED.tile_observation_id;",
+        (project_id, task_id, tile_observation_id),
+        commit=True,
+    )
+
+
+def get_site_id_for_tile_observation(tile_observation_id):
+    """
+    Returns the site_id (str, uuid) a tile_observation belongs to, via
+    tile_observations -> tile_grid -> site_id, or None if the id doesn't
+    exist. Used by the webhook handler to validate an incoming label value
+    against THAT site's real label_classes (Decision 12), not just any
+    class that happens to exist anywhere in the instance.
+    """
+    row = _execute(
+        "SELECT tg.site_id FROM tile_observations tobs "
+        "JOIN tile_grid tg ON tg.id = tobs.tile_grid_id "
+        "WHERE tobs.id = %s;",
+        (tile_observation_id,),
+        fetch='one',
+    )
+    return str(row[0]) if row else None
+
+
+def get_tile_observation_for_label_studio_task(project_id, task_id):
+    """
+    Read-only lookup: the real tile_observation_id WebODM itself recorded
+    for this (project_id, task_id) pair, or None if no such row exists --
+    Decision 29's scope check. `LabelStudioWebhookView.post()` must reject
+    the webhook call (not fall back to trusting the payload) when this
+    returns None.
+    """
+    row = _execute(
+        'SELECT tile_observation_id FROM label_studio_tasks '
+        'WHERE label_studio_project_id = %s AND label_studio_task_id = %s;',
+        (project_id, task_id),
+        fetch='one',
+    )
+    return str(row[0]) if row else None
 
 
 # ── embed-generate Tapis Job submission -- REAL (Decision 45) ──────────────

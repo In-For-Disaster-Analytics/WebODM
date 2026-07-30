@@ -247,6 +247,35 @@ def import_tasks(project_id, tasks):
     return _request('POST', f'/api/projects/{project_id}/import', json=tasks)
 
 
+def list_tasks(project_id, page_size=1000):
+    """
+    GET /api/tasks/?project={project_id}&page_size={page_size} -- lists a
+    project's tasks, echoing back each task's own 'data'/'meta' exactly as
+    submitted at import time (confirmed against Label Studio's real API
+    reference, not guessed) alongside its real, Label-Studio-assigned
+    integer 'id'.
+
+    Used by TaskLabelView.post() right after import_tasks() to recover each
+    task's real id, matched back to our own tile_observation_id via
+    task['meta'] -- deliberately NOT relying on import_tasks()'s own
+    response containing task ids in the same order as the submitted list
+    (not documented anywhere in Label Studio's API reference as an
+    ordering guarantee).
+
+    Response shape is Label Studio's own `PaginatedRoleBasedTaskList`:
+    `{"tasks": [...], "total": int, ...}` -- NOT a plain array, and NOT
+    DRF's usual "results"/"next" shape. `page_size` defaults generously
+    large (1000) to cover one label batch (a "sample," not a whole task) in
+    a single call; if a project ever has more tasks than that, only the
+    first page is returned -- callers should compare against the response's
+    own 'total' and log if some tasks were missed, not silently proceed as
+    if everything was fetched.
+
+    Returns the response dict as-is (callers read 'tasks' and 'total').
+    """
+    return _request('GET', '/api/tasks/', params={'project': project_id, 'page_size': page_size})
+
+
 def register_webhook(project_id, webhook_url, secret):
     """
     POST /api/webhooks/ -- register a webhook scoped to `project_id` (via the

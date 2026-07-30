@@ -36,12 +36,16 @@ endpoint until now -- needed so the new task-panel UI's "existing site"
 dropdown has something real to populate itself from.
 """
 
+import hashlib
+import hmac
+import logging
 import os
 from datetime import datetime, timezone
 
 from django.conf import settings
 from rest_framework import permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
 
 from app.api import tiler
@@ -52,6 +56,9 @@ from rio_tiler.io import COGReader
 
 from . import embeddings_client
 from . import label_studio_client
+from . import tile_math
+
+logger = logging.getLogger('app.logger')
 
 
 class IsEmbeddingsAdmin(permissions.BasePermission):
@@ -95,6 +102,57 @@ def _compute_max_zoom(task):
     return maxzoom + ZOOM_EXTRA_LEVELS
 
 
+def _compute_effective_zoom(site_id, task):
+    """
+    Decision 49 (architect review finding): the site-zoom lock (Decision
+    24/27) is the single most load-bearing invariant in embeddingsdb's
+    schema -- every tile_grid row for a site must share one zoom, or
+    embed-generate's and the labeling flow's tile_grid rows silently fork
+    into two incompatible grids for the same site. TaskEmbedView already
+    enforces this (compute task-max, then check-and-409 against the site's
+    lock). TaskTilesView/TaskLabelView need the same invariant applied the
+    other way around: if the site already has a locked zoom, USE it
+    (there's no zoom_override concept for labeling); only fall back to this
+    task's own highest available resolution for a genuinely new site (no
+    tile_grid rows yet).
+
+    Raises FileNotFoundError (via _compute_max_zoom) if the task has no
+    orthophoto yet and no site zoom exists to fall back on.
+    """
+    if site_id:
+        existing_zoom = embeddings_client.get_site_zoom(site_id)
+        if existing_zoom is not None:
+            return existing_zoom
+    return _compute_max_zoom(task)
+
+
+def _derive_project_webhook_secret(project_id):
+    """
+    Derives a PER-PROJECT Label Studio webhook secret from the server-wide
+    WO_LABEL_STUDIO_WEBHOOK_SECRET (security-review finding, Decision 49):
+    a single static secret sent identically to every Label Studio project
+    would let anyone who obtains it (e.g. a Label Studio admin who can view
+    a project's registered webhook headers) forge a call for a DIFFERENT
+    project than the one it leaked from. HMAC-SHA256(server secret, project
+    id) instead -- computed fresh both when registering the webhook
+    (TaskLabelView.post()) and when verifying an incoming call
+    (LabelStudioWebhookView.post()), so no per-project secret needs to be
+    stored anywhere.
+
+    Raises ValueError if WO_LABEL_STUDIO_WEBHOOK_SECRET is unset/empty --
+    callers MUST treat that as "webhook auth is not configured" (503), never
+    silently derive a secret from an empty key.
+    """
+    server_secret = (getattr(settings, 'WO_LABEL_STUDIO_WEBHOOK_SECRET', '') or '').strip()
+    if not server_secret:
+        raise ValueError('WO_LABEL_STUDIO_WEBHOOK_SECRET is not configured.')
+    return hmac.new(
+        server_secret.encode('utf-8'),
+        str(project_id).encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def _not_implemented(message):
     return Response(
         {'error': message},
@@ -102,43 +160,71 @@ def _not_implemented(message):
     )
 
 
-# Phase 1 default land-cover taxonomy (design spec "Phase 1 Research Findings").
-# PLACEHOLDER: the real `label_classes` DB table (site-scoped, with
-# instance-wide defaults -- Decision 12) lives in `embeddingsdb`, which does
-# not exist yet. Once it does, TaskLabelView.post() below should query it
-# (falling back to these same 7 rows as the instance-wide default, per the
-# design spec) instead of using this hardcoded list directly.
-_PHASE1_DEFAULT_LABEL_CLASSES = [
-    {'value': 'structure', 'display_name': 'Structure', 'color_hex': '#e6194b'},
-    {'value': 'vegetation', 'display_name': 'Vegetation', 'color_hex': '#3cb44b'},
-    {'value': 'bare_ground', 'display_name': 'Bare Ground', 'color_hex': '#ffe119'},
-    {'value': 'water', 'display_name': 'Water', 'color_hex': '#4363d8'},
-    {'value': 'road_paved', 'display_name': 'Road / Paved Surface', 'color_hex': '#911eb4'},
-    {'value': 'damage_debris', 'display_name': 'Damage / Debris', 'color_hex': '#f58231'},
-    {'value': 'other', 'display_name': 'Other', 'color_hex': '#808080'},
-]
-
-
 class TaskTilesView(TaskView):
     """
-    GET /api/plugins/embeddings/task/{task_pk}/tiles
+    GET /api/plugins/embeddings/task/{task_pk}/tiles?site_id=<optional>
 
-    Design spec: candidate tiles for labeling ONLY (orthophoto extent, at the
-    same zoom as `embed`), for display in the "Label a Sample" map checklist.
-    Distinct from `embed`, which covers every tile at a zoom with no picker
-    (Decision 9) -- this endpoint is the selective, human-in-the-loop side.
+    Design spec: candidate tiles for labeling (orthophoto extent, at the
+    same zoom `embed` would use for this task), for the "Label a Sample" map
+    picker. Distinct from `embed`, which covers every tile at a zoom with no
+    picker (Decision 9) -- this endpoint is the selective, human-in-the-loop
+    side.
+
+    Real in this increment: enumerates every (x, y) at the effective zoom
+    (Decision 49's site-zoom-lock-aware `_compute_effective_zoom()`) whose
+    bbox overlaps the task's own orthophoto extent (`task.orthophoto_extent`,
+    the same field WebODM's own `TileJson` view reads), filtered to real
+    coverage via rio_tiler's `COGReader.tile_exists(z, x, y)` -- the same
+    check WebODM's own `Tiles` view already uses (Decision 9). If `site_id`
+    is supplied and a visit already exists for (site_id, this task), each
+    tile also reports its real `tile_observation_id` where one already
+    exists (already labeled and/or embedded), so the frontend map can show
+    those differently. Omitting `site_id` (a genuinely new site, not chosen
+    yet) returns the raw candidate list with no observation linkage.
     """
 
     permission_classes = (IsEmbeddingsAdmin,)
 
     def get(self, request, pk=None):
-        self.get_and_check_task(request, pk)
-        return _not_implemented(
-            'Candidate-tile listing is not implemented yet -- depends on '
-            'WebODM\'s own tiler (app/api/tiler.py) plus the site\'s locked '
-            'zoom (Decision 24/27). See design spec "Tile Coverage" and '
-            '"Tile Selection UI" sections.'
-        )
+        task = self.get_and_check_task(request, pk)
+        site_id = request.query_params.get('site_id') or None
+
+        try:
+            zoom = _compute_effective_zoom(site_id, task)
+        except FileNotFoundError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        extent = task.orthophoto_extent
+        if extent is None:
+            return Response(
+                {'error': 'This task has no orthophoto extent yet -- cannot list candidate tiles.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        bounds = extent.extent  # (west, south, east, north), SRID 4326
+
+        observed = {}
+        if site_id:
+            try:
+                visit_id = embeddings_client.get_visit_for_site_and_task(site_id, str(task.id))
+                observed = embeddings_client.get_tile_observation_ids_for_visit(visit_id)
+            except embeddings_client.EmbeddingsDBConfigError as e:
+                return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            except embeddings_client.EmbeddingsDBError as e:
+                return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        raster_path = tiler.get_raster_path(task, 'orthophoto')
+        tiles = []
+        with COGReader(raster_path) as src:
+            for x, y in tile_math.candidate_tiles(bounds, zoom):
+                if not src.tile_exists(zoom, x, y):
+                    continue
+                tiles.append({
+                    'x': x,
+                    'y': y,
+                    'tile_observation_id': observed.get((x, y)),
+                })
+
+        return Response({'zoom': zoom, 'tiles': tiles}, status=status.HTTP_200_OK)
 
 
 class TaskLabelView(TaskView):
@@ -150,13 +236,21 @@ class TaskLabelView(TaskView):
     then returns the real deep-link URL. See "Label Studio Integration: Full
     Mechanics" and Decisions 10/32.
 
-    Two real placeholders, clearly marked below (see the design spec's own
-    scoping of this increment):
-      - label_config is generated from _PHASE1_DEFAULT_LABEL_CLASSES, not a
-        real `label_classes` query (embeddingsdb doesn't exist yet).
-      - each imported task's `meta.tile_observation_id` is set directly from
-        the request body's `tile_ids`, not a real tile_observation_id
-        (there's no tile_grid/tile_observations table yet to resolve one from).
+    Decision 49: labeling has its own site selector (`site_id`/
+    `new_site_name` in the request body, mirroring `TaskEmbedView` exactly),
+    decoupled from whether embed-generate has run for this task. Each
+    selected tile ("z/x/y") gets a REAL `tile_grid`/`tile_observations` row
+    (`embeddings_client.get_or_create_tile_grid()`/
+    `get_or_create_tile_observation()`, created on demand -- no embedding
+    required or implied) instead of the earlier placeholder that sent the
+    raw tile id string as `meta.tile_observation_id`. `label_config` is now
+    built from the real, site-scoped `label_classes` table
+    (`embeddings_client.list_label_classes()`) instead of a hardcoded
+    7-class placeholder. After import, real Label Studio task ids are
+    recovered via `label_studio_client.list_tasks()` (matched back by
+    `meta.tile_observation_id`, not by trusting import order) and recorded
+    in `label_studio_tasks` (Decision 29/49) -- what the webhook handler
+    checks instead of trusting an incoming payload's own claims.
     """
 
     permission_classes = (IsEmbeddingsAdmin,)
@@ -175,6 +269,19 @@ class TaskLabelView(TaskView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        # Security-review finding (Decision 49): fail closed here too, not
+        # just in the webhook handler -- never register a webhook whose
+        # secret we can't actually verify later.
+        if not getattr(settings, 'WO_LABEL_STUDIO_WEBHOOK_SECRET', ''):
+            return Response(
+                {'error': (
+                    'Label Studio webhook verification is not configured on '
+                    'this WebODM instance -- WO_LABEL_STUDIO_WEBHOOK_SECRET '
+                    'is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         tile_ids = request.data.get('tile_ids') or []
         if not tile_ids:
             return Response(
@@ -182,42 +289,98 @@ class TaskLabelView(TaskView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # --- Site: required, same pattern as TaskEmbedView (Decision 27/49) ---
+        site_id = request.data.get('site_id')
+        new_site_name = request.data.get('new_site_name')
+        if not site_id and not new_site_name:
+            return Response(
+                {'error': (
+                    'Select an existing site, or provide a name for a new '
+                    'one -- a site can\'t be inferred automatically from the '
+                    'task or project.'
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            zoom = _compute_effective_zoom(site_id, task)
+        except FileNotFoundError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # --- Parse every tile id up front so a malformed one 400s before any writes ---
+        parsed_tiles = []
+        for tile_id in tile_ids:
+            parts = str(tile_id).split('/')
+            if len(parts) != 3 or not all(p.lstrip('-').isdigit() for p in parts):
+                return Response(
+                    {'error': f'Invalid tile id {tile_id!r} -- expected "z/x/y".'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            z, x, y = (int(p) for p in parts)
+            if z != zoom:
+                return Response(
+                    {'error': (
+                        f'Tile {tile_id} is at zoom {z}, but this site\'s '
+                        f'effective zoom is {zoom} -- select tiles from '
+                        f'GET .../tiles, which always reports the effective zoom.'
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            parsed_tiles.append((z, x, y))
+
+        try:
+            if not site_id:
+                site_id = embeddings_client.create_site(new_site_name)
+
+            capture_date = request.data.get('capture_date') or (
+                task.created_at.date() if task.created_at else None
+            )
+            visit_id = embeddings_client.get_or_create_visit(
+                site_id, str(task.id), task.project_id, capture_date=capture_date,
+            )
+
+            label_classes = embeddings_client.list_label_classes(site_id)
+
+            # --- Real tile_grid/tile_observations rows, one per selected tile ---
+            # (Decision 49: created on demand, independent of embed-generate.)
+            tile_observation_ids = []
+            for z, x, y in parsed_tiles:
+                bounds_wkt = tile_math.tile_bounds_wkt(x, y, zoom)
+                tile_grid_id = embeddings_client.get_or_create_tile_grid(site_id, zoom, x, y, bounds_wkt)
+                center_lat, _center_lon = tile_math.tile_center_lonlat(x, y, zoom)
+                pixel_size = tile_math.meters_per_pixel(zoom, center_lat)
+                tile_observation_ids.append(
+                    embeddings_client.get_or_create_tile_observation(tile_grid_id, visit_id, pixel_size)
+                )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         task_name = task.name or 'unnamed'
         title = f'{task_name} — {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
-
-        # PLACEHOLDER (see class docstring): real label_classes come from
-        # embeddingsdb once it exists; Phase 1's hardcoded 7-class taxonomy
-        # stands in for it today.
-        label_config = label_studio_client.build_label_config(_PHASE1_DEFAULT_LABEL_CLASSES)
+        label_config = label_studio_client.build_label_config(label_classes)
 
         base_url = request.build_absolute_uri('/').rstrip('/')
         project_id_str, task_id_str = str(task.project_id), str(task.id)
 
-        # PLACEHOLDER (see class docstring): tile_ids stand in for real
-        # tile_observation_ids. Where a tile_id parses as "z/x/y", build a
-        # real per-tile image URL via WebODM's existing orthophoto tiler
-        # endpoint (app/api/urls.py); otherwise fall back to the task's
-        # whole-orthophoto thumbnail so Label Studio still has something
-        # fetchable to display.
-        ls_tasks = []
-        for tile_id in tile_ids:
-            parts = str(tile_id).split('/')
-            if len(parts) == 3 and all(p.lstrip('-').isdigit() for p in parts):
-                z, x, y = parts
-                image_url = (
-                    f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}'
-                    f'/orthophoto/tiles/{z}/{x}/{y}.png'
-                )
-            else:
-                image_url = f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}/thumbnail'
-
-            ls_tasks.append({
-                'data': {'image': image_url},
+        ls_tasks = [
+            {
+                'data': {
+                    'image': (
+                        f'{base_url}/api/projects/{project_id_str}/tasks/{task_id_str}'
+                        f'/orthophoto/tiles/{z}/{x}/{y}.png'
+                    ),
+                },
                 'meta': {
-                    'tile_observation_id': tile_id,  # PLACEHOLDER: see class docstring
+                    'tile_observation_id': tobs_id,
                     'webodm_task_id': task_id_str,
                 },
-            })
+            }
+            for (z, x, y), tobs_id in zip(parsed_tiles, tile_observation_ids)
+        ]
 
         try:
             project = label_studio_client.create_project(title=title, label_config=label_config)
@@ -229,15 +392,54 @@ class TaskLabelView(TaskView):
 
             label_studio_client.import_tasks(project_id, ls_tasks)
 
+            project_secret = _derive_project_webhook_secret(project_id)
             webhook_url = f'{base_url}/api/plugins/embeddings/labelstudio-webhook'
-            webhook_secret = getattr(settings, 'WO_LABELSTUDIO_WEBHOOK_SECRET', '')
-            label_studio_client.register_webhook(project_id, webhook_url, webhook_secret)
+            label_studio_client.register_webhook(project_id, webhook_url, project_secret)
 
             deep_link_url = label_studio_client.project_url(project_id)
         except label_studio_client.LabelStudioConfigError as e:
             return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except label_studio_client.LabelStudioAPIError as e:
             return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            # _derive_project_webhook_secret() -- should be unreachable given
+            # the WO_LABEL_STUDIO_WEBHOOK_SECRET check above, but never
+            # register a webhook without a real secret if it somehow is.
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # --- Record the Decision 29/49 scope ledger ---
+        # Recovers each task's REAL Label Studio-assigned id by listing the
+        # project back and matching on meta.tile_observation_id (which we
+        # set ourselves, above) -- not by trusting import_tasks()'s own
+        # response to preserve submission order (not documented anywhere in
+        # Label Studio's API reference as an ordering guarantee). A failure
+        # here doesn't fail the request -- the project/tasks already exist
+        # in Label Studio by this point -- but IS logged loudly, since a
+        # missing row here means the webhook will (correctly) reject that
+        # tile's future annotations until this is investigated.
+        try:
+            listing = label_studio_client.list_tasks(project_id, page_size=max(len(ls_tasks), 100))
+            ls_task_list = listing.get('tasks') or []
+            total = listing.get('total', len(ls_task_list))
+            if total > len(ls_task_list):
+                logger.error(
+                    'Label Studio project %s has more tasks (%s) than this '
+                    'page fetched (%d) -- some tile_observation_id scope '
+                    'mappings (Decision 29) were not recorded.',
+                    project_id, total, len(ls_task_list),
+                )
+            for ls_task in ls_task_list:
+                tobs_id = (ls_task.get('meta') or {}).get('tile_observation_id')
+                ls_task_id = ls_task.get('id')
+                if tobs_id and ls_task_id is not None:
+                    embeddings_client.register_label_studio_task(project_id, ls_task_id, tobs_id)
+        except (label_studio_client.LabelStudioAPIError, embeddings_client.EmbeddingsDBError):
+            logger.exception(
+                'Failed to record label_studio_tasks rows for project=%s -- '
+                'webhook scope validation (Decision 29) will reject this '
+                'project\'s annotations until this is fixed.',
+                project_id,
+            )
 
         return Response({
             'project_id': project_id,
@@ -497,31 +699,171 @@ class TaskLabelsImportGeoJSONView(TaskView):
         )
 
 
+class _LabelStudioWebhookThrottle(SimpleRateThrottle):
+    """
+    Per-IP ceiling on this AllowAny, server-to-server endpoint -- cheap
+    insurance against a misbehaving Label Studio retry loop or replay abuse
+    (security review finding, Decision 49). Not a substitute for the
+    fail-closed secret check below, just a backstop against hammering.
+    """
+    scope = 'labelstudio_webhook'
+
+    def get_rate(self):
+        return '120/min'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
+
+
 class LabelStudioWebhookView(APIView):
     """
     POST /api/plugins/embeddings/labelstudio-webhook
 
-    Design spec, Decisions 10/29: receives ANNOTATION_CREATED/
-    ANNOTATION_UPDATED from Label Studio and upserts `labels` rows keyed by
-    task.meta.tile_observation_id. NOT user-facing -- called by Label
-    Studio itself, so it is not gated behind WebODM login; the real
-    implementation must instead verify a shared-secret header via
-    hmac.compare_digest (Decision 29), plus confirm the incoming
-    tile_observation_id corresponds to a session WebODM actually created.
-    Neither check is implemented in this increment (no embeddingsdb Pod to
-    validate against yet) -- this stub deliberately does NOT accept or
-    write anything.
+    Design spec, Decisions 10/29/49: receives ANNOTATION_CREATED/
+    ANNOTATION_UPDATED from Label Studio and upserts a `labels` row. NOT
+    user-facing -- called by Label Studio itself, so it is not gated behind
+    WebODM login (`permission_classes = [AllowAny]`); the checks below are
+    the real gate.
+
+    Two security-review-driven requirements, both required, not optional:
+    1. FAILS CLOSED if WO_LABEL_STUDIO_WEBHOOK_SECRET is unset/empty --
+       every call is rejected with 503 before anything is compared. This
+       codebase's own `getattr(settings, NAME, '')` convention makes an
+       empty-vs-empty `compare_digest()` a real, sharp bypass if this check
+       is skipped -- the Critical finding from this feature's own security
+       review.
+    2. Verifies a PER-PROJECT secret (`_derive_project_webhook_secret()`),
+       not the raw server-wide secret directly -- a single static secret
+       sent to every project would let anyone who obtains it (e.g. a Label
+       Studio admin who can view a project's registered webhook headers)
+       forge a call for a DIFFERENT project than the one it leaked from.
+
+    Scope validation (Decision 29): does NOT trust the payload's own
+    `task.meta.tile_observation_id` -- looks up
+    `embeddings_client.get_tile_observation_for_label_studio_task()`
+    instead (WebODM's own ledger, written at import time by
+    `TaskLabelView.post()`) and uses THAT id, rejecting the call outright
+    if no matching row exists rather than falling back to the payload's
+    own claim.
+
+    Label value: read from `annotation.result`'s `choices` value.
+    `label_studio_client.build_label_config()` deliberately renders the
+    canonical `label_classes.value` as each Choice's `alias` (not its
+    displayed text) -- Label Studio substitutes the alias into the
+    annotation result in place of the display value, so this is already
+    the true taxonomy key, not something to re-derive. Validated against
+    that tile's own site's real `label_classes` (Decision 12) before
+    writing -- an unrecognized value is rejected, not silently written.
+
+    Known, documented residual gaps (security review, Decision 49) --
+    flagged explicitly for future work, not silently dropped:
+    - No replay/staleness protection (no nonce/timestamp check): a
+      captured legitimate call could be replayed. Upsert semantics limit
+      the damage to resurrecting a stale label value, not arbitrary writes.
+    - `created_by` is sourced from the payload's own `annotation.
+      completed_by` (a Label Studio identity, not a WebODM one --
+      embeddingsdb is a separate Postgres instance, Decision 26).
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [_LabelStudioWebhookThrottle]
 
     def post(self, request):
-        return _not_implemented(
-            'Label Studio webhook handling is not implemented yet. See design '
-            'spec Decisions 10 and 29 (shared-secret verification via '
-            'hmac.compare_digest, tile_observation_id scope validation) -- '
-            'neither is wired up yet, so this endpoint accepts nothing.'
-        )
+        # 1. Fail closed FIRST -- before touching embeddingsdb at all, so an
+        # unauthenticated caller can never use the DB as an existence oracle.
+        if not (getattr(settings, 'WO_LABEL_STUDIO_WEBHOOK_SECRET', '') or '').strip():
+            return Response(
+                {'error': (
+                    'Label Studio webhook verification is not configured on '
+                    'this WebODM instance -- WO_LABEL_STUDIO_WEBHOOK_SECRET '
+                    'is not set. Rejecting rather than accepting unverified.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload = request.data or {}
+        task_payload = payload.get('task') or {}
+        project_id = task_payload.get('project')
+        ls_task_id = task_payload.get('id')
+        if project_id is None or ls_task_id is None:
+            return Response(
+                {'error': 'Payload is missing task.project or task.id.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 2. Per-project secret verification, constant-time comparison.
+        try:
+            expected_secret = _derive_project_webhook_secret(project_id)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        header_value = (request.headers.get('X-WebODM-Embeddings-Secret') or '').strip()
+        if not header_value or not hmac.compare_digest(header_value, expected_secret):
+            logger.warning(
+                'Rejected Label Studio webhook call for project=%s task=%s: secret mismatch.',
+                project_id, ls_task_id,
+            )
+            return Response({'error': 'Invalid or missing webhook secret.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # 3. Scope validation (Decision 29): the payload's own claimed
+        # tile_observation_id is NOT trusted -- only WebODM's own ledger is.
+        try:
+            tile_observation_id = embeddings_client.get_tile_observation_for_label_studio_task(
+                project_id, ls_task_id,
+            )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if not tile_observation_id:
+            logger.warning(
+                'Rejected Label Studio webhook call for project=%s task=%s: '
+                'no matching label_studio_tasks row -- WebODM never registered '
+                'this (project, task) pair.', project_id, ls_task_id,
+            )
+            return Response(
+                {'error': 'This (project, task) pair was not registered by WebODM.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # 4. Extract the label value -- already the canonical taxonomy key
+        # (the alias), not display text; see class docstring.
+        annotation = payload.get('annotation') or {}
+        value = None
+        for item in (annotation.get('result') or []):
+            if item.get('type') == 'choices':
+                choices = (item.get('value') or {}).get('choices') or []
+                if choices:
+                    value = choices[0]
+                    break
+        if not value:
+            return Response(
+                {'error': 'No choices value found in annotation.result.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            site_id = embeddings_client.get_site_id_for_tile_observation(tile_observation_id)
+            valid_values = {lc['value'] for lc in embeddings_client.list_label_classes(site_id)}
+            if value not in valid_values:
+                return Response(
+                    {'error': f'{value!r} does not match any registered label class for this site.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            completed_by = annotation.get('completed_by')
+            created_by = f'label_studio:{completed_by}' if completed_by is not None else 'label_studio'
+
+            embeddings_client.upsert_label(
+                tile_observation_id, 'category', value, source='label_studio', created_by=created_by,
+            )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'status': 'ok'}, status=status.HTTP_200_OK)
 
 
 class SitesView(APIView):
@@ -568,23 +910,73 @@ class SitesView(APIView):
 
 class LabelClassesView(APIView):
     """
-    GET/POST /api/plugins/embeddings/label-classes
+    GET/POST /api/plugins/embeddings/label-classes?site_id=<optional>
 
     Design spec, Decision 12: list/add label_classes rows, site-scoped,
     falling back to instance-wide defaults (site_id=null). Requires an
     authenticated WebODM user (see "API Endpoints" preamble).
+
+    GET: real, calls embeddings_client.list_label_classes(site_id) --
+    seeds Phase 1's 7 instance-wide defaults on first real use if none
+    exist yet (see that function's own docstring).
+    POST: real, the "+ Add label class" path -- requires site_id (adding an
+    instance-wide default is not exposed here; only
+    _ensure_default_label_classes() does that, once, automatically).
     """
 
     permission_classes = (IsEmbeddingsAdmin,)
 
     def get(self, request):
-        return _not_implemented(
-            'Label class listing is not implemented yet -- depends on the '
-            'embeddingsdb Pod. See design spec Decision 12.'
-        )
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        site_id = request.query_params.get('site_id') or None
+        try:
+            label_classes = embeddings_client.list_label_classes(site_id)
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'label_classes': label_classes}, status=status.HTTP_200_OK)
 
     def post(self, request):
-        return _not_implemented(
-            'Adding a label class is not implemented yet -- depends on the '
-            'embeddingsdb Pod. See design spec Decision 12.'
-        )
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        site_id = request.data.get('site_id')
+        value = request.data.get('value')
+        if not site_id or not value:
+            return Response(
+                {'error': 'site_id and value are both required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            class_id = embeddings_client.create_label_class(
+                site_id,
+                value,
+                request.data.get('display_name'),
+                request.data.get('color_hex'),
+                created_by=request.user.username,
+            )
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'id': class_id}, status=status.HTTP_201_CREATED)
