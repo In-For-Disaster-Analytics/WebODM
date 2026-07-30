@@ -109,7 +109,7 @@ export default class EmbeddingsPanel extends React.Component {
 
     constructor(props) {
         super(props);
-        this.state = { ...INITIAL_STATE };
+        this.state = { ...INITIAL_STATE, ...this._defaultSiteNames(props.task) };
         this._pollTimer = null;
         this._map = null;
         this._tileLayerGroup = null;
@@ -133,8 +133,17 @@ export default class EmbeddingsPanel extends React.Component {
         if (prevProps.task && this.props.task && prevProps.task.id !== this.props.task.id) {
             this._stopPolling();
             this._resetPaintState();
-            this.setState({ ...INITIAL_STATE });
+            this.setState({ ...INITIAL_STATE, ...this._defaultSiteNames(this.props.task) });
         }
+    }
+
+    // Defaults "New site" name to the task's own name -- zero extra typing
+    // for the common case (a genuinely new, never-before-surveyed location),
+    // while "Existing site" stays a real, equally-visible choice for
+    // revisiting a known place. Still editable/overridable either way.
+    _defaultSiteNames(task) {
+        const name = (task && task.name) || '';
+        return { newSiteName: name, labelNewSiteName: name };
     }
 
     _resetPaintState() {

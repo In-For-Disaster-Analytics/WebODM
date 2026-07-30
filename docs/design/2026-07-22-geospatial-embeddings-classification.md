@@ -989,6 +989,10 @@ User asked why label classes were limited to the 7 defaults with no way to add m
 
 **Frontend**: a "+ Add label class" button beneath the palette reveals a one-field form (name; color via a native `<input type="color">`) — the canonical `label_classes.value` (the Label Studio alias) is slugified from the typed name client-side rather than typed separately, keeping the form to one real input. Submitting resolves a real site id first (creating one via the new endpoint if in "New site" mode with nothing created yet), then posts the new class and refreshes the palette/map.
 
+### Decision 52: "New site" defaults to the task's own name (Approved and implemented — 2026-07-30)
+
+Discussion prompted by the user asking why site can't just default to task. Answer stayed no — doing that would silently remove the entire reason `site` exists as a concept separate from `task` (no two tasks would ever automatically share a `site_id`, which is what makes cross-visit change detection and pooled classifier training possible at all — see the zoom-lock discussion above: a site's locked zoom is really a locked *common ground resolution* that every visit gets normalized to, not an arbitrary constraint). But a smaller, real improvement came out of it: `newSiteName`/`labelNewSiteName` now default to `task.name` (set in the constructor and reapplied on task change, `_defaultSiteNames()`) — zero extra typing for the common case (a genuinely new, never-before-surveyed location), while "Existing site" stays an equally visible, real choice for the case that actually matters: revisiting a known place. Purely a pre-filled default, still fully editable/overridable either way — does not change the underlying site/task relationship.
+
 ---
 
 ## User Feedback / Decisions
