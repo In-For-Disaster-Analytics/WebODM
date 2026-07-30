@@ -981,6 +981,14 @@ User asked to label tiles directly in the panel instead of only sending a batch 
 
 **Not yet done / explicit gaps**: no live end-to-end test yet against a real Label Studio instance for the paint flow specifically (project reuse, per-tile annotation creation, and the local upsert all pass `py_compile`/webpack build, not exercised live). The old "select several tiles, then send an unlabeled batch to Label Studio" click-to-multi-select UI was removed from the panel (superseded by paint) but its backend (`TaskLabelView`) is untouched and still reachable if a future increment wants to resurface it.
 
+### Decision 51: "+ Add label class" UI, plus a real `POST /sites` endpoint (Approved and implemented — 2026-07-30)
+
+User asked why label classes were limited to the 7 defaults with no way to add more, and separately asked what "site" actually has to do with labeling (answered: `label_classes` are site-scoped on top of instance-wide defaults, Decision 12, because different real-world sites can want different taxonomies — site is the system's whole spatial anchor, not something specific to labeling). The backend for adding a class already existed (`LabelClassesView.post()`, `embeddings_client.create_label_class()`, Decision 49) — only the UI to reach it was missing.
+
+**Real gap found and fixed along the way**: `create_label_class()` requires a real `site_id`, but there was previously no way to get one *without* first triggering an embed/label/paint action — `SitesView` only had a `GET`. A user in "New site" mode who wanted to define custom classes *before* ever painting a tile had no path to a real site id at all. Fixed with a new `SitesView.post()` (`{"name": ...}` → `{"id": ..., "name": ...}`), reusing the already-existing `embeddings_client.create_site()`. `TaskLabelApplyView`'s response also gained `site_id` for the same reason (previously unreturned, so a "New site" paint session had no way to learn its own resolved site id either).
+
+**Frontend**: a "+ Add label class" button beneath the palette reveals a one-field form (name; color via a native `<input type="color">`) — the canonical `label_classes.value` (the Label Studio alias) is slugified from the typed name client-side rather than typed separately, keeping the form to one real input. Submitting resolves a real site id first (creating one via the new endpoint if in "New site" mode with nothing created yet), then posts the new class and refreshes the palette/map.
+
 ---
 
 ## User Feedback / Decisions

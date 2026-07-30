@@ -88,6 +88,14 @@ const INITIAL_STATE = {
     labelStudioUrl: null,
     paintStatus: 'idle',          // idle | submitting | error
     paintError: '',
+
+    // "+ Add label class" (Decision 51 -- a real, previously-missing UI for
+    // an already-real backend, embeddings_client.create_label_class())
+    addingLabelClass: false,
+    newLabelName: '',
+    newLabelColor: '#4363d8',
+    addLabelClassStatus: 'idle',   // idle | submitting | error
+    addLabelClassError: '',
 };
 
 export default class EmbeddingsPanel extends React.Component {
@@ -277,6 +285,73 @@ export default class EmbeddingsPanel extends React.Component {
         }).fail(xhr => {
             const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
             this.setState({ labelClassesError: msg, labelClassesLoading: false });
+        });
+    }
+
+    // ── "+ Add label class" (Decision 51) ───────────────────────────────────
+    // A site-scoped custom class on top of the 7 instance-wide defaults
+    // (Decision 12) -- label_classes.value (the canonical key sent to Label
+    // Studio as the alias) is derived from the typed display name, not
+    // typed separately, to keep the form to one field.
+    _slugifyLabelValue(name) {
+        return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    }
+
+    _submitNewLabelClass = () => {
+        const { newLabelName, newLabelColor, labelSiteMode, labelSiteId, labelNewSiteName } = this.state;
+        const name = newLabelName.trim();
+        if (!name) {
+            this.setState({ addLabelClassError: 'Enter a name for the label.' });
+            return;
+        }
+
+        this.setState({ addLabelClassStatus: 'submitting', addLabelClassError: '' });
+
+        let resolveSiteId;
+        if (labelSiteMode === 'existing' && labelSiteId) {
+            resolveSiteId = $.Deferred().resolve(labelSiteId).promise();
+        } else if (labelSiteMode === 'new' && labelNewSiteName.trim()) {
+            // No site exists yet (this class is being added before ever
+            // painting a tile) -- create it now via the real POST /sites
+            // endpoint (Decision 51), then switch to "existing" mode with
+            // the new site selected so subsequent actions reuse it.
+            resolveSiteId = $.ajax({
+                type: 'POST',
+                url: '/api/plugins/embeddings/sites',
+                contentType: 'application/json',
+                data: JSON.stringify({ name: labelNewSiteName.trim() }),
+            }).then(data => {
+                this.setState({ labelSiteMode: 'existing', labelSiteId: data.id });
+                this._loadSites();
+                return data.id;
+            });
+        } else {
+            resolveSiteId = $.Deferred().reject({
+                responseJSON: { error: 'Select an existing site, or enter a name for a new one, first.' },
+            }).promise();
+        }
+
+        resolveSiteId.then(siteId => $.ajax({
+            type: 'POST',
+            url: '/api/plugins/embeddings/label-classes',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                site_id: siteId,
+                value: this._slugifyLabelValue(name),
+                display_name: name,
+                color_hex: newLabelColor,
+            }),
+        })).then(() => {
+            this.setState({
+                addLabelClassStatus: 'idle',
+                addingLabelClass: false,
+                newLabelName: '',
+            });
+            this._loadLabelClasses();
+            this._loadCandidateTiles();
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText || 'Could not add label class.';
+            this.setState({ addLabelClassStatus: 'error', addLabelClassError: msg });
         });
     }
 
@@ -627,8 +702,10 @@ export default class EmbeddingsPanel extends React.Component {
             tilesLoading, tilesError,
             labelClasses, labelClassesLoading, labelClassesError, armedLabelValue,
             paintStatus, paintError, labelStudioUrl,
+            addingLabelClass, newLabelName, newLabelColor, addLabelClassStatus, addLabelClassError,
         } = this.state;
         const busy = paintStatus === 'submitting';
+        const addingClass = addLabelClassStatus === 'submitting';
 
         return (
             <div style={styles.section}>
@@ -718,6 +795,54 @@ export default class EmbeddingsPanel extends React.Component {
                         <div style={styles.hint}>
                             Click or drag on the map to paint tiles as this label. Click the
                             swatch again to stop.
+                        </div>
+                    )}
+
+                    {!addingLabelClass ? (
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-default"
+                            style={{ marginTop: 6 }}
+                            onClick={() => this.setState({ addingLabelClass: true, addLabelClassError: '' })}
+                        >
+                            + Add label class
+                        </button>
+                    ) : (
+                        <div style={{ marginTop: 6 }}>
+                            <input
+                                type="text"
+                                style={{ ...styles.textInput, width: 160, display: 'inline-block' }}
+                                placeholder="New label name"
+                                value={newLabelName}
+                                disabled={addingClass}
+                                onChange={e => this.setState({ newLabelName: e.target.value })}
+                            />
+                            {' '}
+                            <input
+                                type="color"
+                                value={newLabelColor}
+                                disabled={addingClass}
+                                onChange={e => this.setState({ newLabelColor: e.target.value })}
+                            />
+                            {' '}
+                            <button
+                                type="button"
+                                className="btn btn-sm btn-success"
+                                disabled={addingClass}
+                                onClick={this._submitNewLabelClass}
+                            >
+                                {addingClass ? 'Adding…' : 'Add'}
+                            </button>
+                            {' '}
+                            <button
+                                type="button"
+                                className="btn btn-sm btn-default"
+                                disabled={addingClass}
+                                onClick={() => this.setState({ addingLabelClass: false, newLabelName: '', addLabelClassError: '' })}
+                            >
+                                Cancel
+                            </button>
+                            {addLabelClassError && <div style={styles.errorMsg}>{addLabelClassError}</div>}
                         </div>
                     )}
                 </div>

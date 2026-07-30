@@ -670,6 +670,7 @@ class TaskLabelApplyView(TaskView):
             return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         return Response({
+            'site_id': site_id,
             'label_studio_project_id': project_id,
             'label_studio_url': label_studio_client.project_url(project_id),
             'applied_count': applied,
@@ -1096,7 +1097,7 @@ class LabelStudioWebhookView(APIView):
 
 class SitesView(APIView):
     """
-    GET /api/plugins/embeddings/sites
+    GET/POST /api/plugins/embeddings/sites
 
     Design spec, Decision 38: real, NOT task-scoped -- sites are global to
     the whole embeddings system (a site can span many WebODM tasks/projects
@@ -1104,9 +1105,15 @@ class SitesView(APIView):
     registered as a non-task-scoped route rather than nested under
     `task/(?P<pk>...)`.
 
-    Calls embeddings_client.list_sites() for real, against the live
-    embeddingsdb (Decision 33/34) -- not a stub. Populates the task panel's
-    "existing site" dropdown in EmbeddingsPanel.jsx.
+    GET: calls embeddings_client.list_sites() for real, against the live
+    embeddingsdb (Decision 33/34). Populates the task panel's "existing
+    site" dropdown in EmbeddingsPanel.jsx.
+
+    POST: Decision 51 -- creates a site directly (`{"name": ...}` ->
+    `{"id": ..., "name": ...}`), independent of embedding/labeling a task.
+    Every other site-creating path only creates one as a side effect of
+    its own action; this is the only way to get a real site_id on its own
+    (e.g. to add label classes to a brand-new site before painting a tile).
 
     Response: 200 {"sites": [{"id": <str>, "name": <str>}, ...]}
     """
@@ -1134,6 +1141,41 @@ class SitesView(APIView):
             {'sites': [{'id': site_id, 'name': name} for site_id, name in sites]},
             status=status.HTTP_200_OK,
         )
+
+    def post(self, request):
+        """
+        Decision 51: creates a site directly, independent of embedding or
+        labeling a task. Every other site-creating path (`TaskEmbedView`,
+        `TaskLabelView`, `TaskLabelApplyView`) only creates one as a SIDE
+        EFFECT of its own action -- there was previously no way to get a
+        real `site_id` for a brand-new site before doing something else
+        with it. Needed so "add a label class" can create a new site on
+        demand (a user in "New site" mode who wants to define custom
+        classes before ever painting a tile).
+        """
+        if not getattr(settings, 'WO_EMBEDDINGS_DB_URL', ''):
+            return Response(
+                {'error': (
+                    'Embeddings database integration is not configured on '
+                    'this WebODM instance -- WO_EMBEDDINGS_DB_URL is not set.'
+                )},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        name = request.data.get('name')
+        if not name or not str(name).strip():
+            return Response({'error': 'name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            site_id = embeddings_client.create_site(name)
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'id': site_id, 'name': str(name).strip()}, status=status.HTTP_201_CREATED)
 
 
 class LabelClassesView(APIView):
