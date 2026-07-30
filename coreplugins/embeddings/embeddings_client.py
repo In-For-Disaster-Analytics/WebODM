@@ -504,7 +504,8 @@ def create_label_class(site_id, value, display_name, color_hex=None, created_by=
 
 # ── labels + label_studio_tasks (Decision 29/49) ────────────────────────────
 
-def upsert_label(tile_observation_id, value_type, value, source, created_by=None):
+def upsert_label(tile_observation_id, value_type, value, source, created_by=None,
+                  label_studio_annotation_id=None):
     """
     Upserts a `labels` row for (tile_observation_id, source): updates the
     existing row for that pair if one exists, else inserts. This is what
@@ -519,6 +520,11 @@ def upsert_label(tile_observation_id, value_type, value, source, created_by=None
     get_or_create_visit()-style pattern for tables without a DB-level upsert
     constraint.
 
+    `label_studio_annotation_id` (Decision 53): the real annotation id
+    `label_studio_client.create_annotation()` returned for this write, if
+    source='label_studio' -- tracked so the "eraser" flow later knows
+    exactly which Label Studio annotation to delete, not just which task.
+
     Returns the row's id (str, uuid).
     """
     existing = _execute(
@@ -528,19 +534,60 @@ def upsert_label(tile_observation_id, value_type, value, source, created_by=None
     )
     if existing:
         _execute(
-            'UPDATE labels SET value_type = %s, value = %s, created_by = %s WHERE id = %s;',
-            (value_type, value, created_by, existing[0]),
+            'UPDATE labels SET value_type = %s, value = %s, created_by = %s, '
+            'label_studio_annotation_id = %s WHERE id = %s;',
+            (value_type, value, created_by, label_studio_annotation_id, existing[0]),
             commit=True,
         )
         return str(existing[0])
     row = _execute(
-        "INSERT INTO labels (tile_observation_id, value_type, value, source, created_by) "
-        "VALUES (%s, %s, %s, %s, %s) RETURNING id;",
-        (tile_observation_id, value_type, value, source, created_by),
+        "INSERT INTO labels (tile_observation_id, value_type, value, source, created_by, "
+        "label_studio_annotation_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+        (tile_observation_id, value_type, value, source, created_by, label_studio_annotation_id),
         fetch='one',
         commit=True,
     )
     return str(row[0])
+
+
+def get_current_label(tile_observation_id):
+    """
+    Returns the CURRENT label for a tile_observation -- the most recently
+    created `labels` row, regardless of source, matching
+    get_tile_observations_for_visit()'s own "current label" definition --
+    as a dict {'id', 'value', 'source', 'label_studio_annotation_id'}, or
+    None if this tile has no label at all. Used by the "eraser" flow
+    (Decision 53) to find what actually needs undoing.
+    """
+    row = _execute(
+        'SELECT id, value, source, label_studio_annotation_id FROM labels '
+        'WHERE tile_observation_id = %s ORDER BY created_at DESC LIMIT 1;',
+        (tile_observation_id,),
+        fetch='one',
+    )
+    if not row:
+        return None
+    return {
+        'id': str(row[0]),
+        'value': row[1],
+        'source': row[2],
+        'label_studio_annotation_id': row[3],
+    }
+
+
+def delete_labels_for_tile_observation(tile_observation_id):
+    """
+    Deletes EVERY `labels` row for this tile_observation_id (all sources)
+    -- the local half of the "eraser" flow (Decision 53). Callers are
+    responsible for deleting the corresponding Label Studio annotation(s)
+    first (via get_current_label()'s label_studio_annotation_id) -- this
+    function only touches embeddingsdb.
+    """
+    _execute(
+        'DELETE FROM labels WHERE tile_observation_id = %s;',
+        (tile_observation_id,),
+        commit=True,
+    )
 
 
 def register_label_studio_task(project_id, task_id, tile_observation_id):

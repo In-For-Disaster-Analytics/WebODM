@@ -654,10 +654,11 @@ class TaskLabelApplyView(TaskView):
                         tobs_id, project_id,
                     )
                     continue
-                label_studio_client.create_annotation(ls_task_id, result)
+                annotation = label_studio_client.create_annotation(ls_task_id, result)
                 embeddings_client.upsert_label(
                     tobs_id, 'category', value, source='label_studio',
                     created_by=request.user.username,
+                    label_studio_annotation_id=annotation.get('id'),
                 )
                 applied += 1
         except label_studio_client.LabelStudioConfigError as e:
@@ -675,6 +676,72 @@ class TaskLabelApplyView(TaskView):
             'label_studio_url': label_studio_client.project_url(project_id),
             'applied_count': applied,
         }, status=status.HTTP_200_OK)
+
+
+class TaskLabelClearView(TaskView):
+    """
+    POST /api/plugins/embeddings/task/{task_pk}/labels/clear
+
+    Design spec, Decision 53: the "eraser" -- undoes a mistakenly painted
+    label. Body: `{"tile_observation_ids": [...]}` -- these are already
+    real, resolved ids (from `GET .../tiles`'s own `tile_observation_id`
+    field), not "z/x/y" strings, since there's nothing left to resolve
+    (site/zoom/tile_grid all already exist by the time a tile has a label
+    to erase).
+
+    For each id: looks up the CURRENT label (embeddings_client.
+    get_current_label()); if it came from Label Studio, deletes the EXACT
+    annotation that created it (label_studio_client.delete_annotation(),
+    using the id tracked in labels.label_studio_annotation_id -- not every
+    annotation on the task, since one task can accumulate several across
+    repeated repaints) as a best-effort call -- a Label Studio failure is
+    logged and does NOT block clearing WebODM's own local state, matching
+    this plugin's existing "local state is primary, Label Studio is kept
+    in sync best-effort" posture (e.g. TaskLabelView's label_studio_tasks
+    recording). Then deletes the local `labels` row(s) unconditionally.
+
+    Tiles with no current label are silently skipped (nothing to clear),
+    not an error.
+    """
+
+    permission_classes = (IsEmbeddingsAdmin,)
+
+    def post(self, request, pk=None):
+        self.get_and_check_task(request, pk)
+
+        tile_observation_ids = request.data.get('tile_observation_ids') or []
+        if not tile_observation_ids:
+            return Response(
+                {'error': 'tile_observation_ids is required and must be a non-empty list.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cleared = 0
+        try:
+            for tobs_id in tile_observation_ids:
+                current = embeddings_client.get_current_label(tobs_id)
+                if not current:
+                    continue
+
+                annotation_id = current.get('label_studio_annotation_id')
+                if annotation_id is not None:
+                    try:
+                        label_studio_client.delete_annotation(annotation_id)
+                    except label_studio_client.LabelStudioAPIError:
+                        logger.exception(
+                            'Failed to delete Label Studio annotation %s for '
+                            'tile_observation_id=%s -- clearing WebODM\'s own '
+                            'label anyway.', annotation_id, tobs_id,
+                        )
+
+                embeddings_client.delete_labels_for_tile_observation(tobs_id)
+                cleared += 1
+        except embeddings_client.EmbeddingsDBConfigError as e:
+            return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except embeddings_client.EmbeddingsDBError as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'cleared_count': cleared}, status=status.HTTP_200_OK)
 
 
 class TaskEmbedView(TaskView):

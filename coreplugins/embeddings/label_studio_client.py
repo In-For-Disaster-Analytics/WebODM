@@ -312,6 +312,20 @@ def create_annotation(task_id, result):
     return _request('POST', f'/api/tasks/{task_id}/annotations/', json={'result': result})
 
 
+def delete_annotation(annotation_id):
+    """
+    DELETE /api/annotations/{annotation_id}/ -- deletes a real annotation
+    (confirmed against Label Studio's real API reference: 204 No Content
+    on success). Used by the "eraser" flow (Decision 53) to undo a
+    mistakenly painted label -- deletes the EXACT annotation
+    `create_annotation()` created for it (tracked via
+    `labels.label_studio_annotation_id`), not every annotation on the
+    task, since one Label Studio task can accumulate several annotations
+    across repeated repaints.
+    """
+    _request('DELETE', f'/api/annotations/{annotation_id}/')
+
+
 def register_webhook(project_id, webhook_url, secret):
     """
     POST /api/webhooks/ -- register a webhook scoped to `project_id` (via the

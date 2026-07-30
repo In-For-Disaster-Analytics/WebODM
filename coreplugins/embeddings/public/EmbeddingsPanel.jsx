@@ -49,6 +49,11 @@ import { tileBoundsLatLng } from './tileMath';
 
 const POLL_INTERVAL = 3000;
 
+// Sentinel armedLabelValue -- Decision 53's "eraser" tool shares the exact
+// same arm/paint/drag machinery as a real label class, distinguished only
+// by this value never matching a real label_classes.value.
+const ERASER = '__erase__';
+
 const INITIAL_STATE = {
     panelOpen: false,
     activeTab: 'embedding',   // 'embedding' | 'labels'
@@ -460,13 +465,21 @@ export default class EmbeddingsPanel extends React.Component {
         this._painting = true;
         this._pendingPaintTiles = [];
         this._pendingPaintKeys = new Set();
-        const swatch = labelClasses.find(lc => lc.value === armedLabelValue);
-        this._pendingPaintColor = (swatch && swatch.color_hex) || '#2d7a2d';
+        if (armedLabelValue === ERASER) {
+            this._pendingPaintColor = '#c0392b';
+        } else {
+            const swatch = labelClasses.find(lc => lc.value === armedLabelValue);
+            this._pendingPaintColor = (swatch && swatch.color_hex) || '#2d7a2d';
+        }
         this._continuePaint(tile);
     }
 
     _continuePaint = (tile) => {
         if (!this._painting) return;
+        // Erasing a tile with no current label (no tile_observation_id at
+        // all, or one that just has no label yet) is a no-op -- nothing to
+        // undo, so don't even add it to the pending batch.
+        if (this.state.armedLabelValue === ERASER && !tile.tile_observation_id) return;
         const key = `${tile.x},${tile.y}`;
         if (this._pendingPaintKeys.has(key)) return;
         this._pendingPaintKeys.add(key);
@@ -482,7 +495,10 @@ export default class EmbeddingsPanel extends React.Component {
         this._pendingPaintTiles = [];
         this._pendingPaintKeys = new Set();
         this._renderTileOverlay();
-        if (tiles.length && value) {
+        if (!tiles.length || !value) return;
+        if (value === ERASER) {
+            this._submitClear(tiles);
+        } else {
             this._submitPaint(tiles, value);
         }
     }
@@ -522,6 +538,32 @@ export default class EmbeddingsPanel extends React.Component {
                 labelStudioProjectId: data.label_studio_project_id,
                 labelStudioUrl: data.label_studio_url,
             });
+            this._loadCandidateTiles();
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            this.setState({ paintStatus: 'error', paintError: msg });
+            this._loadCandidateTiles(); // resync the map with real server state either way
+        });
+    }
+
+    // Decision 53: the "eraser" -- undoes a mistakenly painted label. Only
+    // needs tile_observation_id (already resolved in candidateTiles), not
+    // site/zoom -- there's nothing left to resolve for a tile that already
+    // has a label.
+    _submitClear = (tiles) => {
+        const { task } = this.props;
+        const tileObservationIds = tiles.map(t => t.tile_observation_id).filter(Boolean);
+        if (!tileObservationIds.length) return;
+
+        this.setState({ paintStatus: 'submitting', paintError: '' });
+
+        $.ajax({
+            type: 'POST',
+            url: `/api/plugins/embeddings/task/${task.id}/labels/clear`,
+            contentType: 'application/json',
+            data: JSON.stringify({ tile_observation_ids: tileObservationIds }),
+        }).done(() => {
+            this.setState({ paintStatus: 'idle', paintError: '' });
             this._loadCandidateTiles();
         }).fail(xhr => {
             const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
@@ -799,11 +841,27 @@ export default class EmbeddingsPanel extends React.Component {
                                 {lc.display_name}
                             </button>
                         ))}
+                        <button
+                            type="button"
+                            title="Eraser — clear a tile's label"
+                            style={{
+                                ...styles.paletteSwatch,
+                                background: '#fff',
+                                color: '#c0392b',
+                                textShadow: 'none',
+                                border: '1px solid #c0392b',
+                                outline: armedLabelValue === ERASER ? '3px solid #333' : 'none',
+                            }}
+                            onClick={() => armedLabelValue === ERASER ? this._disarmLabel() : this._armLabel(ERASER)}
+                        >
+                            <i className="fa fa-eraser" /> Eraser
+                        </button>
                     </div>
                     {armedLabelValue && (
                         <div style={styles.hint}>
-                            Click or drag on the map to paint tiles as this label. Click the
-                            swatch again to stop.
+                            {armedLabelValue === ERASER
+                                ? 'Click or drag on the map to clear labels from tiles. Click Eraser again to stop.'
+                                : 'Click or drag on the map to paint tiles as this label. Click the swatch again to stop.'}
                         </div>
                     )}
 
