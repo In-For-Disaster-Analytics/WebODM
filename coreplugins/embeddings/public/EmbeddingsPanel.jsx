@@ -261,17 +261,20 @@ export default class EmbeddingsPanel extends React.Component {
             <div style={styles.section}>
                 <div style={styles.sectionTitle}>Generate Embeddings</div>
                 <div style={styles.hint}>
-                    Always uses this task's own orthophoto at its highest available
-                    resolution (Decision 46) — not a user-chosen setting.
+                    Splits this task's orthophoto into tiles and generates a vector
+                    embedding for each one using a pretrained image model, at the
+                    highest resolution available — there's no zoom level to choose.
                 </div>
 
                 {(embedStatus === 'running') && (
                     <div style={styles.progressBox}>
-                        <i className="fa fa-circle-notch fa-spin" /> Running — {tileObservationCount} tile{tileObservationCount === 1 ? '' : 's'} observed so far.
+                        <i className="fa fa-circle-notch fa-spin" /> Running — {tileObservationCount} tile{tileObservationCount === 1 ? '' : 's'} embedded so far.
                         <div style={styles.hint}>
-                            Status keeps polling while this panel is open (see design spec — the
-                            embed-generate Job submission is real, but the pipeline doesn't yet
-                            report a terminal "done" state).
+                            This runs on remote compute and can take a while for large
+                            orthophotos. Feel free to close this panel — it'll pick back up
+                            from where it left off when you reopen it. Note: this counter
+                            doesn't yet detect when the run has fully finished, so use it as
+                            a progress signal rather than a completion signal.
                         </div>
                     </div>
                 )}
@@ -370,12 +373,10 @@ export default class EmbeddingsPanel extends React.Component {
             <div style={styles.section}>
                 <div style={styles.sectionTitle}>Label a Sample</div>
                 <div style={styles.hint}>
-                    Simplified interim UI: the full interactive map (clicking tiles
-                    directly on the orthophoto, per the design spec's "Tile Selection
-                    UI") depends on the candidate-tiles endpoint
-                    (<code>GET .../task/&#123;pk&#125;/tiles</code>), which still
-                    returns 501 — not built in this increment. Instead, type tile
-                    identifiers directly.
+                    Send specific tiles to Label Studio for manual labeling. Enter
+                    each tile as <code>zoom/x/y</code> (e.g. 19/1234/5678),
+                    separated by commas. A map for picking tiles visually is
+                    planned for a future update.
                 </div>
 
                 <div style={styles.formRow}>
