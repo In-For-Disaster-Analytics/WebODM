@@ -1,19 +1,26 @@
 """
 Server-to-server client for Label Studio's own REST API.
 
-Decision 32 (docs/design/2026-07-22-geospatial-embeddings-classification.md):
-Label Studio's REST API only accepts Label Studio's OWN Personal Access Token
-(`Authorization: Bearer <token>`) -- it does NOT accept a Tapis JWT. The
-human deep-link SSO login (handled entirely by the separate
-`label-studio-tapis-auth` repo's `TapisOAuth2Backend`) is a completely
-different code path from the server-to-server calls this module makes:
-project create, task import, and webhook registration all run with no human
-in the loop. Every method here authenticates with
-`settings.WO_LABEL_STUDIO_API_TOKEN` -- a Label Studio Personal Access Token
-generated once by an admin user in the Label Studio instance itself, and
-configured server-side only (never sent to the browser) -- NOT the
-requesting WebODM user's own Tapis credential, which is a completely
-separate thing used only for the human deep-link login.
+Decision 32 (docs/design/2026-07-22-geospatial-embeddings-classification.md),
+CORRECTED below (found via a real, live 401 -- "Authentication credentials
+were not provided" -- see `_refresh_access_token()`'s own comment): Label
+Studio's REST API authenticates via `Authorization: Bearer <token>`, but
+that token is NOT the Personal Access Token itself -- a PAT is a JWT
+REFRESH token, and must be exchanged for a short-lived access token via
+`POST /api/token/refresh` first (confirmed against Label Studio's own docs,
+https://labelstud.io/guide/access_tokens, not guessed -- the original
+Decision 32 text asserted the PAT went directly in the Bearer header, which
+is wrong). It does NOT accept a Tapis JWT either way. The human deep-link
+SSO login (handled entirely by the separate `label-studio-tapis-auth`
+repo's `TapisOAuth2Backend`) is a completely different code path from the
+server-to-server calls this module makes: project create, task import, and
+webhook registration all run with no human in the loop. Every method here
+ultimately authenticates via `settings.WO_LABEL_STUDIO_API_TOKEN` -- a
+Label Studio Personal Access Token generated once by an admin user in the
+Label Studio instance itself, and configured server-side only (never sent
+to the browser) -- NOT the requesting WebODM user's own Tapis credential,
+which is a completely separate thing used only for the human deep-link
+login.
 
 Endpoints and payload shapes below were verified against Label Studio's real,
 current REST API reference (not guessed from memory):
@@ -32,6 +39,8 @@ Studio are unrelated services).
 """
 
 import logging
+import threading
+import time
 from xml.sax.saxutils import quoteattr
 
 import requests
@@ -42,6 +51,35 @@ logger = logging.getLogger('app.logger')
 # Project create/import/webhook-register are all small, synchronous calls --
 # no long-running work happens inside Label Studio for any of them.
 DEFAULT_REQUEST_TIMEOUT = 30  # seconds
+
+# Decision 32 CORRECTION (found via a real 401 -- "Authentication
+# credentials were not provided" -- from sending the raw Personal Access
+# Token as a Bearer header): a Label Studio PAT is a JWT REFRESH token, not
+# a usable Bearer access token on its own. It must be exchanged for a
+# short-lived access token via POST /api/token/refresh first (confirmed
+# against Label Studio's own docs, not guessed -- see
+# https://labelstud.io/guide/access_tokens); the ORIGINAL Decision 32
+# comment's "Authorization: Bearer <PAT>" claim was wrong about which token
+# goes there. `_get_access_token()`/`_refresh_access_token()` below do that
+# exchange; `_auth_headers()` now sends the exchanged access token, not the
+# PAT itself.
+#
+# Label Studio's own docs don't state an exact access-token TTL beyond
+# "around 5 minutes" -- ACCESS_TOKEN_SAFETY_MARGIN_SECONDS refreshes a bit
+# early rather than exactly at that assumed boundary, and _request()'s own
+# retry-once-on-401 covers the case where the real server-side expiry is
+# earlier than assumed (e.g. clock skew, an admin revoking the PAT).
+ACCESS_TOKEN_ASSUMED_LIFETIME_SECONDS = 5 * 60
+ACCESS_TOKEN_SAFETY_MARGIN_SECONDS = 30
+
+# Cached across calls within this process -- create_project()/import_tasks()/
+# register_webhook() run back-to-back in one request (api_views.py's
+# TaskEmbedView.post()), so this avoids exchanging a fresh access token 3
+# times for what's really one logical operation. Lock-protected: a Django
+# WSGI worker can serve more than one request thread concurrently, and this
+# dict is mutated (not just read) on refresh.
+_access_token_cache = {'token': None, 'expires_at': 0.0}
+_access_token_lock = threading.Lock()
 
 
 class LabelStudioConfigError(RuntimeError):
@@ -72,7 +110,7 @@ def _base_url():
     return url.rstrip('/')
 
 
-def _auth_headers():
+def _personal_access_token():
     token = (getattr(settings, 'WO_LABEL_STUDIO_API_TOKEN', '') or '').strip()
     if not token:
         raise LabelStudioConfigError(
@@ -82,7 +120,87 @@ def _auth_headers():
             "admin inside the Label Studio instance itself -- it is NOT the "
             "requesting user's Tapis JWT."
         )
-    return {'Authorization': f'Bearer {token}'}
+    return token
+
+
+def _refresh_access_token():
+    """
+    POST /api/token/refresh -- exchanges the long-lived Personal Access
+    Token for a short-lived access token (see this module's own comment on
+    ACCESS_TOKEN_ASSUMED_LIFETIME_SECONDS for why this exchange is required
+    at all). Deliberately NOT routed through `_request()` -- that function
+    calls `_auth_headers()`, which is what needs THIS result, so going
+    through it here would recurse.
+    """
+    url = f'{_base_url()}/api/token/refresh'
+    try:
+        response = requests.post(
+            url, json={'refresh': _personal_access_token()}, timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        logger.exception('Label Studio access-token refresh failed: %s', url)
+        raise LabelStudioAPIError(f'Could not reach Label Studio at {url}: {e}') from e
+
+    if not response.ok:
+        # The response body is logged server-side only, never put into the
+        # raised exception's message -- unlike every other _request() error
+        # path in this module. Every OTHER LabelStudioAPIError eventually
+        # reaches api_views.py's Response({'error': str(e)}, ...) and is
+        # returned to the browser verbatim (existing pattern, not changed
+        # here); THIS endpoint's request body is the Personal Access Token
+        # itself, so a JWT-library error response that happens to echo the
+        # submitted (invalid/expired) token back would otherwise leak it to
+        # the client. A generic message is raised instead; response_body is
+        # still attached to the exception object (not its message) for any
+        # server-side caller that wants it.
+        body_snippet = (response.text or '')[:500]
+        logger.error('Label Studio access-token refresh error %s: %s', response.status_code, body_snippet)
+        raise LabelStudioAPIError(
+            f'Label Studio access-token refresh returned {response.status_code} '
+            f'-- see server logs for the response body.',
+            status_code=response.status_code,
+            response_body=body_snippet,
+        )
+    try:
+        return response.json()['access']
+    except (ValueError, KeyError) as e:
+        body_snippet = (response.text or '')[:500]
+        logger.error("Label Studio access-token refresh response did not contain 'access': %s", body_snippet)
+        raise LabelStudioAPIError(
+            "Label Studio access-token refresh response did not contain 'access' "
+            "-- see server logs for the response body.",
+            response_body=body_snippet,
+        ) from e
+
+
+def _invalidate_access_token():
+    with _access_token_lock:
+        _access_token_cache['token'] = None
+        _access_token_cache['expires_at'] = 0.0
+
+
+def _get_access_token():
+    """
+    Returns a real Label Studio access token, refreshing it from the
+    configured Personal Access Token if the cached one is missing or past
+    its assumed expiry. See this module's own top-of-file comment (Decision
+    32 correction) for why this exchange step exists at all.
+    """
+    with _access_token_lock:
+        now = time.monotonic()
+        if _access_token_cache['token'] and now < _access_token_cache['expires_at']:
+            return _access_token_cache['token']
+
+        access_token = _refresh_access_token()
+        _access_token_cache['token'] = access_token
+        _access_token_cache['expires_at'] = (
+            now + ACCESS_TOKEN_ASSUMED_LIFETIME_SECONDS - ACCESS_TOKEN_SAFETY_MARGIN_SECONDS
+        )
+        return access_token
+
+
+def _auth_headers():
+    return {'Authorization': f'Bearer {_get_access_token()}'}
 
 
 def _request(method, path, **kwargs):
@@ -90,17 +208,34 @@ def _request(method, path, **kwargs):
     Real HTTP call to Label Studio's own REST API (`requests`, not mocked).
     Raises LabelStudioAPIError on any non-2xx response or network failure --
     callers should not have to guess success from a None/False return.
+
+    Retries exactly once on a 401: the cached access token's real
+    server-side expiry isn't stated by Label Studio's own docs beyond
+    "around 5 minutes," so ACCESS_TOKEN_ASSUMED_LIFETIME_SECONDS is an
+    assumption, not a guarantee -- a 401 forces one fresh
+    refresh-and-retry before this is treated as a real failure.
     """
     url = f'{_base_url()}{path}'
-    headers = _auth_headers()
-    headers.update(kwargs.pop('headers', None) or {})
+    extra_headers = kwargs.pop('headers', None) or {}
     timeout = kwargs.pop('timeout', DEFAULT_REQUEST_TIMEOUT)
 
-    try:
-        response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
-    except requests.RequestException as e:
-        logger.exception('Label Studio API request failed: %s %s', method, url)
-        raise LabelStudioAPIError(f'Could not reach Label Studio at {url}: {e}') from e
+    for attempt in (1, 2):
+        headers = _auth_headers()
+        headers.update(extra_headers)
+        try:
+            response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
+        except requests.RequestException as e:
+            logger.exception('Label Studio API request failed: %s %s', method, url)
+            raise LabelStudioAPIError(f'Could not reach Label Studio at {url}: {e}') from e
+
+        if response.status_code == 401 and attempt == 1:
+            logger.warning(
+                'Label Studio API returned 401 on first attempt -- forcing an '
+                'access-token refresh and retrying once: %s %s', method, url,
+            )
+            _invalidate_access_token()
+            continue
+        break
 
     if not response.ok:
         body_snippet = (response.text or '')[:500]

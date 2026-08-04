@@ -6,10 +6,19 @@
       "timestamp": "2026-07-16",
       "error_message": "CKAN chat times out; 4 rapid graph invocations each exit in <20ms after propose completes",
       "file": "coreplugins/ckan/api_views.py, coreplugins/ckan/publisher.py",
-      "root_cause": "ChatMessageView and apply_ckan_publish unconditionally called /resume even when the graph had no pending interrupt (post-propose → END). LangGraph Command(resume=...) returns in <20ms with no work done when there is no interrupt.",
+      "root_cause": "ChatMessageView and apply_ckan_publish unconditionally called /resume even when the graph had no pending interrupt (post-propose \u2192 END). LangGraph Command(resume=...) returns in <20ms with no work done when there is no interrupt.",
       "fix": "Track has_pending_interrupt in GlobalDataStore. ChatMessageView routes to /resume when True, else /runs with session_id. apply_ckan_publish changed from /resume to /runs.",
-      "tags": ["langgraph", "interrupt", "ckan", "chat", "timeout", "celery"],
-      "related_bugs": ["bug-002"],
+      "tags": [
+        "langgraph",
+        "interrupt",
+        "ckan",
+        "chat",
+        "timeout",
+        "celery"
+      ],
+      "related_bugs": [
+        "bug-002"
+      ],
       "occurrences": 1,
       "last_seen": "2026-07-16"
     },
@@ -20,10 +29,60 @@
       "file": "coreplugins/ckan/api_views.py",
       "root_cause": "ChatStartView sent remote_resources (list of {url, name, format} dicts) instead of source_urls (list of URL strings). The agent's _gather_evidence() only reads source_url/source_urls; has_data was false. With no data context, Meta-Llama-3.3-70B invented local PDF paths. Each failed pdf_summarize call costs ~5-6s (LLM decides next action after FileSafetyError), 6 calls = ~36s per round, two rounds = 72+ seconds.",
       "fix": "In ChatStartView.post(): extract URLs from remote_resources into source_urls list (so has_data=true). Build an informative message listing the file names/formats and explicitly instructing the LLM NOT to call file tools on these paths (they are remote, not locally accessible).",
-      "tags": ["ckan", "persona", "llm", "hallucination", "pdf_summarize", "source_urls", "remote_resources", "timeout"],
-      "related_bugs": ["bug-001"],
+      "tags": [
+        "ckan",
+        "persona",
+        "llm",
+        "hallucination",
+        "pdf_summarize",
+        "source_urls",
+        "remote_resources",
+        "timeout"
+      ],
+      "related_bugs": [
+        "bug-001"
+      ],
       "occurrences": 1,
       "last_seen": "2026-07-16"
+    },
+    {
+      "id": "bug-003",
+      "timestamp": "2026-07-22",
+      "error_message": "Not a runtime error \u2014 a security review finding while building an equivalent Tapis OAuth2 backend for Label Studio",
+      "file": "app/auth/tapis_oauth2.py",
+      "root_cause": "TapisOAuth2Backend._validate_token_with_tapis() decodes the JWT payload via raw base64 + json.loads and checks exp, but never verifies the RS256 signature against the tenant public key (available from the Tapis Tenants API, GET {TAPIS_BASE_URL}/v3/tenants/{tenant_id} -> result.public_key). A forged token with a fabricated payload and garbage signature would currently be accepted as long as exp is in the future and a username claim is present.",
+      "fix": "Not fixed in this repo (out of scope for the session that found it). The equivalent backend written for Label Studio (../label-studio-tapis-auth/tapis_auth/backend.py) implements real verification via PyJWT + the tenant public key and was confirmed to correctly reject a forged token against the live tacc.tapis.io tenant. Backporting the same fix to this file is recommended before relying on it in production.",
+      "tags": [
+        "security",
+        "tapis",
+        "oauth2",
+        "jwt",
+        "signature-verification",
+        "auth"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-22"
+    },
+    {
+      "id": "bug-004",
+      "timestamp": "2026-07-31",
+      "error_message": "Label Studio API returned 401 for POST https://labelstudio.pods.portals.tapis.io/api/projects/: {\"detail\":\"Authentication credentials were not provided.\"}",
+      "file": "coreplugins/embeddings/label_studio_client.py",
+      "root_cause": "_auth_headers() sent settings.WO_LABEL_STUDIO_API_TOKEN (a Label Studio Personal Access Token) directly as 'Authorization: Bearer <PAT>'. A Label Studio PAT is a JWT REFRESH token, not a usable access token on its own -- confirmed against https://labelstud.io/guide/access_tokens -- it must first be exchanged via POST /api/token/refresh (body {\"refresh\": \"<PAT>\"} -> response {\"access\": \"<short-lived token>\"}, ~5 min TTL) for an access token, and THAT goes in the Bearer header. The original Decision 32 comment in this file asserted the PAT went directly in the header, which was wrong.",
+      "fix": "Added _personal_access_token()/_refresh_access_token()/_get_access_token() (module-level lock-protected cache, ~5min assumed TTL minus a 30s safety margin) and _invalidate_access_token() to label_studio_client.py. _auth_headers() now returns the exchanged access token, not the PAT. _request() retries exactly once on a 401 by invalidating the cache and re-refreshing. Security-reviewer follow-up: _refresh_access_token()'s failure path no longer embeds Label Studio's raw response body in the raised LabelStudioAPIError's message (which api_views.py returns verbatim to the browser via Response({'error': str(e)})) -- the body is logged server-side and attached to .response_body only, since this endpoint's request body is the PAT itself. Tests added in coreplugins/embeddings/tests.py.",
+      "tags": [
+        "label-studio",
+        "auth",
+        "jwt",
+        "personal-access-token",
+        "401",
+        "token-refresh",
+        "security"
+      ],
+      "related_bugs": ["bug-003"],
+      "occurrences": 1,
+      "last_seen": "2026-07-31"
     }
   ]
 }
