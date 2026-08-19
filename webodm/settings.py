@@ -528,6 +528,17 @@ WO_MODEL_ACTOR_ID = os.environ.get('WO_MODEL_ACTOR_ID', 'PrGMpgkVzENbp')  # mode
 WO_EMBED_GENERATE_APP_ID = os.environ.get('WO_EMBED_GENERATE_APP_ID', 'embed-generate-ls6')
 WO_EMBED_GENERATE_APP_VERSION = os.environ.get('WO_EMBED_GENERATE_APP_VERSION', '1.0.0')
 
+# bug-005: fallback-only threshold. TaskEmbedStatusView primarily polls the
+# real Tapis Job status (embeddings_client.get_embed_job_status); this idle
+# timeout only kicks in when no job uuid is on record for a visit (it
+# predates job-uuid tracking) or a Tapis status poll itself fails. Value is
+# how long embed-status waits with no new tile_observations/embeddings
+# activity before calling a run "timed_out" instead of "running" -- the ls6
+# Tapis App itself caps a run at maxMinutes=60 (embeddings-tapis-actors/ls6/
+# app.json), so 75 gives it that full wall-clock budget plus a buffer for
+# ls6's own Slurm queue wait before the job even starts.
+WO_EMBED_GENERATE_TIMEOUT_MINUTES = int(os.environ.get('WO_EMBED_GENERATE_TIMEOUT_MINUTES', '75'))
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

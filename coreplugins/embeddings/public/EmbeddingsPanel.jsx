@@ -32,20 +32,25 @@ import { tileBoundsLatLng } from './tileMath';
 // Built against the real API contracts in api_views.py, verified by reading
 // that module directly (not assumed):
 //   - POST   .../task/{pk}/embed            -> 202 {site_id, visit_id} | 400 | 409 | 503
-//   - GET    .../task/{pk}/embed-status     -> 200 {status: 'not_started'|'running', site_id, visit_id, tile_observation_count}
+//   - GET    .../task/{pk}/embed-status     -> 200 {status: 'not_started'|'running'|'timed_out', site_id, visit_id, tile_observation_count}
 //   - GET    .../task/{pk}/tiles             -> 200 {zoom, tiles: [{x, y, tile_observation_id, label_value, label_color}, ...]}
 //   - GET    .../label-classes               -> 200 {label_classes: [{value, display_name, color_hex}, ...]}
 //   - POST   .../task/{pk}/labels/apply     -> 200 {label_studio_project_id, label_studio_url, applied_count} | 400 | 502 | 503
 //     (Decision 50: applies ONE label value to a batch of painted tiles immediately.)
 //   - GET    .../sites                       -> 200 {sites: [{id, name}, ...]} (Decision 38)
 //
-// Note on `embed-status`: the backend contract only defines 'not_started' and
-// 'running' -- there is no terminal "done"/"success" status to poll for yet,
-// because the embed-generate Actor's own run() still raises NotImplementedError
-// on the Actor side (Decision 35) even though invocation itself is now real
-// (Decision 37). Polling therefore continues, showing live progress, for as
-// long as the panel stays open and the task doesn't change -- it does not
-// (and per the current contract, cannot) auto-stop on completion.
+// Note on `embed-status`: bug-005 fix -- the backend polls the REAL Tapis Job
+// status behind a run (t.jobs.getJobStatus); 'running' means the Tapis Job
+// is still actively going, and 'timed_out' means it's no longer running
+// (finished, failed, cancelled, or -- as a fallback only when no Tapis job
+// uuid was recorded, or the Tapis poll itself fails -- idle past
+// WO_EMBED_GENERATE_TIMEOUT_MINUTES). Either way the form re-enables and
+// offers "Continue" rather than staying disabled forever. There is still no
+// terminal "done"/"success" status (M, the total expected tile count, isn't
+// computed yet -- see api_views.py's own docstring), so a 'timed_out' run is
+// always treated as possibly-incomplete: Continue just re-submits the same
+// generate call, which is safe and resumes rather than restarting from
+// scratch (get_or_create_visit() + embed-generate's own upsert/advisory lock).
 
 const POLL_INTERVAL = 3000;
 
@@ -66,7 +71,7 @@ const INITIAL_STATE = {
     siteId: '',
     newSiteName: '',
     zoomOverride: false,
-    embedStatus: 'idle',    // idle | submitting | running | error
+    embedStatus: 'idle',    // idle | submitting | running | timed_out | error
     embedError: '',
     embedConflict: '',      // non-empty 409 message -> reveals "use zoom anyway"
     currentSiteId: null,
@@ -178,14 +183,17 @@ export default class EmbeddingsPanel extends React.Component {
             url: `/api/plugins/embeddings/task/${task.id}/embed-status`,
         }).done(data => {
             this.setState({
-                embedStatus: data.status,   // 'not_started' | 'running'
+                embedStatus: data.status,   // 'not_started' | 'running' | 'timed_out'
                 currentSiteId: data.site_id,
                 currentVisitId: data.visit_id,
                 tileObservationCount: data.tile_observation_count || 0,
             });
-            // No terminal state exists in the current contract (see module
-            // note above) -- polling only stops when the panel closes or
-            // the task changes, not on any response here.
+            if (data.status === 'timed_out') {
+                // Nothing left to watch for -- activity won't resume on its
+                // own; stop polling until the user clicks "Continue" (which
+                // restarts polling itself, see handleSubmitEmbed/handleContinueEmbed).
+                this._stopPolling();
+            }
         }).fail(() => {
             // silent -- keep polling, same as CKANPublishPanel's own pattern
         });
@@ -223,14 +231,16 @@ export default class EmbeddingsPanel extends React.Component {
             type: 'GET',
             url: `/api/plugins/embeddings/task/${task.id}/embed-status`,
         }).done(data => {
-            if (data.status === 'running') {
+            if (data.status === 'running' || data.status === 'timed_out') {
                 this.setState({
-                    embedStatus: 'running',
+                    embedStatus: data.status,
                     currentSiteId: data.site_id,
                     currentVisitId: data.visit_id,
                     tileObservationCount: data.tile_observation_count || 0,
                 });
-                this._startPolling();
+                if (data.status === 'running') {
+                    this._startPolling();
+                }
             }
             // status === 'not_started' -> leave the form as-is (idle)
         }).fail(() => {
@@ -621,6 +631,39 @@ export default class EmbeddingsPanel extends React.Component {
         });
     }
 
+    // bug-005: re-POSTs .../embed with the SAME site_id already known from
+    // embed-status (currentSiteId), bypassing the site-picker form entirely --
+    // the user may never have touched siteMode/siteId this session (the form
+    // was disabled while embedStatus was 'running'/'timed_out'). Safe to call
+    // again: get_or_create_visit() reuses the existing visit row, and
+    // embed-generate's own upsert + advisory lock (Decision 56) mean this
+    // resumes whatever's missing rather than restarting from scratch.
+    handleContinueEmbed = () => {
+        const { task } = this.props;
+        const { currentSiteId } = this.state;
+
+        this.setState({ embedStatus: 'submitting', embedError: '' });
+
+        $.ajax({
+            type: 'POST',
+            url: `/api/plugins/embeddings/task/${task.id}/embed`,
+            contentType: 'application/json',
+            data: JSON.stringify({ site_id: currentSiteId, new_site_name: null, zoom_override: false }),
+        }).done(data => {
+            this.setState({
+                embedStatus: 'running',
+                embedError: '',
+                embedConflict: '',
+                currentSiteId: data.site_id,
+                currentVisitId: data.visit_id,
+            });
+            this._startPolling();
+        }).fail(xhr => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            this.setState({ embedStatus: 'timed_out', embedError: msg });
+        });
+    }
+
     renderButton() {
         return (
             <button className="btn btn-sm btn-primary" onClick={this.handleOpenPanel}>
@@ -657,6 +700,24 @@ export default class EmbeddingsPanel extends React.Component {
                             doesn't yet detect when the run has fully finished, so use it as
                             a progress signal rather than a completion signal.
                         </div>
+                    </div>
+                )}
+
+                {(embedStatus === 'timed_out') && (
+                    <div style={styles.conflictMsg}>
+                        <i className="fa fa-exclamation-triangle" /> No new progress for a
+                        while — {tileObservationCount} tile{tileObservationCount === 1 ? '' : 's'} embedded
+                        so far, but the run may have died before finishing.
+                        <div style={{ marginTop: 6 }}>
+                            <button
+                                type="button"
+                                className="btn btn-sm btn-primary"
+                                onClick={this.handleContinueEmbed}
+                            >
+                                <i className="fa fa-play" /> Continue
+                            </button>
+                        </div>
+                        {embedError && <div style={styles.hint}>{embedError}</div>}
                     </div>
                 )}
 

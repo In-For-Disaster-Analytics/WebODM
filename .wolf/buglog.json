@@ -80,9 +80,38 @@
         "token-refresh",
         "security"
       ],
-      "related_bugs": ["bug-003"],
+      "related_bugs": [
+        "bug-003"
+      ],
       "occurrences": 1,
       "last_seen": "2026-07-31"
+    },
+    {
+      "id": "bug-005",
+      "timestamp": "2026-08-07",
+      "error_message": "502 Bad Gateway on POST .../labels/apply (root cause: Label Studio API returned 400 -- {'validation_errors': {'title': ['Ensure this field has no more than 50 characters.']}}); separately, embed-generate status showing 'running' forever after the underlying ls6 Tapis Job died, with no way to restart",
+      "file": "coreplugins/embeddings/api_views.py",
+      "root_cause": "Two independent bugs found together via browser console during live testing. (1) Label Studio project titles were built as an unbounded task-name + timestamp suffix with no length cap, exceeding Label Studio's `title` field 50-char limit whenever the task name was realistic length; the resulting 400 got mapped to a 502 by the existing error-status mapping. (2) TaskEmbedStatusView reported status purely from whether a `visits` row existed, which is not proof the ls6 Tapis Job behind it is still alive -- a Job killed by its own maxMinutes=60 wall-clock limit (embeddings-tapis-actors/ls6/app.json) leaves that row looking identical to a genuinely in-progress run, permanently disabling the frontend restart button (formDisabled on 'running').",
+      "fix": "(1) Added _label_studio_title(task_name, suffix) pure helper in api_views.py that truncates task_name so the total title stays <=50 chars; applied at both TaskLabelView.post() and TaskLabelApplyView.post(). (2) Added embeddings_client.get_last_embed_generate_activity(visit_id) (GREATEST of visits.created_at and MAX(embeddings.created_at) for that visit) and a new _embed_status_value(last_activity, timeout_minutes, now=None) pure helper in api_views.py that returns 'timed_out' once WO_EMBED_GENERATE_TIMEOUT_MINUTES (new setting, default 75, derived from ls6's maxMinutes=60 + queue buffer) have passed with no activity. TaskEmbedStatusView.get() now returns this. EmbeddingsPanel.jsx recognizes 'timed_out': stops polling, re-enables the form, and shows a 'Continue' button (handleContinueEmbed) that re-POSTs /embed with the already-known site_id and zoom_override: false -- safe because get_or_create_visit() + embed-generate's own upsert on (tile_observation_id, encoder_id) (Decision 56) make re-submission idempotent, not a restart-from-scratch. Unit tests added to tests.py for both pure helpers (LabelStudioTitleTests, EmbedStatusValueTests); could not run the full Django test suite in this environment (Django not installed locally, Docker not running) -- verified via ast.parse (Python files) and Babel parse (EmbeddingsPanel.jsx) only. FOLLOW-UP (2026-08-07, same session): user corrected the initial approach -- \"not time it, it should poll the tapis job\". Replaced the idle-activity timeout as the PRIMARY mechanism with real Tapis Job status polling: apply_embed_generate() now captures t.jobs.submitJob()'s returned job.uuid and records it via GlobalDataStore('embeddings') (already-existing WebODM infra, same one coreplugins/ckan/publisher.py uses -- no schema change needed anywhere). New embeddings_client.get_embed_job_uuid()/get_embed_job_status() (t.jobs.getJobStatus, confirmed against the installed tapipy's own openapi_v3-jobs.yml spec) return the job's real status. TaskEmbedStatusView.get() now reports 'timed_out' when that status is in EMBED_JOB_TERMINAL_STATUSES (FINISHED/CANCELLED/FAILED), 'running' otherwise. The idle-activity heuristic (_embed_status_value) is KEPT as a fallback only, used when no job uuid is on record (a visit that predates this tracking) or the Tapis poll itself raises TapisJobStatusError (treated as transient, not as proof of death) -- this avoids regressing on already-stuck visits from before this fix shipped. Added EmbedJobStatusTests to tests.py covering the terminal-status set and both new functions.",
+      "tags": [
+        "502",
+        "embed-generate",
+        "global-data-store",
+        "job-polling",
+        "label-studio",
+        "polling",
+        "resumability",
+        "stuck-job",
+        "tapis-job",
+        "tapis-jobs-api",
+        "timeout",
+        "title-validation"
+      ],
+      "related_bugs": [
+        "bug-004"
+      ],
+      "occurrences": 2,
+      "last_seen": "2026-08-07"
     }
   ]
 }

@@ -91,9 +91,9 @@ RUN --mount=type=cache,target=/root/.npm \
     npm install --quiet
     # Clear npm cache to avoid filling the build cache volume (prevents ENOSPC)
     npm cache clean --force
-    # Install webpack, webpack CLI
-    npm install --quiet -g webpack@5.89.0
-    npm install --quiet -g webpack-cli@5.1.4
+    # Install webpack, webpack CLI (single install so webpack-cli links
+    # against this exact webpack instead of vendoring its own newer copy)
+    npm install --quiet -g webpack@5.89.0 webpack-cli@5.1.4
 EOT
 
 # Copy remaining files
@@ -187,9 +187,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         nginx certbot gettext-base cron postgresql-client gettext tzdata git gosu
     nginx_version="$(dpkg-query -W -f='${Version}' nginx)"
     dpkg --compare-versions "$nginx_version" ge "$MIN_NGINX_VERSION"
-    # Install webpack, webpack CLI
-    npm install --quiet -g webpack@5.89.0
-    npm install --quiet -g webpack-cli@5.1.4
+    # Install webpack, webpack CLI (single install so webpack-cli links
+    # against this exact webpack instead of vendoring its own newer copy)
+    npm install --quiet -g webpack@5.89.0 webpack-cli@5.1.4
     # Cleanup of build requirements
     apt-get autoremove -y
     apt-get clean
@@ -201,3 +201,29 @@ EOT
 COPY --from=build $WORKDIR ./
 
 VOLUME /webodm/app/media
+
+# Dev-only stage: adds the compiler toolchain and GDAL/Python dev headers that
+# `app` intentionally omits, so docker-compose.dev.yml's `--setup-devenv`
+# runtime `pip install -r requirements.txt` (start.sh) can build native
+# extensions (e.g. rasterio, via rio-cogeo) without a full image rebuild.
+# Only used when a caller explicitly passes `--target dev` (see
+# docker-compose.dev.yml); production builds must keep targeting `app`.
+FROM app AS dev
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    <<EOT
+    apt-get -qq update
+    apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
+        build-essential python$PYTHON_VERSION-dev libpq-dev libproj-dev libgdal-dev
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+EOT
+
+# Safety net: `dev` must be defined after `app` (it builds on top of it), which
+# makes `dev` the last stage in this file. Docker builds the last stage by
+# default when a caller doesn't pass --target — this trailing anonymous stage
+# re-selects the lean `app` image as that default, so any build (tracked or
+# untracked compose override, CI, etc.) that omits --target still gets `app`,
+# not the bloated `dev` image, unless it explicitly opts in with --target dev.
+FROM app

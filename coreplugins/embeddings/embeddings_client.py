@@ -91,6 +91,28 @@ class EmbeddingsDBError(RuntimeError):
     """
 
 
+class TapisJobStatusError(RuntimeError):
+    """
+    Raised by get_embed_job_status() on a genuine Tapis Jobs API failure
+    (auth, network, 4xx/5xx) -- distinct from "no job uuid on record",
+    which is a normal, expected case (a visit that predates bug-005's job
+    tracking) and returns None rather than raising. Callers should treat
+    this as transient and fall back to the idle-activity heuristic
+    (_embed_status_value) rather than assuming the job is dead, so a
+    momentary Tapis API blip doesn't falsely report a live run as
+    'timed_out'.
+    """
+
+
+# Tapis Jobs API status values that mean "no longer actively running" --
+# bug-005: FINISHED is included because the total tile count at a given
+# zoom isn't tracked anywhere (see TaskEmbedStatusView's own docstring), so
+# even a cleanly finished job can't be positively confirmed as having
+# produced every expected tile; the frontend's "Continue" action is safe
+# and idempotent (Decision 56 upsert) regardless, so every terminal status
+# is treated the same way rather than distinguishing "done" from "dead".
+EMBED_JOB_TERMINAL_STATUSES = frozenset({'FINISHED', 'CANCELLED', 'FAILED'})
+
 # ── Config / low-level connection + query helpers ──────────────────────────
 
 def _connect():
@@ -318,6 +340,36 @@ def count_tile_observations(visit_id):
         fetch='one',
     )
     return int(row[0]) if row else 0
+
+
+def get_last_embed_generate_activity(visit_id):
+    """
+    Real timestamp of the most recent embed-generate progress for this
+    visit -- GREATEST(visits.created_at, MAX(embeddings.created_at) across
+    that visit's tile_observations). Falls back to visits.created_at alone
+    (the job's start time) when no embeddings rows exist yet, so a run that
+    dies before writing anything still has a meaningful "how long has this
+    been idle" answer instead of None.
+
+    Used by TaskEmbedStatusView (bug-005) to distinguish a genuinely
+    in-progress run from one whose ls6 Tapis Job died/hit its wall-clock
+    limit without ever reporting back -- both look identical as a bare
+    `visits` row otherwise.
+
+    Returns a tz-aware datetime, or None if visit_id doesn't match any
+    `visits` row.
+    """
+    row = _execute(
+        'SELECT GREATEST('
+        '  v.created_at,'
+        '  (SELECT MAX(e.created_at) FROM embeddings e '
+        '   JOIN tile_observations t ON t.id = e.tile_observation_id '
+        '   WHERE t.visit_id = v.id)'
+        ') FROM visits v WHERE v.id = %s;',
+        (visit_id,),
+        fetch='one',
+    )
+    return row[0] if row else None
 
 
 # ── tile_grid / tile_observations (labeling, decoupled from embedding) ─────
@@ -880,7 +932,88 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
             ],
         },
     }
-    t.jobs.submitJob(**job_spec)
+    job = t.jobs.submitJob(**job_spec)
+
+    # bug-005: record the real Tapis job uuid so TaskEmbedStatusView can
+    # later poll the job's actual status (t.jobs.getJobStatus) instead of
+    # only inferring liveness from embeddingsdb activity timestamps. Uses
+    # GlobalDataStore (app/plugins/data_store.py) -- already-existing
+    # WebODM infrastructure, the same one coreplugins/ckan/publisher.py's
+    # apply_ckan_publish() uses for its own async-job bookkeeping -- so
+    # this needs no schema change to either webodm_dev or embeddingsdb.
+    # Keyed on visit_id (not task_id) since a task can be re-embedded into
+    # a different site/visit; best-effort only -- a failure here must not
+    # fail the job submission that already succeeded.
+    try:
+        from app.plugins.data_store import GlobalDataStore
+        GlobalDataStore('embeddings').set_string(f'visit_{visit_id}_job_uuid', job.uuid)
+    except Exception:
+        _logger.exception(
+            'Submitted embed-generate Job %s for visit %s but failed to '
+            'record its uuid -- status polling will fall back to the '
+            'idle-activity heuristic for this run.', job.uuid, visit_id,
+        )
+
+
+def get_embed_job_uuid(visit_id):
+    """
+    The Tapis Job uuid recorded for this visit's most recent embed-generate
+    submission (see apply_embed_generate()), or None if none is on record --
+    either this visit predates bug-005's job-uuid tracking, or the
+    best-effort GlobalDataStore write at submission time failed. None is a
+    normal, expected return value here, not an error.
+    """
+    from app.plugins.data_store import GlobalDataStore
+    value = GlobalDataStore('embeddings').get_string(f'visit_{visit_id}_job_uuid', '')
+    return value or None
+
+
+def get_embed_job_status(job_uuid, user):
+    """
+    Real status of a submitted embed-generate Tapis Job, straight from
+    Tapis's own `GET /jobs/{jobUuid}/status` (tapipy: t.jobs.getJobStatus,
+    confirmed against the installed tapipy's own openapi_v3-jobs.yml spec
+    -- operationId getJobStatus, response schema RespGetJobStatus.status).
+    One of: PENDING, PROCESSING_INPUTS, STAGING_INPUTS, STAGING_JOB,
+    SUBMITTING_JOB, QUEUED, RUNNING, ARCHIVING, BLOCKED, PAUSED, FINISHED,
+    CANCELLED, FAILED (see EMBED_JOB_TERMINAL_STATUSES for which of these
+    mean "no longer actively running").
+
+    Authorizes with the same per-user, stored, refreshable TapisOAuth2Token
+    apply_embed_generate() uses (Decision 37) -- `user` here is the live
+    Django request.user from TaskEmbedStatusView.get(), a synchronous view,
+    so (unlike apply_embed_generate, a Celery task with no HTTP request in
+    flight) there's no need to resolve a user_id or run self-contained;
+    Django app imports are still deferred to avoid pulling tapipy/oauth2
+    models into this module's own import-time surface.
+
+    Raises TapisJobStatusError on any failure to reach Tapis or resolve a
+    usable token -- callers should treat that as "unknown", not "dead", and
+    fall back to the idle-activity heuristic rather than declaring the run
+    timed out over what may be a transient Tapis API issue.
+    """
+    from tapipy.tapis import Tapis
+
+    from app.models.oauth2 import TapisOAuth2Client, TapisOAuth2Token
+
+    client = TapisOAuth2Client.objects.filter(is_active=True).first()
+    if not client:
+        raise TapisJobStatusError('No active Tapis OAuth2 client is configured in WebODM.')
+
+    try:
+        token_obj = TapisOAuth2Token.objects.get(user=user, client=client)
+    except TapisOAuth2Token.DoesNotExist:
+        raise TapisJobStatusError(f'No Tapis token found for user {user.username}.')
+
+    jwt = token_obj.get_or_refresh_access_token()
+    if not jwt:
+        raise TapisJobStatusError(f'Tapis token for {user.username} is expired and could not be refreshed.')
+
+    try:
+        t = Tapis(base_url=settings.TAPIS_BASE_URL, access_token=jwt)
+        return t.jobs.getJobStatus(jobUuid=job_uuid).status
+    except Exception as e:
+        raise TapisJobStatusError(f'Failed to get status for Tapis Job {job_uuid}: {e}') from e
 
 
 # ── model-train Actor invocation -- NOT IMPLEMENTED ─────────────────────────

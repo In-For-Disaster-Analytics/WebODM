@@ -153,6 +153,37 @@ def _derive_project_webhook_secret(project_id):
     ).hexdigest()
 
 
+LABEL_STUDIO_TITLE_MAX_LEN = 50
+
+
+def _label_studio_title(task_name, suffix):
+    """
+    Builds a Label Studio project title as `f'{task_name} {suffix}'`,
+    truncating task_name so the total stays within Label Studio's 50-char
+    `title` validation limit (bug-005: unbounded task names -- e.g. real
+    survey names well over 50 chars -- made create_project() raise a 400
+    Validation error, surfaced to the client as a 502 from labels/apply).
+    """
+    max_name_len = max(LABEL_STUDIO_TITLE_MAX_LEN - len(suffix) - 1, 0)
+    name = (task_name or 'unnamed')[:max_name_len]
+    return f'{name} {suffix}'.strip()[:LABEL_STUDIO_TITLE_MAX_LEN]
+
+
+def _embed_status_value(last_activity, timeout_minutes, now=None):
+    """
+    'running' vs 'timed_out' for TaskEmbedStatusView (bug-005). A visits row
+    existing isn't proof the ls6 Tapis Job behind it is still alive, so this
+    treats a visit with no activity in `timeout_minutes` as timed out.
+    `now` is injectable for testing; defaults to the real current time.
+    """
+    now = now or datetime.now(timezone.utc)
+    idle_minutes = (
+        (now - last_activity).total_seconds() / 60
+        if last_activity else timeout_minutes + 1
+    )
+    return 'timed_out' if idle_minutes > timeout_minutes else 'running'
+
+
 def _not_implemented(message):
     return Response(
         {'error': message},
@@ -365,8 +396,8 @@ class TaskLabelView(TaskView):
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        task_name = task.name or 'unnamed'
-        title = f'{task_name} — {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
+        suffix = f'— {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
+        title = _label_studio_title(task.name, suffix)
         label_config = label_studio_client.build_label_config(label_classes)
 
         base_url = request.build_absolute_uri('/').rstrip('/')
@@ -590,10 +621,11 @@ class TaskLabelApplyView(TaskView):
             # --- Reuse one Label Studio project across a whole paint session ---
             project_id = request.data.get('label_studio_project_id')
             if not project_id:
-                title = (
-                    f'{task.name or "unnamed"} — paint session '
+                suffix = (
+                    f'— paint session '
                     f'{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}'
                 )
+                title = _label_studio_title(task.name, suffix)
                 label_classes = embeddings_client.list_label_classes(site_id)
                 label_config = label_studio_client.build_label_config(label_classes)
                 project = label_studio_client.create_project(title=title, label_config=label_config)
@@ -890,11 +922,36 @@ class TaskEmbedStatusView(TaskView):
     count_tile_observations() result. Reports a clear "not started" response
     if embed has never been triggered for this task.
 
+    bug-005 fix: a `visits` row existing is NOT proof the ls6 Tapis Job
+    behind it is still alive -- a Job killed by its own maxMinutes wall-clock
+    limit (or any other failure that never reports back) leaves that row
+    looking identical to a genuinely in-progress run, hanging the frontend's
+    restart button forever (formDisabled on 'running'). Status is primarily
+    determined by polling the REAL Tapis Job status
+    (embeddings_client.get_embed_job_status -- t.jobs.getJobStatus against
+    the uuid apply_embed_generate() records at submission time via
+    GlobalDataStore): any of embeddings_client.EMBED_JOB_TERMINAL_STATUSES
+    (FINISHED/CANCELLED/FAILED) reports 'timed_out', anything else reports
+    'running'. Falls back to the older idle-activity heuristic
+    (_embed_status_value + get_last_embed_generate_activity, against
+    WO_EMBED_GENERATE_TIMEOUT_MINUTES) only when no job uuid is on record
+    for this visit (it predates job-uuid tracking) or the Tapis poll itself
+    fails (TapisJobStatusError -- treated as transient, not as proof the job
+    is dead). The frontend re-enables its form on 'timed_out' and offers
+    "Continue", which just re-POSTs .../embed with the same site_id -- safe
+    and NOT a restart from scratch, because get_or_create_visit() reuses the
+    existing visit and embed-generate's own upsert + advisory lock
+    (Decision 56) mean it only (re-)does whatever tiles are still missing.
+
     NOT real in this increment: the total tile count expected at the
     selected zoom (M in "N of M tiles processed") -- that requires
     enumerating WebODM's own tiler coverage (app/api/tiler.py, Decision 9),
     which is out of scope for this increment's DB-layer work. Only N (tiles
-    actually processed so far) is real here.
+    actually processed so far) is real here. Because M isn't known, even a
+    Tapis-confirmed FINISHED job is reported 'timed_out' rather than a
+    distinct "complete" status -- there's no way to positively confirm every
+    expected tile was produced, so the frontend always offers "Continue"
+    once the job is no longer actively running.
     """
 
     permission_classes = (IsEmbeddingsAdmin,)
@@ -927,8 +984,33 @@ class TaskEmbedStatusView(TaskView):
         except embeddings_client.EmbeddingsDBError as e:
             return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
+        job_uuid = embeddings_client.get_embed_job_uuid(visit['id'])
+        tapis_status = None
+        if job_uuid:
+            try:
+                tapis_status = embeddings_client.get_embed_job_status(job_uuid, request.user)
+            except embeddings_client.TapisJobStatusError:
+                logger.exception(
+                    'Failed to poll Tapis Job %s status for visit %s -- '
+                    'falling back to the idle-activity heuristic.',
+                    job_uuid, visit['id'],
+                )
+
+        if tapis_status is not None:
+            status_value = (
+                'timed_out' if tapis_status in embeddings_client.EMBED_JOB_TERMINAL_STATUSES
+                else 'running'
+            )
+        else:
+            try:
+                last_activity = embeddings_client.get_last_embed_generate_activity(visit['id'])
+            except embeddings_client.EmbeddingsDBError as e:
+                return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+            timeout_minutes = getattr(settings, 'WO_EMBED_GENERATE_TIMEOUT_MINUTES', 75)
+            status_value = _embed_status_value(last_activity, timeout_minutes)
+
         return Response({
-            'status': 'running',
+            'status': status_value,
             'site_id': visit['site_id'],
             'visit_id': visit['id'],
             'tile_observation_count': tile_count,
