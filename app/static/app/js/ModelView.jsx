@@ -219,15 +219,31 @@ class ModelView extends React.Component {
   }
 
   pointCloudSource = (cb) => {
-    // Potree v1 only (cloud.js)
-    const potreePointCloudV1 = this.assetsPath() + '/potree_pointcloud/cloud.js';
+    const assets = this.assetsPath();
+    const eptUrl = `${assets}/entwine_pointcloud/ept.json`;
+    const legacyUrl = `${assets}/potree_pointcloud/cloud.js`;
 
-    this.urlExists(potreePointCloudV1, (potreeExists) => {
-        if (potreeExists) {
-            cb({ type: 'potree-v1', url: potreePointCloudV1 });
-            return;
+    // Try Entwine Point Tile (EPT) first — modern streaming format for large point clouds
+    this.urlExists(eptUrl, (eptExists) => {
+      if (eptExists) {
+        Potree.loadPointCloud(eptUrl, "Point Cloud", (e) => {
+          if (e.type === 'pointcloud_loaded') {
+            cb({ type: 'ept', url: eptUrl, pointcloud: e.pointcloud });
+          } else {
+            cb({ type: 'loading_failed' });
+          }
+        });
+        return;
+      }
+
+      // Fallback to legacy Potree v1 format (cloud.js)
+      this.urlExists(legacyUrl, (legacyExists) => {
+        if (legacyExists) {
+          cb({ type: 'potree-v1', url: legacyUrl });
+        } else {
+          cb(null);
         }
-        cb(null);
+      });
     });
   }
 
@@ -360,13 +376,16 @@ class ModelView extends React.Component {
     directional.position.z = 99999999999;
     viewer.scene.scene.add( directional );
 
-    this.pointCloudSource(pointCloud =>{ 
+this.pointCloudSource(pointCloud =>{ 
         if (!pointCloud){
           this.setState({error: "Point cloud assets not found for this task. Try processing the task again."});
           return;
         }
-        Potree.loadPointCloud(pointCloud.url, "Point Cloud", e => {
-          if (e.type == "loading_failed"){
+
+        // EPT format: pointcloud is already loaded via Potree.loadPointCloud in pointCloudSource
+        // Legacy format: need to call Potree.loadPointCloud here
+        const handlePointCloudLoaded = (e) => {
+          if (e.type === 'loading_failed' || e.type === 'error'){
             this.setState({error: "Could not load point cloud. This task doesn't seem to have one. Try processing the task again."});
             return;
           }
@@ -378,11 +397,11 @@ class ModelView extends React.Component {
           if (this.hasTexturedModel() && this.props.modelType === "mesh"){
             this.toggleTexturedModel({ target: { checked: true }});
           }
-    
+     
           let scene = viewer.scene;
           scene.addPointCloud(e.pointcloud);
           this.pointCloud = e.pointcloud;
-    
+
           let material = e.pointcloud.material;
           material.size = 1;
 
@@ -460,7 +479,7 @@ class ModelView extends React.Component {
                         if (++saveSceneErrors === 5) clearInterval(saveSceneInterval);
                     });
             };
-
+    
             const checkScene = () => {
                 const sceneData = JSON.stringify(this.getSceneData());
                 if (sceneData !== prevSceneData) postSceneData(sceneData);
@@ -471,13 +490,21 @@ class ModelView extends React.Component {
                 const pos = viewer.scene.view.position;
                 if (pos.x === 0 && pos.y === 0 && pos.z === 0) viewer.fitToScreen();
             };
-
+    
             saveSceneInterval = setInterval(checkScene, 3000);
           }).fail(e => {
             console.error("Cannot load 3D scene information", e);
           });
-        });
-    });
+        };  // closes handlePointCloudLoaded
+
+        if (pointCloud.type === 'ept' && pointCloud.pointcloud) {
+          // EPT: pointcloud already loaded, pass it directly to handler
+          handlePointCloudLoaded({ type: 'pointcloud_loaded', pointcloud: pointCloud.pointcloud });
+        } else {
+          // Legacy: load via Potree.loadPointCloud
+          Potree.loadPointCloud(pointCloud.url, "Point Cloud", handlePointCloudLoaded);
+        }
+    });  // closes pointCloudSource callback
 
     viewer.renderer.domElement.addEventListener( 'mousedown', this.handleRenderMouseClick );
     viewer.renderer.domElement.addEventListener( 'mousemove', this.handleRenderMouseMove );
