@@ -153,7 +153,30 @@ def process_task(taskId):
             return
 
         try:
-            task.process()
+            # Idempotency guard: use a second Redis lock (nx=True) around the
+            # submission path. If process_new_task() is slow (ClusterODM retries
+            # can take 60+ seconds) and the main lock expires, a second worker
+            # could acquire the main lock and re-enter process(). This submission
+            # lock prevents concurrent HTTP POSTs to the processing node.
+            submit_lock_id = 'task_submit_{}'.format(taskId)
+            try:
+                already_submitting = not redis_client.set(submit_lock_id, time.time(), nx=True, ex=120)
+            except redis.exceptions.RedisError:
+                # If Redis is down, proceed without the guard — the main lock
+                # still provides best-effort protection.
+                already_submitting = False
+
+            if already_submitting:
+                logger.info("Task {} is being submitted by another worker, skipping.".format(taskId))
+                return
+
+            try:
+                task.process()
+            finally:
+                try:
+                    redis_client.delete(submit_lock_id)
+                except redis.exceptions.RedisError:
+                    pass
         except Exception as e:
             logger.error(
                 "Uncaught error! This is potentially bad. Please report it to http://github.com/OpenDroneMap/WebODM/issues: {} {}".format(
