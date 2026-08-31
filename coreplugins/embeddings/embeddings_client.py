@@ -741,11 +741,11 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
     the async embed-generate/model-train calls) for real, by mirroring
     apply_ckan_publish()'s existing pattern EXACTLY rather than inventing a
     new one: looks up the active TapisOAuth2Client, the triggering user's own
-    TapisOAuth2Token, and calls get_or_refresh_access_token() to get a live,
-    refreshed JWT -- even though this runs asynchronously via Celery with no
-    live HTTP request in flight. This is a per-USER stored, refreshable
-    OAuth2 token, NOT a generic "service account" (the design spec's original
-    Decision 30 wording speculated the latter -- corrected in Decision 37).
+    TapisOAuth2Token, and calls get_valid_access_token() to get a locally valid
+    JWT -- even though this runs asynchronously via Celery with no live HTTP
+    request in flight. This is a per-USER stored OAuth2 token, NOT a generic
+    "service account" (the design spec's original Decision 30 wording
+    speculated the latter -- corrected in Decision 37).
 
     Builds a real tapipy `Tapis(base_url=..., access_token=<jwt>)` client
     (confirmed against the actually-installed tapipy package's own
@@ -823,10 +823,10 @@ def apply_embed_generate(task_id, user_id, site_id, visit_id, zoom, encoder, pro
             'Please re-authenticate with Tapis before generating embeddings.'
         )
 
-    jwt = token_obj.get_or_refresh_access_token()
+    jwt = token_obj.get_valid_access_token()
     if not jwt:
         raise RuntimeError(
-            f'Tapis token for {user.username} is expired and could not be refreshed.'
+            f'Tapis token for {user.username} is expired or invalid. Please re-authenticate with Tapis.'
         )
 
     app_id = getattr(_settings, 'WO_EMBED_GENERATE_APP_ID', '')
@@ -1005,9 +1005,9 @@ def get_embed_job_status(job_uuid, user):
     except TapisOAuth2Token.DoesNotExist:
         raise TapisJobStatusError(f'No Tapis token found for user {user.username}.')
 
-    jwt = token_obj.get_or_refresh_access_token()
+    jwt = token_obj.get_valid_access_token()
     if not jwt:
-        raise TapisJobStatusError(f'Tapis token for {user.username} is expired and could not be refreshed.')
+        raise TapisJobStatusError(f'Tapis token for {user.username} is expired or invalid. Please re-authenticate with Tapis.')
 
     try:
         t = Tapis(base_url=settings.TAPIS_BASE_URL, access_token=jwt)

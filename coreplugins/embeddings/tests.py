@@ -245,7 +245,7 @@ class EmbedJobStatusTests(unittest.TestCase):
     def test_get_embed_job_status_returns_real_tapis_status(self):
         fake_user = mock.Mock(username='alice')
         fake_token_obj = mock.Mock()
-        fake_token_obj.get_or_refresh_access_token.return_value = 'a-jwt'
+        fake_token_obj.get_valid_access_token.return_value = 'a-jwt'
 
         with mock.patch('app.models.oauth2.TapisOAuth2Client') as MockClient, \
                 mock.patch('app.models.oauth2.TapisOAuth2Token') as MockToken, \
@@ -260,7 +260,7 @@ class EmbedJobStatusTests(unittest.TestCase):
     def test_get_embed_job_status_wraps_tapis_failure(self):
         fake_user = mock.Mock(username='alice')
         fake_token_obj = mock.Mock()
-        fake_token_obj.get_or_refresh_access_token.return_value = 'a-jwt'
+        fake_token_obj.get_valid_access_token.return_value = 'a-jwt'
 
         with mock.patch('app.models.oauth2.TapisOAuth2Client') as MockClient, \
                 mock.patch('app.models.oauth2.TapisOAuth2Token') as MockToken, \

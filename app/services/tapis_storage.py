@@ -25,19 +25,17 @@ class TapisStorageService:
         self.user = user
         self.client = client
         self.token = self._get_valid_token()
-        self.access_token_value = self.token.get_or_refresh_access_token()
+        self.access_token_value = self.token.get_valid_access_token()
         if not self.access_token_value:
-            raise ValueError(f"Unable to obtain Tapis access token for user {self.user.username}")
+            raise ValueError(f"Tapis token is expired or invalid for user {self.user.username}. Please re-authenticate.")
         self.base_url = client.base_url.rstrip('/')
         
     def _get_valid_token(self) -> TapisOAuth2Token:
         """Get a valid access token for the user"""
         try:
             token = TapisOAuth2Token.objects.get(user=self.user, client=self.client)
-            if not token.is_valid:
-                refreshed = token.get_or_refresh_access_token()
-                if not refreshed:
-                    raise ValueError("Token is expired or invalid")
+            if not token.get_valid_access_token():
+                raise ValueError("Token is expired or invalid")
             return token
         except TapisOAuth2Token.DoesNotExist:
             raise ValueError(f"No Tapis token found for user {self.user.username}")
@@ -46,11 +44,11 @@ class TapisStorageService:
         """Make authenticated request to Tapis API"""
         url = urljoin(self.base_url + '/', endpoint)
 
-        token_value = self.token.get_or_refresh_access_token()
+        token_value = self.token.get_valid_access_token()
         if token_value:
             self.access_token_value = token_value
         else:
-            raise ValueError("Failed to retrieve Tapis access token while making API request.")
+            raise ValueError("Tapis token expired or invalid while making API request.")
 
         headers = {
             'Authorization': f'Bearer {self.access_token_value}',
@@ -270,11 +268,11 @@ class TapisStorageService:
         try:
             # Use Tapis Files API to download the file
             url = f"{self.base_url}/v3/files/content/{system_id}/{remote_path}"
-            token_value = self.token.get_or_refresh_access_token()
+            token_value = self.token.get_valid_access_token()
             if token_value:
                 self.access_token_value = token_value
             else:
-                raise ValueError("Failed to retrieve Tapis access token for file download.")
+                raise ValueError("Tapis token expired or invalid for file download.")
 
             headers = {
                 'Authorization': f'Bearer {self.access_token_value}',

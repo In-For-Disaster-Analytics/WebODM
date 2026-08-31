@@ -319,7 +319,7 @@ If you need to revert to standard authentication:
 Monitor the following for production deployments:
 
 - OAuth2 authentication success/failure rates
-- Token refresh frequency
+- Token expiry logout frequency
 - Database growth (OAuth2 state cleanup)
 - Tapis API response times
 - WebODM authentication errors

@@ -145,10 +145,10 @@ def get_user_tapis_jwt(user):
             'Please log in with Tapis before publishing to CKAN.'
         )
 
-    jwt = token.get_or_refresh_access_token()
+    jwt = token.get_valid_access_token()
     if not jwt:
         raise RuntimeError(
-            f'Tapis token for {user.username} is expired and could not be refreshed. '
+            f'Tapis token for {user.username} is expired or invalid. '
             'Please re-authenticate with Tapis.'
         )
     return jwt
@@ -516,10 +516,10 @@ def apply_ckan_publish(task_id, thread_id, user_id):
                 f'No Tapis token found for user {user.username}. '
                 'Please re-authenticate with Tapis before publishing.'
             )
-        jwt = token_obj.get_or_refresh_access_token()
+        jwt = token_obj.get_valid_access_token()
         if not jwt:
             raise RuntimeError(
-                f'Tapis token for {user.username} is expired and could not be refreshed.'
+                f'Tapis token for {user.username} is expired or invalid. Please re-authenticate with Tapis.'
             )
 
         # Make the task publicly accessible so the CKAN resource URLs work without auth.

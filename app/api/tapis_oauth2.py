@@ -1,19 +1,14 @@
-import json
 import requests
 from datetime import timedelta
-from urllib.parse import urlencode, parse_qs, urlparse
+from urllib.parse import urlencode
 
 from django.contrib.auth import login
-from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.utils.decorators import method_decorator
 from django.views import View
-from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework import permissions, status
+from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -167,7 +162,7 @@ class TapisOAuth2CallbackView(View):
     
     def _exchange_code_for_tokens(self, client, code):
         """
-        Exchange authorization code for access and refresh tokens
+        Exchange authorization code for access token data
         """
         try:
             token_data = {
@@ -188,7 +183,10 @@ class TapisOAuth2CallbackView(View):
             
             if response.status_code == 200:
                 token_response = response.json()
-                logger.info(f"Tapis token response: {token_response}")
+                logger.info(
+                    "Tapis token response keys: %s",
+                    list(token_response.keys()) if isinstance(token_response, dict) else type(token_response)
+                )
                 
                 # Tapis API wraps the actual token data in a 'result' field
                 if token_response.get('status') == 'success' and 'result' in token_response:
@@ -217,18 +215,13 @@ class TapisOAuth2CallbackView(View):
             expires_in = token_data.get('expires_in')
             expires_at = TapisOAuth2Token.compute_expires_at(expires_in, access_token_value)
             
-            # Tapis wraps refresh_token as {"refresh_token": "...", "expires_at": "..."}
-            raw_refresh = token_data.get('refresh_token', '')
-            if isinstance(raw_refresh, dict):
-                raw_refresh = raw_refresh.get('refresh_token', '')
-
             # Create or update token
             token, created = TapisOAuth2Token.objects.update_or_create(
                 user=user,
                 client=client,
                 defaults={
                     'access_token': access_token_value,
-                    'refresh_token': raw_refresh,
+                    'refresh_token': '',
                     'token_type': token_data.get('token_type', 'Bearer'),
                     'scope': token_data.get('scope', ''),
                     'expires_at': expires_at
@@ -287,99 +280,6 @@ class TapisOAuth2CallbackView(View):
                     
         except Exception as e:
             logger.error(f"Failed to trigger flight discovery: {e}")
-
-
-class TapisOAuth2TokenRefreshView(APIView):
-    """
-    Refresh OAuth2 access token using refresh token
-    """
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def post(self, request, client_id):
-        try:
-            client = get_object_or_404(TapisOAuth2Client, client_id=client_id, is_active=True)
-            
-            try:
-                token_obj = TapisOAuth2Token.objects.get(user=request.user, client=client)
-            except TapisOAuth2Token.DoesNotExist:
-                return Response({'error': 'No token found for this client'}, status=404)
-            
-            if not token_obj.refresh_token:
-                return Response({'error': 'No refresh token available'}, status=400)
-            
-            # Refresh the token
-            new_token_data = self._refresh_access_token(client, token_obj.refresh_token)
-            
-            if not new_token_data:
-                return Response({'error': 'Failed to refresh token'}, status=500)
-            
-            # Update stored token
-            refreshed_access_token = TapisOAuth2Token.extract_access_token_value(new_token_data.get('access_token'))
-            if not refreshed_access_token:
-                logger.warning("Token refresh response did not include a directly usable access token; storing raw payload.")
-                refreshed_access_token = new_token_data.get('access_token')
-
-            expires_in = new_token_data.get('expires_in')
-            expires_at = TapisOAuth2Token.compute_expires_at(expires_in, refreshed_access_token)
-
-            token_obj.access_token = refreshed_access_token
-            token_obj.token_type = new_token_data.get('token_type', 'Bearer')
-            token_obj.expires_at = expires_at
-            
-            # Update refresh token if provided
-            if 'refresh_token' in new_token_data:
-                token_obj.refresh_token = new_token_data['refresh_token']
-            
-            token_obj.save()
-            
-            return Response({
-                'message': 'Token refreshed successfully',
-                'expires_at': expires_at.isoformat() if expires_at else None
-            })
-            
-        except Exception as e:
-            logger.error(f"Error refreshing OAuth2 token: {str(e)}")
-            return Response({'error': 'Failed to refresh token'}, status=500)
-    
-    def _refresh_access_token(self, client, refresh_token):
-        """
-        Refresh access token using refresh token
-        """
-        try:
-            token_data = {
-                'grant_type': 'refresh_token',
-                'client_id': client.client_id,
-                'client_secret': client.client_secret,
-                'refresh_token': refresh_token
-            }
-            
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Tapis-Tenant': client.tenant_id,
-                'Accept': 'application/json'
-            }
-            
-            response = requests.post(client.token_url, data=token_data, headers=headers)
-
-            if response.status_code != 200:
-                logger.error(f"Token refresh failed: {response.status_code} - {response.text}")
-                return None
-
-            try:
-                payload = response.json()
-            except ValueError:
-                logger.error("Token refresh failed: response not JSON")
-                return None
-
-            if isinstance(payload, dict) and payload.get('status') == 'success' and 'result' in payload:
-                return payload['result']
-
-            return payload
-                
-        except Exception as e:
-            logger.error(f"Error refreshing access token: {str(e)}")
-            return None
-
 
 class TapisOAuth2StatusView(APIView):
     """

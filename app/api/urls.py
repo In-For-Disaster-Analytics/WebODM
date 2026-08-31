@@ -18,7 +18,6 @@ from .users import UsersList
 from .tapis_oauth2 import (
     TapisOAuth2AuthorizeView, 
     TapisOAuth2CallbackView, 
-    TapisOAuth2TokenRefreshView,
     TapisOAuth2StatusView,
     TapisOAuth2RevokeView
 )
@@ -87,7 +86,6 @@ if settings.ENABLE_USERS_API:
 urlpatterns.extend([
     url(r'^oauth2/tapis/authorize/(?P<client_id>[^/]+)/$', TapisOAuth2AuthorizeView.as_view(), name='tapis_oauth2_authorize'),
     url(r'^oauth2/tapis/callback/$', TapisOAuth2CallbackView.as_view(), name='tapis_oauth2_callback'),
-    url(r'^oauth2/tapis/refresh/(?P<client_id>[^/]+)/$', TapisOAuth2TokenRefreshView.as_view(), name='tapis_oauth2_refresh'),
     url(r'^oauth2/tapis/status/$', TapisOAuth2StatusView.as_view(), name='tapis_oauth2_status'),
     url(r'^oauth2/tapis/revoke/(?P<client_id>[^/]+)/$', TapisOAuth2RevokeView.as_view(), name='tapis_oauth2_revoke'),
     

@@ -92,3 +92,15 @@ class TestClusterODMAdmin(BootTestCase):
         )
         res = self.client.get("/clusterodm/admin/", follow=True)
         self.assertRedirects(res, "/dashboard/")
+
+    def test_rejects_expired_jwt_even_with_refresh_token(self):
+        self.client.login(username="testsuperuser", password="test1234")
+        TapisOAuth2Token.objects.create(
+            user=self.superuser,
+            client=self.oauth_client,
+            access_token=_make_jwt(exp_seconds=-60),
+            refresh_token="legacy-refresh-token",
+            expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        res = self.client.get("/clusterodm/admin/", follow=True)
+        self.assertRedirects(res, "/dashboard/")

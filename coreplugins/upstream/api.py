@@ -30,44 +30,13 @@ def _set_config(pk, data):
 
 
 def _get_user_token(request):
-    """Return a valid Tapis JWT for the user, auto-refreshing if expired."""
+    """Return a locally valid Tapis JWT for the user."""
     try:
         from app.models import TapisOAuth2Token
         tok = TapisOAuth2Token.objects.filter(user=request.user).order_by('-id').first()
         if not tok:
             return None
-        if tok.is_valid:
-            return tok.access_token
-        # Try to refresh
-        if tok.refresh_token:
-            client = tok.client
-            resp = requests.post(
-                client.token_url,
-                data={
-                    'grant_type': 'refresh_token',
-                    'client_id': client.client_id,
-                    'client_secret': client.client_secret,
-                    'refresh_token': tok.refresh_token,
-                },
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                payload = resp.json()
-                result = payload.get('result', payload) if isinstance(payload, dict) else payload
-                # Extract new access token
-                raw_access = result.get('access_token', {})
-                new_jwt = raw_access.get('access_token') if isinstance(raw_access, dict) else raw_access
-                if new_jwt:
-                    raw_refresh = result.get('refresh_token', tok.refresh_token)
-                    if isinstance(raw_refresh, dict):
-                        raw_refresh = raw_refresh.get('refresh_token', tok.refresh_token)
-                    tok.access_token = new_jwt
-                    tok.refresh_token = raw_refresh
-                    tok.save(update_fields=['access_token', 'refresh_token'])
-                    logger.info('Auto-refreshed Tapis token for user %s', request.user.username)
-                    return new_jwt
-            logger.warning('Token refresh failed for user %s: %s', request.user.username, resp.text[:200])
+        return tok.get_valid_access_token()
     except Exception as e:
         logger.warning('_get_user_token error: %s', e)
     return None

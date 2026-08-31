@@ -6,7 +6,7 @@ from django.utils.translation import gettext as _
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 
-from app.models import TapisOAuth2Client
+from app.models import TapisOAuth2Client, TapisOAuth2Token
 import logging
 
 logger = logging.getLogger('app.logger')
@@ -49,6 +49,7 @@ def tapis_logout_view(request):
     """
     if request.user.is_authenticated:
         username = request.user.username
+        TapisOAuth2Token.objects.filter(user=request.user).update(refresh_token='')
         logout(request)
         messages.success(request, _('You have been logged out successfully.'))
         logger.info(f"User {username} logged out")

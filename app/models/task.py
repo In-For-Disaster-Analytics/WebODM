@@ -1504,7 +1504,7 @@ class Task(models.Model):
                 logger.info(f"No Tapis OAuth2 token found for user {self.project.owner.username}")
                 return None
 
-            access_token = token.get_or_refresh_access_token()
+            access_token = token.get_valid_access_token()
             if access_token:
                 return access_token
 

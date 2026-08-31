@@ -5,6 +5,7 @@ class TapisTokenManager {
     constructor() {
         this.checkInterval = null;
         this.warningShown = false;
+        this.logoutTriggered = false;
         this.init();
     }
 
@@ -33,6 +34,11 @@ class TapisTokenManager {
         const expiresAt = new Date(window.tapisTokenInfo.expires_at);
         const now = new Date();
         const timeUntilExpiry = expiresAt - now;
+        if (Number.isNaN(timeUntilExpiry)) {
+            this.handleTokenExpiration();
+            return;
+        }
+
         const minutesUntilExpiry = Math.floor(timeUntilExpiry / 60000);
 
         // Show warning 10 minutes before expiration
@@ -48,7 +54,7 @@ class TapisTokenManager {
     }
 
     showExpirationWarning(minutes) {
-        const message = `Your Tapis session will expire in ${minutes} minute(s). Please save your work and refresh the page to re-authenticate.`;
+        const message = `Your Tapis session will expire in ${minutes} minute(s). Please save your work. You will be logged out when it expires.`;
         
         // Create a prominent warning banner
         const warningBanner = $(`
@@ -66,8 +72,8 @@ class TapisTokenManager {
                     <span>&times;</span>
                 </button>
                 <strong>Tapis Session Expiring!</strong> ${message}
-                <button class="btn btn-sm btn-primary ml-2" onclick="window.location.reload();">
-                    Refresh Now
+                <button class="btn btn-sm btn-primary ml-2" onclick="window.location.href='/logout/';">
+                    Log Out Now
                 </button>
             </div>
         `);
@@ -84,47 +90,31 @@ class TapisTokenManager {
     }
 
     handleTokenExpiration() {
+        if (this.logoutTriggered) {
+            return;
+        }
+
+        this.logoutTriggered = true;
+
         // Clear the monitoring interval
         if (this.checkInterval) {
             clearInterval(this.checkInterval);
+            this.checkInterval = null;
         }
 
-        // Show expiration modal
-        const modal = $(`
-            <div class="modal fade" id="tapis-expired-modal" tabindex="-1" data-backdrop="static" data-keyboard="false">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header bg-danger text-white">
-                            <h4 class="modal-title">Tapis Session Expired</h4>
-                        </div>
-                        <div class="modal-body">
-                            <p><strong>Your Tapis authentication session has expired.</strong></p>
-                            <p>You will be logged out automatically and need to re-authenticate to continue using Tapis features.</p>
-                            <p>Any unsaved work may be lost.</p>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-primary" onclick="window.location.href='/logout/'">
-                                Logout Now
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `);
-
-        $('body').append(modal);
-        $('#tapis-expired-modal').modal('show');
-
-        // Auto-logout after 10 seconds if user doesn't click
-        setTimeout(() => {
-            window.location.href = '/logout/';
-        }, 10000);
+        $('#tapis-token-warning').remove();
+        this.redirectToLogout();
     }
 
-    // Method to update token info if refreshed
+    redirectToLogout() {
+        window.location.href = '/logout/';
+    }
+
+    // Method to update token info after a new login or explicit state change
     updateTokenInfo(tokenInfo) {
         window.tapisTokenInfo = tokenInfo;
         this.warningShown = false;
+        this.logoutTriggered = false;
         
         if (!this.checkInterval) {
             this.startTokenMonitoring();

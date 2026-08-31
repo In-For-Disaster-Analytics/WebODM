@@ -5,7 +5,6 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 
-import requests
 from django.conf import settings as django_settings
 from django.contrib.auth.models import User
 from django.db import models
@@ -68,6 +67,8 @@ class TapisOAuth2Token(models.Model):
     """
     Model to store OAuth2 tokens for users
     """
+    TOKEN_EXPIRY_SKEW_SECONDS = 30
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tapis_oauth2_tokens')
     client = models.ForeignKey(TapisOAuth2Client, on_delete=models.CASCADE)
     
@@ -115,13 +116,15 @@ class TapisOAuth2Token(models.Model):
         """Check if the token is expired"""
         expires_at = self._get_effective_expiration()
         if not expires_at:
-            return False
-        return timezone.now() > expires_at
+            return True
+        if timezone.is_naive(expires_at):
+            expires_at = timezone.make_aware(expires_at, dt_timezone.utc)
+        return timezone.now() >= expires_at
     
     @property
     def is_valid(self):
         """Check if the token is valid (exists and not expired)"""
-        return bool(self.get_access_token_value()) and not self.is_expired
+        return bool(self.get_valid_access_token())
 
     @staticmethod
     def _extract_access_token(payload):
@@ -195,6 +198,15 @@ class TapisOAuth2Token(models.Model):
         except (ValueError, json.JSONDecodeError, binascii.Error):
             return None
 
+    @staticmethod
+    def _looks_like_jwt(token_value):
+        return (
+            bool(token_value) and
+            isinstance(token_value, str) and
+            token_value.count('.') == 2 and
+            ' ' not in token_value
+        )
+
     @classmethod
     def _expires_at_from_token(cls, token_value):
         """
@@ -241,95 +253,34 @@ class TapisOAuth2Token(models.Model):
 
         return None
 
-    def refresh(self):
+    def get_valid_access_token(self, expiry_skew_seconds=None):
         """
-        Refresh the access token using the stored refresh token.
-        """
-        if not self.refresh_token:
-            raise ValueError("No refresh token available for this Tapis token.")
-
-        token_data = {
-            'grant_type': 'refresh_token',
-            'client_id': self.client.client_id,
-            'client_secret': self.client.client_secret,
-            'refresh_token': self.refresh_token
-        }
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Tapis-Tenant': self.client.tenant_id,
-            'Accept': 'application/json'
-        }
-
-        try:
-            response = requests.post(
-                self.client.token_url,
-                data=token_data,
-                headers=headers,
-                timeout=30
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            logger.error(f"Tapis token refresh failed: {exc}")
-            raise
-
-        try:
-            refreshed = response.json()
-        except ValueError as exc:
-            logger.error(f"Tapis token refresh returned non-JSON response: {exc}")
-            raise
-
-        if isinstance(refreshed, dict) and refreshed.get('status') == 'success' and 'result' in refreshed:
-            refreshed = refreshed['result']
-
-        new_access_token = self._extract_access_token(refreshed.get('access_token'))
-        if not new_access_token:
-            logger.error("Tapis refresh response did not include a usable access token.")
-            raise ValueError("No access token in Tapis refresh response.")
-
-        expires_in = refreshed.get('expires_in')
-        expires_at = self.compute_expires_at(expires_in, new_access_token)
-
-        # Persist refreshed values
-        self.access_token = new_access_token
-        if refreshed.get('refresh_token'):
-            self.refresh_token = refreshed['refresh_token']
-        if refreshed.get('token_type'):
-            self.token_type = refreshed['token_type']
-        if refreshed.get('scope'):
-            self.scope = refreshed['scope']
-        self.expires_at = expires_at
-        self.save()
-
-        logger.info(f"Refreshed Tapis token for user {self.user.username}")
-        return self.access_token
-
-    def get_or_refresh_access_token(self):
-        """
-        Return a valid access token, refreshing when necessary.
+        Return the stored access token only when it is locally valid.
         """
         access_token = self.get_access_token_value()
-        raw_fallback = None
-        if isinstance(self.access_token, str):
-            raw_fallback = self.access_token.strip() or None
-        elif self.access_token:
-            raw_fallback = str(self.access_token)
+        if not self._looks_like_jwt(access_token):
+            return None
 
-        if access_token and not self.is_expired:
-            return access_token
+        expires_at = self._get_effective_expiration()
+        if not expires_at:
+            logger.warning("Tapis token for user %s has no known expiration.", self.user.username)
+            return None
 
-        if access_token and not self.refresh_token:
-            logger.warning("Tapis token is expired but no refresh token is available.")
-            return access_token
+        if timezone.is_naive(expires_at):
+            expires_at = timezone.make_aware(expires_at, dt_timezone.utc)
 
-        if not access_token and raw_fallback:
-            logger.debug("Using raw stored Tapis token as fallback while attempting refresh.")
+        if expiry_skew_seconds is None:
+            expiry_skew_seconds = self.TOKEN_EXPIRY_SKEW_SECONDS
 
         try:
-            return self.refresh()
-        except Exception as exc:
-            logger.error(f"Unable to refresh Tapis token for {self.user.username}: {exc}")
-            return access_token or raw_fallback
+            expiry_skew_seconds = max(int(expiry_skew_seconds), 0)
+        except (TypeError, ValueError):
+            expiry_skew_seconds = self.TOKEN_EXPIRY_SKEW_SECONDS
+
+        if timezone.now() + timedelta(seconds=expiry_skew_seconds) >= expires_at:
+            return None
+
+        return access_token
 
 
 class TapisOAuth2State(models.Model):

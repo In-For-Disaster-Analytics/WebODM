@@ -8,7 +8,7 @@ The Tapis OAuth2 integration provides:
 - **Tapis-only authentication** - Standard Django login forms are disabled
 - OAuth2 authentication flow using Tapis authorization servers
 - User management and account creation from Tapis user information
-- Token management with refresh capability
+- Token expiry handling that logs users out when their Tapis JWT expires
 - Django admin interface for OAuth2 client management
 - REST API endpoints for OAuth2 operations
 
@@ -38,7 +38,7 @@ Users **must** authenticate through Tapis to access this WebODM instance.
 3. **API Views** (`app/api/tapis_oauth2.py`)
    - Authorization initiation
    - OAuth2 callback handling
-   - Token refresh and management
+   - Token status and revocation management
    - Status and revocation endpoints
 
 4. **Admin Interface** (`app/admin/oauth2.py`)
@@ -119,7 +119,7 @@ curl -X POST https://tacc.tapis.io/v3/oauth2/clients \
    GET /api/oauth2/tapis/callback/
    ```
    - Handles authorization code from Tapis
-   - Exchanges code for access/refresh tokens
+   - Exchanges code for access token data
    - Authenticates user and creates session
 
 3. **Check Authentication Status**
@@ -135,7 +135,6 @@ curl -X POST https://tacc.tapis.io/v3/oauth2/clients \
 |----------|--------|-------------|
 | `/api/oauth2/tapis/authorize/{client_id}/` | GET | Initiate OAuth2 flow |
 | `/api/oauth2/tapis/callback/` | GET | Handle OAuth2 callback |
-| `/api/oauth2/tapis/refresh/{client_id}/` | POST | Refresh access token |
 | `/api/oauth2/tapis/status/` | GET | Get token status |
 | `/api/oauth2/tapis/revoke/{client_id}/` | POST | Revoke tokens |
 
@@ -159,18 +158,8 @@ fetch('/api/oauth2/tapis/status/')
     console.log('OAuth2 Status:', data);
   });
 
-// Refresh token
-fetch('/api/oauth2/tapis/refresh/your-client-id/', {
-  method: 'POST',
-  headers: {
-    'X-CSRFToken': getCookie('csrftoken'),
-    'Content-Type': 'application/json'
-  }
-})
-.then(response => response.json())
-.then(data => {
-  console.log('Token refreshed:', data);
-});
+// Tapis JWT expiry is terminal in the current Portals tenant.
+// Loaded UI pages redirect to /logout/ when the token expires.
 ```
 
 ## Configuration Options
@@ -209,7 +198,7 @@ The integration supports multiple Tapis tenants by creating separate OAuth2 clie
 2. **HTTPS**: Always use HTTPS in production for OAuth2 flows
 3. **Token Storage**: Tokens are stored encrypted in the database
 4. **State Validation**: CSRF protection through OAuth2 state parameter
-5. **Token Expiration**: Implement proper token refresh logic
+5. **Token Expiration**: Tapis JWT expiry is terminal; users must re-authenticate after logout
 
 ## Troubleshooting
 
@@ -274,7 +263,7 @@ export WO_TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS=30
 ./webodm.sh start
 ```
 
-Any tokens created or refreshed while this variable is set will be treated as expiring in 30 seconds, so the UI should warn and log out accordingly. Remove the variable (or restart without it) to return to normal Tapis-provided expirations.
+Any tokens created while this variable is set will be treated as expiring in 30 seconds, so the UI should warn and log out accordingly. Remove the variable (or restart without it) to return to normal Tapis-provided expirations.
 
 ## Maintenance
 

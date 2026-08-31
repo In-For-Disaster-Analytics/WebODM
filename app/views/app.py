@@ -18,13 +18,6 @@ from app.views.utils import get_permissions
 from webodm import settings
 from app.models.oauth2 import TapisOAuth2Token
 
-def _looks_like_jwt(token):
-    if not token or not isinstance(token, str):
-        return False
-    if token.count('.') != 2:
-        return False
-    return ' ' not in token
-
 def index(request):
     # Check first access
     if User.objects.filter(is_superuser=True).count() == 0:
@@ -157,24 +150,14 @@ def clusterodm_admin(request):
         .order_by('-updated_at')
         .first()
     )
-    if not token_obj or token_obj.is_expired:
-        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired.'))
+    if not token_obj:
+        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired. Please log in again.'))
         return redirect('dashboard')
 
-    token_value = token_obj.get_or_refresh_access_token()
+    token_value = token_obj.get_valid_access_token()
     if not token_value:
-        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired.'))
+        messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is missing or expired. Please log in again.'))
         return redirect('dashboard')
-
-    if not _looks_like_jwt(token_value):
-        if token_obj.refresh_token:
-            try:
-                token_value = token_obj.refresh()
-            except Exception:
-                token_value = None
-        if not _looks_like_jwt(token_value):
-            messages.add_message(request, messages.constants.ERROR, _('Your Tapis token is invalid. Please log in again.'))
-            return redirect('dashboard')
 
     return render(request, 'app/clusterodm_redirect.html', {
         'title': _('ClusterODM'),
