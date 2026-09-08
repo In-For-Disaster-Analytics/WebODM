@@ -18,6 +18,11 @@ import exifr from '../vendor/exifr';
 import { _, interpolate } from '../classes/gettext';
 import $ from 'jquery';
 
+const supportsDirectoryUpload = (() => {
+  const input = document.createElement('input');
+  return 'webkitdirectory' in input || 'directory' in input;
+})();
+
 class ProjectListItem extends React.Component {
   static propTypes = {
       history: PropTypes.object.isRequired,
@@ -466,6 +471,29 @@ class ProjectListItem extends React.Component {
     }
   }
 
+  handleSelectDirectories = () => {
+    this.handleUpload();
+    this.directoryInput.click();
+  }
+
+  handleDirectorySelect = (e) => {
+    const input = e.target;
+    const allFiles = Array.from(input.files || []);
+
+    // Directories dumped alongside images/GCP often contain thumbnails,
+    // sidecar files, README/.DS_Store, etc. Drop those silently here
+    // instead of letting them reach Dropzone and surface as per-file errors.
+    const files = allFiles.filter(f => Dropzone.isValidFile(f, this.dz.options.acceptedFiles));
+
+    for (let i = 0; i < files.length; i++){
+      this.dz.addFile(files[i]);
+    }
+    if (files.length) this.dz.emit("addedfiles", files);
+
+    // Allow selecting the same (or another) directory again
+    input.value = "";
+  }
+
   handleEditProject(){
     this.editProjectDialog.show();
   }
@@ -665,14 +693,29 @@ class ProjectListItem extends React.Component {
           <div className="btn-group project-buttons">
             {this.hasPermission("add") ? 
               <div className={"asset-download-buttons btn-group " + (this.state.upload.uploading ? "hide" : "")}>
-                <button type="button" 
+                <button type="button"
                       className="btn btn-primary btn-sm"
                       onClick={this.handleUpload}
                       ref={this.setRef("uploadButton")}>
                   <i className="glyphicon glyphicon-upload"></i>
                   <span className="hidden-xs">{_("Select Images and GCP")}</span>
                 </button>
-                <button type="button" 
+                {supportsDirectoryUpload ?
+                  <button type="button"
+                        className="btn btn-default btn-sm"
+                        onClick={this.handleSelectDirectories}>
+                    <i className="glyphicon glyphicon-folder-open"></i>
+                    <span className="hidden-xs">{_("Select Image Directories")}</span>
+                  </button>
+                : ""}
+                <input type="file"
+                      ref={this.setRef("directoryInput")}
+                      webkitdirectory=""
+                      directory=""
+                      multiple
+                      style={{display: "none"}}
+                      onChange={this.handleDirectorySelect} />
+                <button type="button"
                       className="btn btn-default btn-sm"
                       onClick={this.handleImportTask}>
                   <i className="glyphicon glyphicon-import"></i> <span className="hidden-xs">{_("Import")}</span>
