@@ -492,6 +492,14 @@ class ProjectListItem extends React.Component {
 
     // Allow selecting the same (or another) directory again
     input.value = "";
+
+    // Browsers only let you pick one directory per dialog invocation
+    // (webkitdirectory has no true multi-select mode). Reopen the picker
+    // so folders can be chained one after another; a Cancel click means
+    // no more files/no "change" event, so the chain stops on its own.
+    if (allFiles.length > 0){
+      setTimeout(() => input.click(), 0);
+    }
   }
 
   handleEditProject(){
@@ -703,6 +711,7 @@ class ProjectListItem extends React.Component {
                 {supportsDirectoryUpload ?
                   <button type="button"
                         className="btn btn-default btn-sm"
+                        title={_("Pick a folder, then keep picking more; click Cancel when done")}
                         onClick={this.handleSelectDirectories}>
                     <i className="glyphicon glyphicon-folder-open"></i>
                     <span className="hidden-xs">{_("Select Image Directories")}</span>
