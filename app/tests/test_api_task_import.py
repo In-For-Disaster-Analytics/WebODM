@@ -7,6 +7,7 @@ import subprocess
 import io
 import requests
 from django.contrib.auth.models import User
+from django.contrib.auth.models import Group
 from guardian.shortcuts import remove_perm, assign_perm
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -44,7 +45,7 @@ class TestApiTask(BootTransactionTestCase):
             # Create processing node
             pnode = ProcessingNode.objects.create(hostname="localhost", port=11223)
             assign_perm('view_processingnode', user, pnode)
-            client.login(username="testuser", password="test1234")
+            client.force_authenticate(user=user)
 
             # Create task
             res = client.post("/api/projects/{}/tasks/".format(project.id), {
@@ -97,16 +98,21 @@ class TestApiTask(BootTransactionTestCase):
             with open(assets_path, 'wb') as f:
                 f.write(b''.join(res.streaming_content))
 
-            remove_perm('change_project', user, project)
-
             assets_file = open(assets_path, 'rb')
 
             # Cannot import unless we have permission
+            # The test users inherit project permissions from the Default group.
+            # Remove that inherited permission source so this assertion exercises
+            # the project's object-level permission check.
+            default_group = Group.objects.get(name='Default')
+            user.groups.remove(default_group)
+            remove_perm('change_project', user, project)
             res = client.post("/api/projects/{}/tasks/import".format(project.id), {
                 'file': [assets_file]
             }, format="multipart")
             self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
+            user.groups.add(default_group)
             assign_perm('change_project', user, project)
 
             # Import with file upload method

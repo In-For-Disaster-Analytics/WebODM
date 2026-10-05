@@ -1,5 +1,6 @@
 import time
 import json
+import re
 import requests
 from django.contrib.auth.models import User
 from rest_framework import status
@@ -51,7 +52,13 @@ class TestTaskWkt(BootTransactionTestCase):
 
         # EPSG should be none, but WKT should be populated
         self.assertIsNone(url_import_task.epsg)
-        self.assertEqual(url_import_task.wkt, 'PROJCS["unknown",GEOGCS["unknown",DATUM["Unknown based on GRS 1980 ellipsoid",SPHEROID["GRS 1980",6378137,298.257222101004,AUTHORITY["EPSG","7019"]]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",39.7552777777778],PARAMETER["central_meridian",-104.898055555556],PARAMETER["scale_factor",1.00025403],PARAMETER["false_easting",600000],PARAMETER["false_northing",400000],UNIT["US survey foot",0.304800609601219,AUTHORITY["EPSG","9003"]],AXIS["Easting",EAST],AXIS["Northing",NORTH]]')
+        expected_wkt = 'PROJCS["unknown",GEOGCS["unknown",DATUM["Unknown based on GRS 1980 ellipsoid",SPHEROID["GRS 1980",6378137,298.257222101004,AUTHORITY["EPSG","7019"]]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",39.7552777777778],PARAMETER["central_meridian",-104.898055555556],PARAMETER["scale_factor",1.00025403],PARAMETER["false_easting",600000],PARAMETER["false_northing",400000],UNIT["US survey foot",0.304800609601219,AUTHORITY["EPSG","9003"]],AXIS["Easting",EAST],AXIS["Northing",NORTH]]'
+        normalized_wkt = re.sub(
+            r'(?i)unknown[_ ]based[_ ]on[_ ]GRS[_ ]1980[_ ]ellipsoid',
+            'Unknown based on GRS 1980 ellipsoid',
+            url_import_task.wkt,
+        )
+        self.assertEqual(normalized_wkt, expected_wkt)
 
         # Can access assets
         res = client.get("/api/projects/{}/tasks/{}/assets/odm_orthophoto/odm_orthophoto.tif".format(project.id, url_import_task.id))

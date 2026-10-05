@@ -160,9 +160,9 @@ No existing migration file is renamed or edited solely to resolve the filename c
 
 ### 2026-10-05 - Test scope and current gap
 
-- **Validation completed:** Compose syntax validation; AST parsing of 191 app Python files; frontend Jest execution with 39 of 48 suites passing (50 tests passing); production and test Docker image builds; Tapis/Redirect/Task model-import smoke test; Entwine presence smoke test; and a disposable PostGIS migration run through `0050_task_wkt`.
-- **Backend validation:** With disposable PostGIS and Redis plus the repository's local-development authentication bypass, the cluster test passed. The task-import suite ran all three tests in the test image with embedded NodeODM retained; two passed, while one retained test failed because its permission-removal assertion conflicts with the default group's inherited `change_project` permission. The WKT integration test completed import/processing but its exact-string assertion differs under the upgraded GDAL serializer (`unknown_based_on_...` versus the older spaced label).
-- **Known gap:** Nine Jest suites require generated `build/mocks/*.json` fixtures. Tapis, live ClusterODM/Corral/LS6, CKAN, embeddings, staging, and production-like migration/media validation remain follow-up work; no external or production systems were modified.
+- **Validation completed:** Compose syntax validation; AST parsing of 191 app Python files; frontend Jest execution with all 48 suites and 59 tests passing after generating the ignored `build/mocks/*.json` fixtures; production and test Docker image builds; Tapis/Redirect/Task model-import smoke test; Entwine presence smoke test; and a disposable PostGIS migration run through `0050_task_wkt`.
+- **Backend validation:** With disposable PostGIS and Redis plus explicit DRF test authentication, the focused WKT, task-import, cluster, backup/import, and Entwine checks passed (`Ran 5 tests ... OK`). The WKT assertion now normalizes GDAL's equivalent underscore/space CRS-label serialization, and the task-import fixture removes inherited `Default` group membership before checking object-level denial.
+- **Known gap:** Tapis, live ClusterODM/Corral/LS6, CKAN, embeddings, staging, and production-like migration/media validation remain follow-up work; no external or production systems were modified.
 
 ### 2026-10-05 - Use disposable infrastructure for backend validation
 
@@ -170,6 +170,12 @@ No existing migration file is renamed or edited solely to resolve the filename c
 - **Reason:** This validates the migration graph and application boot path without risking unrelated local databases or volumes.
 - **Validation:** All migrations through `app.0050_task_wkt` applied successfully after enabling `postgis` and `postgis_raster` in the disposable database template. Containers and the test network were removed after validation.
 - **Impact:** Backend results are representative of a clean containerized environment, but staging and live integration tests are still required before deployment.
+
+### 2026-10-05 - Make upgrade-sensitive tests environment-tolerant
+
+- **Decision:** Generate the ignored Jest mock fixtures as part of the test setup, use explicit DRF user authentication in the task-import test, and normalize only the known GDAL CRS-label formatting variation in the WKT assertion.
+- **Reason:** The upgraded test image uses newer GDAL serialization and the repository's default user signal grants inherited permissions through the `Default` group; neither difference changes the behavior under test.
+- **Validation:** All 48 frontend suites and the five focused backend tests pass after these adjustments.
 
 ## User feedback / decisions
 
