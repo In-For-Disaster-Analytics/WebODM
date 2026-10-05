@@ -13,6 +13,22 @@ compose() {
   docker compose -f docker-compose.local.yml "$@"
 }
 
+wait_for_compose_url() {
+  local service="$1"
+  local url="$2"
+  local label="$3"
+
+  for _ in $(seq 1 90); do
+    if compose exec -T "$service" curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "$label did not become ready." >&2
+  return 1
+}
+
 bind_ip="${LOCAL_DEV_BIND_IP:-127.0.0.1}"
 webodm_port="${LOCAL_DEV_WEBODM_PORT:-18000}"
 clusterodm_port="${LOCAL_DEV_CLUSTERODM_PORT:-14000}"
@@ -36,24 +52,17 @@ fi
 compose up -d --build
 
 echo "Waiting for WebODM..."
-for _ in $(seq 1 90); do
-  if compose exec -T webapp curl -fsS http://localhost:8000/api/ >/dev/null 2>&1; then
-    break
-  fi
-  sleep 5
-done
-
-if ! compose exec -T webapp curl -fsS http://localhost:8000/api/ >/dev/null 2>&1; then
+if ! wait_for_compose_url webapp http://localhost:8000/api/ WebODM; then
   echo "WebODM did not become ready. Run ./logs.sh webapp for details." >&2
   exit 1
 fi
 
-if ! compose exec -T webapp curl -fsS http://clusterodm:3000/info >/dev/null 2>&1; then
+if ! wait_for_compose_url webapp http://clusterodm:3000/info ClusterODM; then
   echo "ClusterODM is not reachable from WebODM. Run ./logs.sh clusterodm for details." >&2
   exit 1
 fi
 
-if ! compose exec -T clusterodm curl -fsS http://node-odm:3000/info >/dev/null 2>&1; then
+if ! wait_for_compose_url clusterodm http://node-odm:3000/info NodeODM; then
   echo "NodeODM is not reachable from ClusterODM. Run ./logs.sh node-odm for details." >&2
   exit 1
 fi

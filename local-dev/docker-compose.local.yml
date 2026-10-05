@@ -9,6 +9,8 @@ services:
 
   broker:
     image: redis:7.0.10
+    volumes:
+      - ./.local-dev/redis-data:/data
     restart: unless-stopped
 
   node-odm:
@@ -17,6 +19,7 @@ services:
       - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_NODEODM_PORT:-13001}:3000"
     volumes:
       - ./.local-dev/nodeodm-data:/var/www/data
+      - ./.local-dev/nodeodm-tmp:/var/www/tmp
     restart: unless-stopped
 
   clusterodm:
@@ -43,6 +46,7 @@ services:
       - "${LOCAL_DEV_BIND_IP:-127.0.0.1}:${LOCAL_DEV_CLUSTERODM_ADMIN_PORT:-11000}:10000"
     volumes:
       - ./.local-dev/clusterodm-data:/var/www/data
+      - ./.local-dev/clusterodm-tmp:/var/www/tmp
     restart: unless-stopped
 
   webapp:
