@@ -38,8 +38,8 @@ class TapisStorageViewSet(viewsets.ViewSet):
         """Check if user has valid Tapis token"""
         try:
             token = TapisOAuth2Token.objects.get(user=self.request.user, client=client)
-            if not token.is_valid:
-                raise ValueError("Token expired")
+            if not token.get_valid_access_token():
+                raise ValueError("Token expired or invalid")
             return token
         except TapisOAuth2Token.DoesNotExist:
             raise ValueError("No Tapis token found")

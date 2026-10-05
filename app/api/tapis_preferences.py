@@ -174,10 +174,10 @@ class TapisDiscoveryControlView(APIView):
             from app.models.oauth2 import TapisOAuth2Token
             try:
                 token = TapisOAuth2Token.objects.get(user=request.user, client=client)
-                if not token.is_valid:
+                if not token.get_valid_access_token():
                     return Response({
                         'success': False,
-                        'error': _('Tapis token expired. Please re-authenticate.')
+                        'error': _('Tapis token expired or invalid. Please re-authenticate.')
                     }, status=status.HTTP_401_UNAUTHORIZED)
             except TapisOAuth2Token.DoesNotExist:
                 return Response({

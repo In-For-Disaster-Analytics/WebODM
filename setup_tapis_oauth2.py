@@ -125,7 +125,6 @@ Next steps:
    - OAuth2 authorize: /api/oauth2/tapis/authorize/<client_id>/
    - OAuth2 callback: /api/oauth2/tapis/callback
    - Token status: /api/oauth2/tapis/status/
-   - Token refresh: /api/oauth2/tapis/refresh/<client_id>/
    - Token revoke: /api/oauth2/tapis/revoke/<client_id>/
     """)
     
