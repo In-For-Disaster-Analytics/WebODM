@@ -28,12 +28,14 @@ from .hsvblend import hsv_blend
 from .hillshade import LightSource
 from .formulas import lookup_formula, get_algorithm_list, get_auto_bands
 from .tasks import TaskNestedView
-from app.geoutils import geom_transform_wkt_bbox
+from app.geoutils import geom_transform_wkt_bbox, get_rasterio_to_meters_factor
 from rest_framework import exceptions
 from rest_framework.response import Response
 from worker.tasks import export_raster, export_pointcloud
 from django.utils.translation import gettext as _
 import warnings
+from functools import lru_cache
+from osgeo import osr
 
 # Disable: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix be returned.
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
@@ -52,7 +54,19 @@ for custom_colormap in custom_colormaps:
 
 logger = logging.getLogger('app.logger')
 
+@lru_cache(maxsize=128)
+def get_colormap_encoded_values(cmap):
+    values = colormap.get(cmap).values()
+    # values = [[R, G, B, A], [R, G, B, A], ...]
+    encoded_values = []
+    for rgba in values:
+        # Pack R, G, B, A (each 0-255) into a 32-bit integer
+        # Format: 0xRRGGBBAA (R in most significant byte)
+        encoded = (rgba[0] << 24) | (rgba[1] << 16) | (rgba[2] << 8) | rgba[3]
+        encoded_values.append(encoded)
 
+    return encoded_values
+    
 def get_zoom_safe(src_dst):
     minzoom, maxzoom = src_dst.spatial_info["minzoom"], src_dst.spatial_info["maxzoom"]
     if maxzoom < minzoom:
@@ -229,8 +243,10 @@ class Metadata(TaskNestedView):
         if cached is not None:
             return Response(cached)
 
+        to_meter = 1.0
         try:
             with COGReader(raster_path) as src:
+
                 band_count = src.dataset.meta['count']
                 if boundaries_feature is not None:
                     cutline = create_cutline(src.dataset, boundaries_feature, CRS.from_string('EPSG:4326'))
@@ -245,6 +261,18 @@ class Metadata(TaskNestedView):
                     vrt_options = {'cutline': cutline}
                 else:
                     vrt_options = None
+
+                if tile_type in ['dsm', 'dtm']:
+                    to_meter = get_rasterio_to_meters_factor(src.dataset)
+                    
+                    # WarpedVRT is really slow with compound CRSes
+                    # so we override the CRS to the 2D version for speed
+                    # in case there's one
+                    if vrt_options is None:
+                        vrt_options = {}
+
+                    if task.epsg is not None:
+                        vrt_options['src_crs'] = f"EPSG:{task.epsg}"
 
                 if has_alpha_band(src.dataset):
                     band_count -= 1
@@ -323,17 +351,22 @@ class Metadata(TaskNestedView):
         info['color_maps'] = []
         info['algorithms'] = algorithms
         info['auto_bands'] = auto_bands
+
+        if to_meter != 1.0:
+            for b in info['statistics']:
+                info['statistics'][b]['min'] *= to_meter
+                info['statistics'][b]['max'] *= to_meter
+                info['statistics'][b]['std'] *= to_meter
+                info['statistics'][b]['percentiles'][0] *= to_meter
+                info['statistics'][b]['percentiles'][1] *= to_meter
+                info['statistics'][b]['histogram'][1] = [n * to_meter for n in info['statistics'][b]['histogram'][1]]
         
         if colormaps:
             for cmap in colormaps:
                 try:
                     info['color_maps'].append({
                         'key': cmap,
-                        # list(...) matches DRF's JSONEncoder fallback for
-                        # iterables (tuple(item for item in obj)) byte-for-byte
-                        # as JSON, but unlike the lazy dict_values view, a
-                        # plain list is picklable for the cache.
-                        'color_map': list(colormap.get(cmap).values()),
+                        'color_map': get_colormap_encoded_values(cmap),
                         'label': cmap_labels.get(cmap, cmap)
                     })
                 except FileNotFoundError:
@@ -347,11 +380,8 @@ class Metadata(TaskNestedView):
             info['maxzoom'] = info['minzoom']
         info['maxzoom'] += ZOOM_EXTRA_LEVELS
         info['minzoom'] -= ZOOM_EXTRA_LEVELS
-        # dict(...) matches what DRF's JSONEncoder already produces for a
-        # CRS object (it falls back to dict() for anything with __getitem__),
-        # so this keeps the API response byte-identical while also making it
-        # picklable for the cache (the raw CRS object is not).
-        info['bounds'] = {'value': bounds if bounds is not None else src.bounds, 'crs': dict(src.dataset.crs)}
+        info['bounds'] = {'value': bounds if bounds is not None else src.bounds, 
+                          'crs': f"EPSG:{task.epsg}" if task.epsg is not None else task.wkt}
 
         tiler_cache_set(cache_key, info)
         return Response(info)
@@ -448,6 +478,7 @@ class Tiles(TaskNestedView):
             data, content_type = cached
             return HttpResponse(data, content_type=content_type)
 
+        to_meter = 1.0
         with COGReader(url) as src:
             if not src.tile_exists(z, x, y):
                 raise exceptions.NotFound(_("Outside of bounds"))
@@ -471,6 +502,9 @@ class Tiles(TaskNestedView):
                 vrt_options = {'cutline': cutline}
             else:
                 vrt_options = None
+
+            if tile_type in ['dsm', 'dtm']:
+                to_meter = get_rasterio_to_meters_factor(src.dataset)
 
             # Handle N-bands datasets for orthophotos (not plant health)
             if tile_type == 'orthophoto' and expr is None:
@@ -502,6 +536,15 @@ class Tiles(TaskNestedView):
                 resampling = "bilinear"
                 padding = 16
 
+                # WarpedVRT is really slow with compound CRSes
+                # so we override the CRS to the 2D version for speed
+                # in case there's one
+                if vrt_options is None:
+                    vrt_options = {}
+
+                if task.epsg is not None:
+                    vrt_options['src_crs'] = f"EPSG:{task.epsg}"
+
             # Hillshading is not a local tile operation and
             # requires neighbor tiles to be rendered seamlessly
             if hillshade is not None:
@@ -530,6 +573,8 @@ class Tiles(TaskNestedView):
             intensity = None
             try:
                 rescale_arr = list(map(float, rescale.split(",")))
+                if tile_type in ['dsm', 'dtm']:
+                    rescale_arr = [v / to_meter for v in rescale_arr]
             except ValueError:
                 raise exceptions.ValidationError(_("Invalid rescale value"))
 
@@ -616,6 +661,7 @@ class Export(TaskNestedView):
         rescale = request.data.get('rescale')
         export_format = request.data.get('format', 'laz' if asset_type == 'georeferenced_model' else 'gtiff')
         epsg = request.data.get('epsg')
+        proj = request.data.get('proj')
         color_map = request.data.get('color_map')
         hillshade = request.data.get('hillshade')
         resample = request.data.get('resample', 0)
@@ -624,9 +670,13 @@ class Export(TaskNestedView):
         if bands == '': bands = None
         if rescale == '': rescale = None
         if epsg == '': epsg = None
+        if proj == '': proj = None
         if color_map == '': color_map = None
         if hillshade == '': hillshade = None
         if resample == '': resample = 0
+
+        if epsg is not None:
+            proj = None
 
         expr = None
 
@@ -660,6 +710,14 @@ class Export(TaskNestedView):
             except ValueError:
                 raise exceptions.ValidationError(_("Invalid EPSG code: %(value)s") % {'value': epsg})
         
+        if proj is not None:
+            try:
+                srs = osr.SpatialReference()
+                if srs.ImportFromProj4(proj) != 0:
+                    raise exceptions.ValidationError(_("Invalid PROJ string: %(value)s") % {'value': proj})
+            except Exception as e:
+                raise exceptions.ValidationError(_("Invalid PROJ string: %(value)s") % {'value': proj})
+
         if (formula and not bands) or (not formula and bands):
             raise exceptions.ValidationError(_("Both formula and bands parameters are required"))
 
@@ -702,7 +760,7 @@ class Export(TaskNestedView):
         if not os.path.isfile(url):
             raise exceptions.NotFound()
 
-        if epsg is not None and task.epsg is None:
+        if epsg is not None and (task.epsg is None and task.wkt is None):
             raise exceptions.ValidationError(_("Cannot use epsg on non-georeferenced dataset"))
         
         # Strip unsafe chars, append suffix
@@ -715,10 +773,11 @@ class Export(TaskNestedView):
 
         if asset_type in ['orthophoto', 'dsm', 'dtm']:
             # Shortcut the process if no processing is required
-            if export_format == 'gtiff' and (epsg == task.epsg or epsg is None) and expr is None and task.crop is None:
+            if export_format == 'gtiff' and ((task.epsg is not None and epsg == task.epsg) or epsg is None) and (proj is None) and expr is None and task.crop is None:
                 return Response({'url': '/api/projects/{}/tasks/{}/download/{}.tif'.format(task.project.id, task.id, asset_type), 'filename': filename})
             else:
-                celery_task_id = export_raster.delay(url, epsg=epsg, 
+                celery_task_id = export_raster.delay(url, epsg=epsg,
+                                                        proj=proj, 
                                                         expression=expr, 
                                                         format=export_format, 
                                                         rescale=rescale, 
@@ -730,10 +789,11 @@ class Export(TaskNestedView):
                 return Response({'celery_task_id': celery_task_id, 'filename': filename})
         elif asset_type == 'georeferenced_model':
             # Shortcut the process if no processing is required
-            if export_format == 'laz' and (epsg == task.epsg or epsg is None) and (resample is None or resample == 0) and task.crop is None:
+            if export_format == 'laz' and ((task.epsg is not None and epsg == task.epsg) or epsg is None) and (proj is None) and (resample is None or resample == 0) and task.crop is None:
                 return Response({'url': '/api/projects/{}/tasks/{}/download/{}.laz'.format(task.project.id, task.id, asset_type), 'filename': filename})
             else:
-                celery_task_id = export_pointcloud.delay(url, epsg=epsg, 
+                celery_task_id = export_pointcloud.delay(url, epsg=epsg,
+                                                            proj=proj, 
                                                             format=export_format,
                                                             resample=resample,
                                                             crop=task.crop.wkt if task.crop is not None else None,

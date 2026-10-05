@@ -4,6 +4,7 @@ import tempfile
 import traceback
 import json
 import socket
+import requests
 
 import time
 from threading import Event, Thread
@@ -109,8 +110,27 @@ def cleanup_tmp_directory():
             else:
                 shutil.rmtree(filepath, ignore_errors=True)
 
-            logger.info('Cleaned up: %s (%s)' % (f, modified))
+            logger.info('Cleaned up: %s (%s)' % (filepath, modified))
 
+
+@app.task(ignore_result=True)
+def cleanup_cache_directory():
+    # Delete files and folder in the task_assets folder after 30 days
+    task_assets_cache = os.path.join(settings.MEDIA_CACHE, "task_assets")
+    time_limit = 60 * 60 * 24 * 30
+
+    if os.path.isdir(task_assets_cache):
+        for f in os.listdir(task_assets_cache):
+            now = time.time()
+            filepath = os.path.join(task_assets_cache, f)
+            modified = os.stat(filepath).st_mtime
+            if modified < now - time_limit:
+                if os.path.isfile(filepath):
+                    os.remove(filepath)
+                else:
+                    shutil.rmtree(filepath, ignore_errors=True)
+
+                logger.info('Cleaned up: %s (%s)' % (filepath, modified))
 
 # Based on https://stackoverflow.com/questions/22498038/improve-current-implementation-of-a-setinterval-python/22498708#22498708
 def setInterval(interval, func, *args):
@@ -208,9 +228,9 @@ def get_pending_tasks():
 
 @app.task(ignore_result=True)
 def process_pending_tasks():
-    tasks = get_pending_tasks()
-    for task in tasks:
-        process_task.delay(task.id)
+    task_ids = get_pending_tasks().values_list('id', flat=True)
+    for task_id in task_ids:
+        process_task.delay(task_id)
 
 
 @app.task(bind=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
@@ -257,6 +277,27 @@ def check_quotas():
             deadline = p.get_quota_deadline()
             if deadline is None:
                 deadline = p.set_quota_deadline(settings.QUOTA_EXCEEDED_GRACE_PERIOD)
+
+                # Notify hook if needed
+                if settings.QUOTA_EXCEEDED_NOTIFY_URL is not None:
+                    for i in range(1, 11):
+                        try:
+                            r = requests.post(
+                                settings.QUOTA_EXCEEDED_NOTIFY_URL,
+                                json={
+                                    'username': p.user.username,
+                                    'quota_used': p.used_quota(),
+                                    'quota_total': p.quota,
+                                    'deadline': deadline
+                                },
+                                timeout=10
+                            )
+                            r.raise_for_status()
+                            break
+                        except:
+                            logger.warning(f"Failed to notify quota exceeded (attempt {i}): {str(e)}")
+                            time.sleep(i * 2)
+
             now = time.time()
             if now > deadline:
                 # deadline passed, delete tasks until quota is met

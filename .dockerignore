@@ -21,3 +21,6 @@ logs/
 # Local-only nested checkouts/artifacts.
 locale/
 .env.sample
+docs/
+screenshots/
+contrib/

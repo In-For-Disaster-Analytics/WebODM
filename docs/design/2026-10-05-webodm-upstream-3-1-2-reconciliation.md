@@ -146,6 +146,23 @@ No existing migration file is renamed or edited solely to resolve the filename c
 - **Alternatives rejected:** Copy upstream `0045`–`0047` unchanged; rejected because Django migration identity is filename-based.
 - **Impact on implementation:** Add the three explicit compatibility migrations and validate the resulting graph on a database copy.
 
+### 2026-10-05 - Complete the manual upstream reconciliation
+
+- **Decision:** Merge the cached upstream reference `a4501835` with manual conflict resolution, retaining the fork's README, locale submodule, Tapis exports, Corral ownership/startup behavior, custom viewer controls, and task deletion path while incorporating upstream EPT, raster-unit, GLB, redirect, WKT, and frontend changes.
+- **Reason:** These fork behaviors are deployment and product contracts; upstream's additions are compatible when the overlapping files are composed rather than replaced wholesale.
+- **Implementation note:** The upstream migration files were reissued as `0048_profile_cluster_id`, `0049_redirect`, and `0050_task_wkt` after the fork's `0047_task_ckan_url`.
+
+### 2026-10-05 - Pin legacy Python build prerequisites
+
+- **Decision:** Pin `setuptools==69.5.1`, `Cython==0.29.36`, and `numpy==1.26.2` in the Docker build stage and use `--no-build-isolation` for the legacy geospatial requirements.
+- **Reason:** The first image build exposed two real compatibility failures: a legacy rasterio setup script imported `pkg_resources`, and the aarch64 rasterio source package required Cython. The pinned build environment resolves both without changing runtime application dependencies.
+- **Validation:** The rebuilt `webodm-upgrade-3.1.2:local` image completed Entwine, Python dependency, webpack, plugin, static, and translation build steps.
+
+### 2026-10-05 - Test scope and current gap
+
+- **Validation completed:** Compose syntax validation; AST parsing of 191 app Python files; frontend Jest execution with 39 of 48 suites passing (50 tests passing); production Docker image build; Tapis/Redirect/Task model-import smoke test; and Entwine presence smoke test.
+- **Known gap:** Nine Jest suites require generated `build/mocks/*.json` fixtures, and Django backend tests/checks require a PostgreSQL service. No database service was started against the existing local data directory, so migration execution and full backend/staging validation remain follow-up work.
+
 ## User feedback / decisions
 
 - The user approved a staged upgrade strategy: compatible WebODM/upstream reconciliation first, ODX stack later.

@@ -7,11 +7,13 @@ import AssetDownloadButtons from './components/AssetDownloadButtons';
 import Standby from './components/Standby';
 import ShareButton from './components/ShareButton';
 import ImagePopup from './components/ImagePopup';
+import Utils from './classes/Utils';
 import PropTypes from 'prop-types';
 import * as THREE from 'THREE';
 import $ from 'jquery';
 import { _, interpolate } from './classes/gettext';
-import { getUnitSystem, setUnitSystem } from './classes/Units';
+import UnitSelector from './components/UnitSelector';
+import { getUnitSystem, setUnitSystem, onUnitSystemChanged, offUnitSystemChanged } from './classes/Units';
 
 require('./vendor/OBJLoader');
 require('./vendor/MTLLoader');
@@ -106,7 +108,8 @@ class TexturedModelMenu extends React.Component{
 
 class CamerasMenu extends React.Component{
     static propTypes = {
-        toggleCameras: PropTypes.func.isRequired
+        toggleCameras: PropTypes.func.isRequired,
+        changeCameraScale: PropTypes.func.isRequired
     }
 
     constructor(props){
@@ -117,19 +120,43 @@ class CamerasMenu extends React.Component{
         }
     }
 
+    componentDidMount(){
+        if (this.sldCameraSize){
+            $(this.sldCameraSize).slider({
+                min: 0.1, max: 4, step: 0.1,
+                value: 1.0,
+                slide: (event, ui) => {
+                    this.props.changeCameraScale(ui.value);
+                }
+            });
+        }
+    }
+
     handleClick = (e) => {
         this.setState({showCameras: e.target.checked});
         this.props.toggleCameras(e);
     }
 
     render(){
-        return (<label><input 
-                            type="checkbox" 
-                            checked={this.state.showCameras}
-                            onChange={this.handleClick}
-                        /> {_("Show Cameras")}</label>);
+        return (<div>
+            <div><label><input type="checkbox" 
+                    checked={this.state.showCameras}
+                    onChange={this.handleClick}
+                /> {_("Show Cameras")}</label>
+            </div>
+            <div style={{marginTop: 12}}>
+                <span>{_("Size")}</span>
+                <div ref={domNode => this.sldCameraSize = domNode}></div>
+            </div>
+            </div>);
     }
 }
+
+const CAMERA_SCALES = {
+    'm': 1.0,
+    'ft': 3.28,
+    'US survey foot': 3.28
+};
 
 class ModelView extends React.Component {
   static defaultProps = {
@@ -153,8 +180,10 @@ class ModelView extends React.Component {
       error: "",
       showingTexturedModel: false,
       initializingModel: false,
+      texModelLoadProgress: null,
       selectedCamera: null,
-      modalOpen: false
+      modalOpen: false,
+      cameraScale: CAMERA_SCALES[props.task.srs.units] || 1.0
     };
 
     this.pointCloud = null;
@@ -163,8 +192,12 @@ class ModelView extends React.Component {
     this.cameraMeshes = [];
   }
 
+  basePath = () => {
+    return `/api/projects/${this.props.task.project}/tasks/${this.props.task.id}`;
+  }
+
   assetsPath = () => {
-    return `/api/projects/${this.props.task.project}/tasks/${this.props.task.id}/assets`
+    return `${this.basePath()}/assets`;
   }
 
   urlExists = (url, cb) => {
@@ -286,7 +319,12 @@ class ModelView extends React.Component {
   }
 
   glbFilePath = () => {
-    return this.texturedModelDirectoryPath() + 'odm_textured_model_geo.glb';
+    let url = this.basePath() + '/textured_model/';
+    
+    if (Utils.isIOS()) url += "?platform=ios";
+    else if (Utils.isMobile()) url += "?platform=mobile";
+    
+    return url;
   }
 
   mtlFilename = (cb) => {
@@ -325,21 +363,25 @@ class ModelView extends React.Component {
     window.viewer = new Potree.Viewer(container);
     viewer.setEDLEnabled(true);
     viewer.setFOV(60);
-    viewer.setPointBudget(10*1000*1000);
+
+    if (Utils.isIOS()){
+        viewer.setPointBudget(1000*1000);
+    }else if (Utils.isMobile()){
+        viewer.setPointBudget(2*1000*1000);
+    }else{
+        viewer.setPointBudget(10*1000*1000);
+    }
     viewer.setEDLEnabled(true);
     viewer.loadSettingsFromURL();
 
-    const currentUnit = getUnitSystem();
     const origSetUnit = viewer.setLengthUnitAndDisplayUnit;
+    onUnitSystemChanged(this.handleUnitSystemChanged);
+
     viewer.setLengthUnitAndDisplayUnit = (lengthUnit, displayUnit) => {
         if (displayUnit === 'm') setUnitSystem('metric');
-        else if (displayUnit === 'ft'){
-            // Potree doesn't have US/international imperial, so 
-            // we default to international unless the user has previously
-            // selected US
-            if (currentUnit === 'metric') setUnitSystem("imperial");
-            else setUnitSystem(currentUnit);
-        }
+        else if (displayUnit === 'ft') setUnitSystem("imperial");
+        else if (displayUnit === 'ft (US)') setUnitSystem("imperialUS");
+
         origSetUnit.call(viewer, lengthUnit, displayUnit);
     };
         
@@ -356,7 +398,10 @@ class ModelView extends React.Component {
       }
 
       if (this.hasCameras()){
-          window.ReactDOM.render(<CamerasMenu toggleCameras={this.toggleCameras}/>, $("#cameras_button").get(0));
+          window.ReactDOM.render(<CamerasMenu 
+                toggleCameras={this.toggleCameras}
+                changeCameraScale={this.changeCameraScale}
+            />, $("#cameras_button").get(0));
       }else{
           $("#cameras").hide();
           $("#cameras_container").hide();
@@ -408,12 +453,7 @@ this.pointCloudSource(pointCloud =>{
           viewer.fitToScreen();
 
           PluginsAPI.Model.triggerWillAddControls({ viewer, task: this.props.task });
-
-          if (getUnitSystem() === 'metric'){
-              viewer.setLengthUnitAndDisplayUnit('m', 'm');
-          }else{
-              viewer.setLengthUnitAndDisplayUnit('m', 'ft');
-          }
+          this.handleUnitSystemChanged();
 
           // Load saved scene (if any)
           $.ajax({
@@ -512,7 +552,28 @@ this.pointCloudSource(pointCloud =>{
     
   }
 
-  // Potree v2 support removed
+  handleUnitSystemChanged = () => {
+    if (!window.viewer) return;
+
+    const us = getUnitSystem();
+    
+    // GDAL --> Potree
+    const UNIT_MAP = { 
+        'm': 'm',
+        'ft': 'ft',
+        'US survey foot': 'ft (US)'
+    };
+
+    const dsUnit = UNIT_MAP[this.props.task.srs.units] || 'm';
+
+    if (us === 'metric'){
+        window.viewer.setLengthUnitAndDisplayUnit(dsUnit, 'm');
+    }else if (us === 'imperial'){
+        window.viewer.setLengthUnitAndDisplayUnit(dsUnit, 'ft');
+    }else if (us === 'imperialUS'){
+        window.viewer.setLengthUnitAndDisplayUnit(dsUnit, 'ft (US)');
+    }
+  }
 
   getCropCoordinates(){
     if (this.props.task.crop_projected && this.props.task.crop_projected.length >= 3){
@@ -523,6 +584,7 @@ this.pointCloudSource(pointCloud =>{
   }
 
   componentWillUnmount(){
+    offUnitSystemChanged(this.handleUnitSystemChanged);
     viewer.renderer.domElement.removeEventListener( 'mousedown', this.handleRenderMouseClick );
     viewer.renderer.domElement.removeEventListener( 'mousemove', this.handleRenderMouseMove );
     viewer.renderer.domElement.removeEventListener( 'touchstart', this.handleRenderTouchStart );
@@ -645,7 +707,7 @@ this.pointCloudSource(pointCloud =>{
                     });
 
                     cameraMesh.matrixAutoUpdate = false;
-                    let scale = 1.0;
+                    let scale = this.state.cameraScale;
                     // if (!this.pointCloud.projection) scale = 0.1;
 
                     cameraMesh.matrix.set(...getMatrix(feat.properties.translation, feat.properties.rotation, scale).elements);
@@ -668,9 +730,14 @@ this.pointCloudSource(pointCloud =>{
     // Using opacity we can still perform measurements
     viewer.setEDLOpacity(flag ? 1 : 0);
 
-    // for(let pointcloud of viewer.scene.pointclouds){
-    //     pointcloud.visible = flag;
-    // }
+    // On mobile, for performance and because opacity doesn't
+    // seem to work consistently, we remove the ability to do
+    // measurements
+    if (Utils.isMobile()){
+        for(let pointcloud of viewer.scene.pointclouds){
+            pointcloud.visible = flag;
+        }
+    }
   }
 
   toggleCameras = (e) => {
@@ -686,7 +753,15 @@ this.pointCloudSource(pointCloud =>{
     });
   }
 
-  loadGltf = (url, cb) => {
+  changeCameraScale = (value) => {
+    if (this.cameraMeshes.length === 0) return;
+
+    this.cameraMeshes.forEach(cam => {
+        cam.parent.scale.setScalar(value);
+    });
+  }
+
+  loadGltf = (url, cb, onProgress) => {
     if (!this.gltfLoader) this.gltfLoader = new THREE.GLTFLoader();
     if (!this.dracoLoader) {
         this.dracoLoader = new THREE.DRACOLoader();
@@ -697,9 +772,7 @@ this.pointCloudSource(pointCloud =>{
     // Load a glTF resource
     this.gltfLoader.load(url,
         gltf => { cb(null, gltf) },
-        xhr => {
-            // called while loading is progressing
-        },
+        onProgress,
         error => { cb(error); },
         {crop: this.getCropCoordinates()}
     );
@@ -735,14 +808,20 @@ this.pointCloudSource(pointCloud =>{
                     this.setState({initializingModel: false, error: err});
                     return;
                 }
-
-                const offset = {x: 0, y: 0};
-                if (gltf.scene.CESIUM_RTC && gltf.scene.CESIUM_RTC.center){
-                    offset.x = gltf.scene.CESIUM_RTC.center[0];
-                    offset.y = gltf.scene.CESIUM_RTC.center[1];
-                }
-
-                addObject(gltf.scene, offset);
+                this.setState({texModelLoadProgress: null});
+                
+                setTimeout(() => {
+                    const offset = {x: 0, y: 0};
+                    if (gltf.scene.CESIUM_RTC && gltf.scene.CESIUM_RTC.center){
+                        offset.x = gltf.scene.CESIUM_RTC.center[0];
+                        offset.y = gltf.scene.CESIUM_RTC.center[1];
+                    }
+    
+                    addObject(gltf.scene, offset);
+                }, 0);
+            }, xhr => {
+                const progress = Math.round((xhr.loaded / xhr.total) * 100);
+                this.setState({texModelLoadProgress: progress});
             });
         }else{
             // Legacy OBJ
@@ -799,6 +878,7 @@ this.pointCloudSource(pointCloud =>{
           </div>
 
           <div className={"model-action-buttons " + (this.state.modalOpen ? "modal-open" : "")}>
+            <UnitSelector />
             <AssetDownloadButtons 
                             task={this.props.task} 
                             direction="up" 
@@ -829,6 +909,7 @@ this.pointCloudSource(pointCloud =>{
           <Standby 
             message={_("Loading textured model...")}
             show={this.state.initializingModel}
+            progress={this.state.texModelLoadProgress}
             />
       </div>);
   }
@@ -856,4 +937,3 @@ $(function(){
 });
 
 export default ModelView;
-    

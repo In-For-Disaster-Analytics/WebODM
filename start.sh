@@ -166,7 +166,6 @@ else
     fi
 
     nginx -c $(pwd)/nginx/$conf
-
     # Drop the Django app (the media writer) to the corral service account so
     # uploaded/generated media is owned by that account instead of nobody on the
     # root-squashed corral NFS mount. nginx stays root (nginx.conf: `user root root`)
