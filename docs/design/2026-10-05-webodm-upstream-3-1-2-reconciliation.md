@@ -160,8 +160,16 @@ No existing migration file is renamed or edited solely to resolve the filename c
 
 ### 2026-10-05 - Test scope and current gap
 
-- **Validation completed:** Compose syntax validation; AST parsing of 191 app Python files; frontend Jest execution with 39 of 48 suites passing (50 tests passing); production Docker image build; Tapis/Redirect/Task model-import smoke test; and Entwine presence smoke test.
-- **Known gap:** Nine Jest suites require generated `build/mocks/*.json` fixtures, and Django backend tests/checks require a PostgreSQL service. No database service was started against the existing local data directory, so migration execution and full backend/staging validation remain follow-up work.
+- **Validation completed:** Compose syntax validation; AST parsing of 191 app Python files; frontend Jest execution with 39 of 48 suites passing (50 tests passing); production and test Docker image builds; Tapis/Redirect/Task model-import smoke test; Entwine presence smoke test; and a disposable PostGIS migration run through `0050_task_wkt`.
+- **Backend validation:** With disposable PostGIS and Redis plus the repository's local-development authentication bypass, the cluster test passed. The task-import suite ran all three tests in the test image with embedded NodeODM retained; two passed, while one retained test failed because its permission-removal assertion conflicts with the default group's inherited `change_project` permission. The WKT integration test completed import/processing but its exact-string assertion differs under the upgraded GDAL serializer (`unknown_based_on_...` versus the older spaced label).
+- **Known gap:** Nine Jest suites require generated `build/mocks/*.json` fixtures. Tapis, live ClusterODM/Corral/LS6, CKAN, embeddings, staging, and production-like migration/media validation remain follow-up work; no external or production systems were modified.
+
+### 2026-10-05 - Use disposable infrastructure for backend validation
+
+- **Decision:** Run migration and focused backend checks against named disposable PostGIS/Redis containers rather than the user's existing local data/services.
+- **Reason:** This validates the migration graph and application boot path without risking unrelated local databases or volumes.
+- **Validation:** All migrations through `app.0050_task_wkt` applied successfully after enabling `postgis` and `postgis_raster` in the disposable database template. Containers and the test network were removed after validation.
+- **Impact:** Backend results are representative of a clean containerized environment, but staging and live integration tests are still required before deployment.
 
 ## User feedback / decisions
 
