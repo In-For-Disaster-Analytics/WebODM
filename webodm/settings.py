@@ -557,6 +557,24 @@ WO_EMBED_GENERATE_APP_VERSION = os.environ.get('WO_EMBED_GENERATE_APP_VERSION', 
 # ls6's own Slurm queue wait before the job even starts.
 WO_EMBED_GENERATE_TIMEOUT_MINUTES = int(os.environ.get('WO_EMBED_GENERATE_TIMEOUT_MINUTES', '75'))
 
+# Train on LS6 (OpenSplat via Tapis). Disabled unless WO_OPENSPLAT_ENABLED=YES and
+# all four path settings are set. The staging root is where WebODM writes immutable
+# per-run input snapshots (WO_OPENSPLAT_STAGING_LS6_ROOT is that same directory as
+# seen from LS6); the output root is where the Tapis job archives its PLY
+# (WO_OPENSPLAT_OUTPUT_ARCHIVE_ROOT is that directory as the archive system sees it).
+OPENSPLAT_ENABLED = os.environ.get('WO_OPENSPLAT_ENABLED', 'NO').upper() in ('YES', 'TRUE', '1')
+OPENSPLAT_APP_ID = os.environ.get('WO_OPENSPLAT_APP_ID', 'opensplat-ls6')
+OPENSPLAT_APP_VERSION = os.environ.get('WO_OPENSPLAT_APP_VERSION', '0.2.0')
+OPENSPLAT_ARCHIVE_SYSTEM_ID = os.environ.get('WO_OPENSPLAT_ARCHIVE_SYSTEM_ID', 'cloud.data')
+OPENSPLAT_STAGING_ROOT = os.environ.get('WO_OPENSPLAT_STAGING_ROOT', '')
+OPENSPLAT_STAGING_LS6_ROOT = os.environ.get('WO_OPENSPLAT_STAGING_LS6_ROOT', '')
+OPENSPLAT_OUTPUT_ROOT = os.environ.get('WO_OPENSPLAT_OUTPUT_ROOT', '')
+OPENSPLAT_OUTPUT_ARCHIVE_ROOT = os.environ.get('WO_OPENSPLAT_OUTPUT_ARCHIVE_ROOT', '')
+OPENSPLAT_MAX_INPUT_BYTES = int(os.environ.get('WO_OPENSPLAT_MAX_INPUT_BYTES', str(10 * 1024 ** 3)))
+OPENSPLAT_MAX_IMAGES = int(os.environ.get('WO_OPENSPLAT_MAX_IMAGES', '2000'))
+OPENSPLAT_MAX_RESULT_BYTES = int(os.environ.get('WO_OPENSPLAT_MAX_RESULT_BYTES', str(8 * 1024 ** 3)))
+OPENSPLAT_HTTP_TIMEOUT = int(os.environ.get('WO_OPENSPLAT_HTTP_TIMEOUT', '30'))
+
 # URL to a page where a user can reset the password
 RESET_PASSWORD_LINK = ''
 

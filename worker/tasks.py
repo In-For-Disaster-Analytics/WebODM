@@ -282,11 +282,11 @@ def export_splats(self, task_id, image_size=0):
             TestSafeAsyncResult.set(self.request.id, result)
         return result
 
-@app.task(bind=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
-def process_splats(self, task_id, splats_file):
-    if not os.path.isfile(splats_file):
-        raise Exception("Splats file not found")
-
+def convert_splats(task_id, splats_file):
+    """
+    Convert a splats file to the task's splats.rad, replacing any existing model
+    only after the conversion succeeded. Raises on failure.
+    """
     tmp_out = tempfile.mktemp('_model.rad', dir=settings.MEDIA_TMP)
     try:
         logger.info("Processing splats {} for task {}".format(splats_file, task_id))
@@ -309,7 +309,17 @@ def process_splats(self, task_id, splats_file):
         task.update_available_assets_field()
         task.update_size()
         task.save()
+    finally:
+        if os.path.isfile(tmp_out):
+            os.unlink(tmp_out)
 
+@app.task(bind=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
+def process_splats(self, task_id, splats_file):
+    if not os.path.isfile(splats_file):
+        raise Exception("Splats file not found")
+
+    try:
+        convert_splats(task_id, splats_file)
         result = {'output': "ok"}
 
         if settings.TESTING:
@@ -318,8 +328,6 @@ def process_splats(self, task_id, splats_file):
         return result
     except Exception as e:
         logger.error(str(e))
-        if os.path.isfile(tmp_out):
-            os.unlink(tmp_out)
 
         result = {'error': str(e)}
         if settings.TESTING:
@@ -328,6 +336,22 @@ def process_splats(self, task_id, splats_file):
     finally:
         if os.path.isfile(splats_file):
             os.unlink(splats_file)
+
+@app.task(ignore_result=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
+def stage_splat_run(run_id):
+    # Only the run id is passed; the user's token is reloaded from the database
+    from app.services import opensplat
+    opensplat.submit_run(run_id)
+
+@app.task(ignore_result=True)
+def reconcile_splat_runs():
+    from app.services import opensplat
+    opensplat.reconcile_runs()
+
+@app.task(ignore_result=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
+def import_splat_run(run_id):
+    from app.services import opensplat
+    opensplat.import_run(run_id)
 
 @app.task(ignore_result=True)
 def check_quotas():

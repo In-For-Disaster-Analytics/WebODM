@@ -10,6 +10,7 @@ from .oauth2 import TapisOAuth2Client, TapisOAuth2Token, TapisOAuth2State
 from .tapis_preferences import TapisUserPreferences
 from .redirect import Redirect
 from .basemap import Basemap
+from .splat_run import SplatRun
 
 # deprecated
 def image_directory_path(image_upload, filename):

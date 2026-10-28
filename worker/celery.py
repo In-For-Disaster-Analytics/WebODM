@@ -59,6 +59,14 @@ app.conf.beat_schedule = {
         	'retry': False
         }
     },
+    'reconcile-splat-runs': {
+        'task': 'worker.tasks.reconcile_splat_runs',
+        'schedule': 60,
+        'options': {
+        	'expires': 59,
+        	'retry': False
+        }
+    },
     'check-quotas': {
         'task': 'worker.tasks.check_quotas',
         'schedule': 3600,

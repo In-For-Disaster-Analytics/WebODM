@@ -4,12 +4,15 @@ import re
 import shutil
 import tempfile
 
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.utils.translation import gettext_lazy as _
 from rest_framework import status, exceptions, parsers
 from rest_framework.response import Response
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
 from app import splats
+from app.models import SplatRun
+from app.services import opensplat
 from app.api.tasks import TaskNestedView, flatten_files, download_file_stream
 from worker.tasks import export_splats, process_splats, TestSafeAsyncResult
 from .common import check_project_perms, get_asset_download_filename
@@ -178,3 +181,84 @@ class TaskSplatsDelete(TaskNestedView):
         task.save()
 
         return Response({'success': True}, status=status.HTTP_200_OK)
+
+
+def _opensplat_error_response(e):
+    if isinstance(e, opensplat.SigninRequired):
+        return Response({'detail': str(e), 'signin_required': True, 'signin_url': opensplat.signin_url()}, status=status.HTTP_401_UNAUTHORIZED)
+    if isinstance(e, opensplat.ActiveRunExists):
+        return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
+    return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TaskSplatsRuns(TaskNestedView):
+    """
+    GET: latest LS6 training run for the task (sanitized). POST: start a new run.
+    """
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method == 'POST':
+            permissions.append(HasRequiredAllocation())
+        return permissions
+
+    def get(self, request, pk=None, project_pk=None):
+        task = self.get_and_check_task(request, pk)
+        run = task.splat_runs.first()
+        return Response({
+            'enabled': opensplat.is_configured(),
+            'signin_url': opensplat.signin_url(),
+            'run': opensplat.run_status(run, run.user_id == request.user.id) if run else None
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, pk=None, project_pk=None):
+        task = self.get_and_check_task(request, pk)
+        check_project_perms(request, task.project, perms=("change_project", ))
+        if not opensplat.is_configured():
+            raise exceptions.NotFound()
+
+        try:
+            run = opensplat.create_run(task, request.user, request.data)
+        except opensplat.OpenSplatError as e:
+            return _opensplat_error_response(e)
+
+        return Response({'run': opensplat.run_status(run, True)}, status=status.HTTP_201_CREATED)
+
+
+class TaskSplatsRunAction(TaskNestedView):
+    """
+    Owner-only mutations of a single run (sync/cancel)
+    """
+    permission_classes = (HasRequiredAllocation,)
+    action = None
+
+    def post(self, request, pk=None, project_pk=None, run_pk=None):
+        task = self.get_and_check_task(request, pk)
+        check_project_perms(request, task.project, perms=("change_project", ))
+        if not opensplat.is_configured():
+            raise exceptions.NotFound()
+
+        try:
+            run = task.splat_runs.select_related('user', 'task').get(pk=run_pk)
+        except (ObjectDoesNotExist, DjangoValidationError):
+            raise exceptions.NotFound()
+
+        if run.user_id != request.user.id:
+            raise exceptions.PermissionDenied(_("Only the user who started this run can do this."))
+
+        try:
+            run = opensplat.sync_run(run) if self.action == 'sync' else opensplat.cancel_run(run)
+        except opensplat.OpenSplatError as e:
+            return _opensplat_error_response(e)
+
+        if run.state == SplatRun.READY:
+            task.refresh_from_db()
+
+        return Response({'run': opensplat.run_status(run, True)}, status=status.HTTP_200_OK)
+
+
+class TaskSplatsRunSync(TaskSplatsRunAction):
+    action = 'sync'
+
+
+class TaskSplatsRunCancel(TaskSplatsRunAction):
+    action = 'cancel'

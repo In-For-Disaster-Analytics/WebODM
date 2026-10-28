@@ -14,6 +14,20 @@ import { _, interpolate } from '../classes/gettext';
 
 const MAX_FILE_SIZE = 128 * 1024 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = '.ply,.spz,.splat,.ksplat,.sog,.sogs,.zip,.rad';
+const LS6_POLL_MS = 15000;
+
+const LS6_STATE_LABELS = {
+  preparing: "Preparing training data...",
+  awaiting_signin: "Waiting for you to sign in again",
+  submitting: "Submitting to LS6...",
+  submission_unknown: "Checking whether the job was submitted...",
+  queued: "Queued on LS6",
+  running: "Training on LS6...",
+  importing: "Importing the trained model...",
+  ready: "Training complete",
+  failed: "Training failed",
+  canceled: "Training canceled"
+};
 
 class SplatsDialog extends React.Component {
   static defaultProps = {
@@ -45,6 +59,9 @@ class SplatsDialog extends React.Component {
       hasModel: (props.task.available_assets || []).indexOf('splats.rad') !== -1,
       showSteps: (props.task.available_assets || []).indexOf('splats.rad') === -1,
       deleting: false,
+      ls6: null,
+      ls6Busy: false,
+      signinUrl: null,
       checkingShots: true,
       nadirWarning: false,
       showResizeOptions: false,
@@ -86,6 +103,7 @@ class SplatsDialog extends React.Component {
     });
 
     this.checkNadir();
+    this.loadLs6();
 
     // Prevent drag/drop events from leaking through the modal
     ['dragenter', 'dragover', 'dragleave', 'drop', 'dragend'].forEach(eventName => {
@@ -244,6 +262,7 @@ class SplatsDialog extends React.Component {
 
   componentWillUnmount() {
     this._mounted = false;
+    clearTimeout(this._ls6Timer);
     ['dragenter', 'dragover', 'dragleave', 'drop', 'dragend'].forEach(eventName => {
       $(this.modal).off(eventName);
     });
@@ -367,6 +386,101 @@ class SplatsDialog extends React.Component {
     setTimeout(() => {
       this.manuallyCanceled = false;
     }, 500);
+  }
+
+  ls6Error = (e) => {
+    const resp = e.responseJSON || {};
+    if (resp.signin_required) this.setState({signinUrl: resp.signin_url || this.state.signinUrl});
+    return resp.detail || _("Cannot reach the training service.");
+  }
+
+  loadLs6 = () => {
+    $.getJSON(this.apiUrl("runs")).done(data => {
+      if (!this._mounted) return;
+      this.setState({ls6: data, signinUrl: data.signin_url || null});
+      this.scheduleLs6Sync(data.run);
+    }); // Ignore errors: the action simply stays hidden
+  }
+
+  scheduleLs6Sync = (run) => {
+    clearTimeout(this._ls6Timer);
+    if (!run || !run.active || !run.is_owner || !this.props.canEdit) return;
+    this._ls6Timer = setTimeout(() => this.syncLs6(run), LS6_POLL_MS);
+  }
+
+  applyLs6Run = (run) => {
+    const previous = this.state.ls6 && this.state.ls6.run;
+    this.setState({ls6: {...this.state.ls6, run}, ls6Busy: false});
+    if (run.state === 'ready' && (!previous || previous.state !== 'ready')) this.handleModelAdded();
+    this.scheduleLs6Sync(run);
+  }
+
+  syncLs6 = (run) => {
+    if (!this._mounted) return;
+    $.ajax({url: this.apiUrl(`runs/${run.id}/sync`), type: 'POST', dataType: 'json'})
+      .done(resp => { if (this._mounted) this.applyLs6Run(resp.run); })
+      .fail(e => {
+        if (!this._mounted) return;
+        this.setState({error: this.ls6Error(e), ls6Busy: false});
+        // Transient failures keep polling; a lost session waits for the user
+        if (!(e.responseJSON || {}).signin_required) this.scheduleLs6Sync(run);
+      });
+  }
+
+  handleTrainLs6 = () => {
+    this.setState({ls6Busy: true, error: ""});
+    $.ajax({url: this.apiUrl("runs"), type: 'POST', dataType: 'json'})
+      .done(resp => { if (this._mounted) this.applyLs6Run(resp.run); })
+      .fail(e => {
+        if (this._mounted) this.setState({ls6Busy: false, error: this.ls6Error(e)});
+      });
+  }
+
+  handleCancelLs6 = () => {
+    const run = this.state.ls6.run;
+    this.setState({ls6Busy: true, error: ""});
+    $.ajax({url: this.apiUrl(`runs/${run.id}/cancel`), type: 'POST', dataType: 'json'})
+      .done(resp => { if (this._mounted) this.applyLs6Run(resp.run); })
+      .fail(e => {
+        if (this._mounted) this.setState({ls6Busy: false, error: this.ls6Error(e)});
+      });
+  }
+
+  renderLs6() {
+    const { ls6, ls6Busy, signinUrl } = this.state;
+    if (!ls6 || !ls6.enabled) return "";
+
+    const { hasPointCloud, hasCameras } = this.assetsInfo();
+    const run = ls6.run;
+    const active = run && run.active;
+    const canTrain = this.props.canEdit && hasPointCloud && hasCameras && !this.assetsInfo().missingImages;
+    const cancelable = this.props.canEdit && active && run.is_owner && ['preparing', 'awaiting_signin', 'queued', 'running'].indexOf(run.state) !== -1;
+
+    return (
+      <div className="ls6-training">
+        <h5>{_("Train on LS6")}</h5>
+        {run && !(run.state === 'ready' && !active) ?
+          <p className={"ls6-status ls6-" + run.state}>
+            {active ? <i className="fa fa-circle-notch fa-spin fa-fw"></i> : ""} {_(LS6_STATE_LABELS[run.state] || run.state)}
+            {run.error ? <span>: {run.error}</span> : ""}
+          </p>
+        : ""}
+        {run && run.state === 'awaiting_signin' && run.is_owner ?
+          <p>{signinUrl ? <a href={`${signinUrl}?redirect_after=${encodeURIComponent(window.location.pathname)}`}>{_("Sign in again")}</a> : _("Sign in again to continue.")}</p>
+        : ""}
+        {active && !run.is_owner ? <p>{_("Another user started this run.")}</p> : ""}
+        {canTrain ?
+          <button type="button" className="btn btn-primary" onClick={this.handleTrainLs6} disabled={ls6Busy || active}>
+            <i className={ls6Busy ? "fa fa-circle-notch fa-spin fa-fw" : "fa fa-bolt fa-fw"}></i> {_("Train on LS6")}
+          </button>
+        : ""}
+        {cancelable ?
+          <button type="button" className="btn btn-default" onClick={this.handleCancelLs6} disabled={ls6Busy}>
+            {_("Cancel")}
+          </button>
+        : ""}
+      </div>
+    );
   }
 
   assetsInfo() {
@@ -571,6 +685,7 @@ class SplatsDialog extends React.Component {
                   <i className="fa fa-circle-notch fa-spin fa-fw"></i>
                 </div>
               )}
+              {!processing && !checkingShots ? this.renderLs6() : ""}
               {!showSteps && !processing && !checkingShots ? this.renderModelActions() : ""}
               {showSteps && !processing && !checkingShots ? this.renderAlerts() : ""}
               {showSteps && !processing && !checkingShots && (hasCameras || hasPointCloud) ? this.renderSteps() : ""}
