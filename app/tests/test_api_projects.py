@@ -1,6 +1,6 @@
 import logging
 import os
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group
 from rest_framework import status
 from rest_framework.test import APIClient
 from app.models import Project
@@ -168,7 +168,104 @@ class TestApiProjects(BootTestCase):
         self.assertTrue(os.path.isdir(task_dir))
         self.assertTrue(os.path.isdir(project_dir))
 
-        
+    def test_project_group_permissions(self):
+        client = APIClient()
+        user = User.objects.get(username="testuser")
+        other_user = User.objects.get(username="testuser2")
 
+        group = Group.objects.create(name="ProjectReaders")
+        other_user.groups.add(group)
 
+        project = Project.objects.create(
+            owner=user,
+            name="group perm project"
+        )
+
+        client.login(username="testuser", password="test1234")
+        other_client = APIClient()
+        other_client.login(username="testuser2", password="test1234")
+
+        res = other_client.get("/api/projects/{}/".format(project.id))
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+        res = client.post("/api/projects/{}/edit/".format(project.id), {
+            'permissions': [{'groupname': 'NoSuchGroup', 'permissions': ['view']}]
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        res = client.post("/api/projects/{}/edit/".format(project.id), {
+            'permissions': [{'groupname': 'ProjectReaders', 'permissions': ['view']}]
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        res = other_client.get("/api/projects/{}/".format(project.id))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        res = client.get("/api/projects/{}/permissions/".format(project.id))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        group_rows = [r for r in res.data if r.get('groupname') == 'ProjectReaders']
+        self.assertEqual(len(group_rows), 1)
+        self.assertIn('view', group_rows[0]['permissions'])
+        self.assertTrue('X-Groups-Count' in res)
+        self.assertEqual(int(res['X-Groups-Count']), 2)
+
+        res = client.get("/api/groups/?search=Project&limit=10")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [g['name'] for g in res.data]
+        self.assertIn('ProjectReaders', names)
+
+        anon = APIClient()
+        res = anon.get("/api/groups/?search=P")
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        res = client.post("/api/projects/{}/edit/".format(project.id), {
+            'permissions': []
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        res = other_client.get("/api/projects/{}/".format(project.id))
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_project_pagination(self):
+        client = APIClient()
+
+        user = User.objects.create_user(username="puser", password="test1234")
         
+        # Add 25 projects
+        for i in range(25):
+            Project.objects.create(owner=user, name="pagination project {}".format(i))
+
+        client.login(username="puser", password="test1234")
+
+        # /api/projects/ returns 10 items per page
+        res = client.get("/api/projects/?page=1")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['count'], 25)
+        self.assertEqual(len(res.data['results']), 10)
+        self.assertEqual(res.data['page_size'], 10)
+
+        # /api/projects/?page_size=5 return 5 items per page
+        res = client.get("/api/projects/?page=1&page_size=5")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data['results']), 5)
+        self.assertEqual(res.data['page_size'], 5)
+
+        # /api/projects/?page_size=25 returns a single page
+        res = client.get("/api/projects/?page=1&page_size=25")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data['results']), 25)
+        self.assertEqual(res.data['page_size'], 25)
+        self.assertIsNone(res.data['next'])
+        self.assertIsNone(res.data['previous'])
+
+        # Add another 150 projects
+        for i in range(25, 175):
+            Project.objects.create(owner=user, name="pagination project {}".format(i))
+
+        # /api/projects/?page_size=1000 caps out at 100
+        res = client.get("/api/projects/?page=1&page_size=1000")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['count'], 175)
+        self.assertEqual(len(res.data['results']), 100)
+        self.assertEqual(res.data['page_size'], 100)
+        self.assertIsNotNone(res.data['next'])

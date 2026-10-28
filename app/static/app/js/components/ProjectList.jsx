@@ -11,8 +11,13 @@ import PropTypes from 'prop-types';
 import Utils from '../classes/Utils';
 
 class ProjectList extends Paginated {
+    static defaultProps = {
+        basemaps: []
+    }
+
     static propTypes = {
         history: PropTypes.object.isRequired,
+        basemaps: PropTypes.array
     }
 
     constructor(props){
@@ -24,8 +29,6 @@ class ProjectList extends Paginated {
             error: "",
             projects: []
         }
-
-        this.PROJECTS_PER_PAGE = 10;
 
         this.handleDelete = this.handleDelete.bind(this);
     }
@@ -40,7 +43,7 @@ class ProjectList extends Paginated {
 
         let search = source.substr(source.indexOf("?"));
         let q = Utils.queryParams({search});
-        
+
         // All parameters that can change via history.push without
         // triggering a reload of the project list should go here
         delete q.project_task_open;
@@ -59,23 +62,23 @@ class ProjectList extends Paginated {
         this.setState({refreshing: true});
 
         // Load projects from API
-        this.serverRequest = 
+        this.serverRequest =
             $.getJSON(this.props.source, json => {
                 if (json.results){
                     this.setState({
                         projects: json.results,
                         loading: false
                     });
-                    this.updatePagination(this.PROJECTS_PER_PAGE, json.count);
+                    this.updatePagination(json.page_size, json.count);
                 }else{
-                    this.setState({ 
+                    this.setState({
                         error: interpolate(_("Invalid JSON response: %(error)s"), {error: JSON.stringify(json)}),
                         loading: false
                     });
                 }
             })
             .fail((jqXHR, textStatus, errorThrown) => {
-                this.setState({ 
+                this.setState({
                     error: interpolate(_("Could not load projects list: %(error)s"), {error: textStatus}),
                     loading: false
                 });
@@ -120,14 +123,15 @@ class ProjectList extends Paginated {
                 <Paginator {...this.state.pagination} {...this.props}>
                     <ul key="1" className={"list-group project-list " + (this.state.refreshing ? "refreshing" : "")}>
                         {this.state.projects.map(p => (
-                            <ProjectListItem 
+                            <ProjectListItem
                                 ref={(domNode) => { this["projectListItem_" + p.id] = domNode }}
-                                key={p.id} 
-                                data={p} 
+                                key={p.id}
+                                data={p}
                                 onDelete={this.handleDelete}
                                 onTaskMoved={this.handleTaskMoved}
                                 onProjectDuplicated={this.handleProjectDuplicated}
-                                history={this.props.history} /> 
+                                history={this.props.history}
+                                basemaps={this.props.basemaps} />
                         ))}
                     </ul>
                 </Paginator>

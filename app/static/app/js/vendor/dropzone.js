@@ -169,9 +169,12 @@ var Dropzone = function (_Emitter) {
          * The timeout for the XHR requests in milliseconds (since `v4.4.0`).
          */
         timeout: 30000,
-        
+
         // Timeout when receiving a response from the server
         serverTimeout: 30000,
+
+        // Called when a server timeout is triggered
+        serverTimeoutCallback: function(){},
 
         /**
          * How many file uploads to process in parallel (See the
@@ -1287,6 +1290,12 @@ var Dropzone = function (_Emitter) {
 
       // Emit a `queuecomplete` event if all files finished uploading.
       this.on("complete", function (file) {
+        if (file && file.xhr && file.xhr._serverCheck){
+          clearInterval(file.xhr._serverCheck);
+          file.xhr._serverCheck = null;
+          file.xhr._lastProgressUpdate = null;
+        }
+
         if (_this3.getAddedFiles().length === 0 && _this3.getUploadingFiles().length === 0 && _this3.getQueuedFiles().length === 0) {
           // This needs to be deferred so that `queuecomplete` really triggers after `complete`
           return setTimeout(function () {
@@ -1639,7 +1648,7 @@ var Dropzone = function (_Emitter) {
       // Even if it's a folder, files.length will contain the folders.
       if (files.length) {
         var items = e.dataTransfer.items;
-        
+
         if (items && items.length && items[0].webkitGetAsEntry != null) {
           // The browser supports dropping of folders, so handle items instead of files
           var self = this;
@@ -1763,7 +1772,7 @@ var Dropzone = function (_Emitter) {
           return o.log(error);
         });
       };
-      
+
       var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') !== -1;
 
       var readEntries = function () {
@@ -1794,7 +1803,7 @@ var Dropzone = function (_Emitter) {
                   added.push(file);
                   var f = _this7.addFile(file);
                   if (readingDirs === 0 && --readingFiles === 0) done(added, true);
-                    
+
                   return f;
                 });
               } else if (entry.isDirectory) {
@@ -2556,6 +2565,7 @@ var Dropzone = function (_Emitter) {
           if (xhr._lastProgressUpdate && new Date().getTime() - xhr._lastProgressUpdate > _this16.options.serverTimeout){
             xhr.abort();
             _this16._handleUploadError(files, xhr);
+            if (typeof _this16.options.serverTimeoutCallback === 'function') _this16.options.serverTimeoutCallback();
             clearInterval(xhr._serverCheck);
             xhr._serverCheck = null;
             xhr._lastProgressUpdate = null;
@@ -2593,7 +2603,7 @@ var Dropzone = function (_Emitter) {
             });
         }
       }
-      
+
       process(0);
     }
 

@@ -52,7 +52,7 @@ RUN set -eux; \
 	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false wget gcc build-essential libproj-dev libgeos-dev libxml2-dev zlib1g-dev libreadline-dev; \ 
 	rm -rf /var/lib/apt/lists/*; \
 	cd /staging; \
-	wget --no-check-certificate -q https://github.com/OpenDroneMap/WebODM/releases/download/v1.9.2/postgresql-$PG_VERSION.tar.gz; \
+	wget --no-check-certificate -q https://github.com/WebODM/WebODM/releases/download/v1.9.2/postgresql-$PG_VERSION.tar.gz; \
 	cd /staging; \
 	tar -zxf postgresql-$PG_VERSION.tar.gz; \
 	cd postgresql-$PG_VERSION; \
@@ -80,7 +80,7 @@ RUN set -eux; \
 	apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false libgdal-dev libjson-c-dev; \
 	rm -rf /var/lib/apt/lists/*; \
 	cd /staging; \
-	wget --no-check-certificate -q https://github.com/OpenDroneMap/WebODM/releases/download/v1.9.2/postgis-$POSTGIS_VERSION.tar.gz; \
+	wget --no-check-certificate -q https://github.com/WebODM/WebODM/releases/download/v1.9.2/postgis-$POSTGIS_VERSION.tar.gz; \
 	wget --no-check-certificate -q -O /usr/include/json-c/json_object_private.h https://raw.githubusercontent.com/json-c/json-c/json-c-0.13/json_object_private.h; \
 	tar -zxf postgis-$POSTGIS_VERSION.tar.gz; \
 	sed -i 's/#error.*/#define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H 1/' /usr/include/proj_api.h; \

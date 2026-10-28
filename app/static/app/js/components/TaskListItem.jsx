@@ -10,12 +10,15 @@ import HistoryNav from '../classes/HistoryNav';
 import PropTypes from 'prop-types';
 import TaskPluginActionButtons from './TaskPluginActionButtons';
 import MoveTaskDialog from './MoveTaskDialog';
+import ManageMediaDialog from './ManageMediaDialog';
+import SplatsDialog from './SplatsDialog';
 import PipelineSteps from '../classes/PipelineSteps';
 import Css from '../classes/Css';
 import Tags from '../classes/Tags';
 import Trans from './Trans';
 import Utils from '../classes/Utils';
 import PdfPopup from './PdfPopup';
+import { unitSystem } from '../classes/Units';
 import { _, interpolate } from '../classes/gettext';
 
 class TaskListItem extends React.Component {
@@ -52,6 +55,8 @@ class TaskListItem extends React.Component {
       thumbLoadFailed: false,
       displayPdf: false,
       copiedToClipboard: false,
+      showMediaDialog: false,
+      showSplatsDialog: false,
     }
 
     for (let k in props.data){
@@ -83,10 +88,12 @@ class TaskListItem extends React.Component {
 
   loadTimer(startTime){
     if (!this.processingTimeInterval){
+      this._timerStart = new Date().getTime();
+
       this.setState({time: startTime});
 
       this.processingTimeInterval = setInterval(() => {
-        this.setState({time: this.state.time += 1000});
+        this.setState({time: ((new Date().getTime() - this._timerStart)) + startTime } );
       }, 1000);
     }
   }
@@ -276,7 +283,22 @@ class TaskListItem extends React.Component {
   }
 
   copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
+    if (navigator.clipboard !== undefined){
+      navigator.clipboard.writeText(text);
+    }else{
+      // navigator.clipboard is only available in secure contexts (HTTPS)
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      try{
+        document.execCommand('copy');
+      }finally{
+        document.body.removeChild(el);
+      }
+    }
     this.setState({copiedToClipboard: true});
     if (this._clipboardTimeout){
       clearTimeout(this._clipboardTimeout);
@@ -306,9 +328,9 @@ class TaskListItem extends React.Component {
         </ul>`, link: `<a href='https://docs.webodm.net/references/create-successful-maps' target='_blank'>${_("here")}</a>`})});
       }else if (line.indexOf("Illegal instruction") !== -1 ||
                 line.indexOf("Child returned 132") !== -1){
-        this.setState({friendlyTaskError: interpolate(_("It looks like this computer might be too old. WebODM requires a computer with a 64-bit CPU supporting MMX, SSE, SSE2, SSE3 and SSSE3 instruction set support or higher. You can still run WebODM if you compile your own docker images. See %(link)s for more information."), { link: `<a href='https://github.com/OpenDroneMap/WebODM#common-troubleshooting'>${_("this page")}</a>` } )});
+        this.setState({friendlyTaskError: interpolate(_("It looks like this computer might be too old. WebODM requires a computer with a 64-bit CPU supporting MMX, SSE, SSE2, SSE3 and SSSE3 instruction set support or higher. You can still run WebODM if you compile your own docker images. See %(link)s for more information."), { link: `<a href='https://docs.webodm.org/installation/#common-troubleshooting'>${_("this page")}</a>` } )});
       }else if (line.indexOf("Child returned 127") !== -1){
-        this.setState({friendlyTaskError: _("The processing node is missing a program necessary to complete the task. This might indicate a corrupted installation. If you built OpenDroneMap, please check that all programs built without errors.")});
+        this.setState({friendlyTaskError: _("The processing node is missing a program necessary to complete the task. This might indicate a corrupted installation. If you built ODM, please check that all programs built without errors.")});
       }
     }
   }
@@ -478,10 +500,16 @@ class TaskListItem extends React.Component {
   }
 
   displayPdf = (url, opts) => {
-    this.setState({displayPdf: {
-      url,
-      title: opts.title || ""
-    }})
+    if (Utils.isIOS()){
+      // PDF viewer in iOS only displays the first page
+      // open in a new tab instead
+      window.open(url, "pdf_report");
+    }else{
+      this.setState({displayPdf: {
+        url,
+        title: opts.title || ""
+      }})
+    }
   }
 
   hidePdf = () => {
@@ -510,8 +538,7 @@ class TaskListItem extends React.Component {
     
     let expanded = "";
     if (this.state.expanded){
-      let showOrthophotoMissingWarning = false,
-          showMemoryErrorWarning = this.state.memoryError && task.status == statusCodes.FAILED && window.location.hostname.indexOf("webodm.net") === -1,
+      let showMemoryErrorWarning = this.state.memoryError && task.status == statusCodes.FAILED && window.location.hostname.indexOf("webodm.net") === -1,
           showTaskWarning = this.state.friendlyTaskError !== "" && task.status == statusCodes.FAILED,
           showExitedWithCodeOneHints = task.last_error === "Process exited with code 1" &&
                                        !showMemoryErrorWarning &&
@@ -527,15 +554,14 @@ class TaskListItem extends React.Component {
       };
 
       if (showAssetButtons){
-        if (task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1){
+        if (task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1 || task.available_assets.indexOf("dtm.tif") !== -1){
           addActionButton(" " + _("Map"), "btn-primary", "fa fa-globe fa-fw", () => {
             location.href = `/map/project/${task.project}/task/${task.id}/`;
           });
-        }else{
-          showOrthophotoMissingWarning = task.available_assets.indexOf("orthophoto.tif") === -1;
         }
 
         if (task.available_assets.indexOf("georeferenced_model.laz") !== -1 || 
+            task.available_assets.indexOf("georeferenced_model.las") !== -1 ||
             task.available_assets.indexOf("textured_model.glb") !== -1 ||
             task.available_assets.indexOf("textured_model.zip") !== -1){
           addActionButton(" " + _("3D Model"), "btn-primary", "fa fa-cube fa-fw", () => {
@@ -545,7 +571,6 @@ class TaskListItem extends React.Component {
 
         if (task.available_assets.indexOf("report.pdf") !== -1){ 
           addActionButton(" " + _("Report"), "btn-primary", "far fa-file-pdf fa-fw", () => {
-            console.log(task.name);
             this.displayPdf(`/api/projects/${task.project}/tasks/${task.id}/download/report.pdf?inline=1`, { 
               title: task.name || _("Report")
             });
@@ -644,9 +669,10 @@ class TaskListItem extends React.Component {
           </div>);
 
       const stats = task.statistics;
-    
+      const us = unitSystem();
+
       expanded = (
-        <div className="expanded-panel">
+        <div className="expanded-panel theme-secondary">
           <div className="row">
             <div className="col-md-12 no-padding">
               <div className="col-md-9 col-sm-10 no-padding">
@@ -672,28 +698,28 @@ class TaskListItem extends React.Component {
                     {stats && stats.gsd && 
                     <tr>
                       <td><strong>{_("Average GSD:")}</strong></td>
-                      <td>{parseFloat(stats.gsd.toFixed(2)).toLocaleString()} cm</td>
+                      <td>{us.length(parseFloat(stats.gsd) / 100, {gsd: true}).toString()}</td>
                     </tr>}
                     {stats && stats.area &&
                     <tr>
                       <td><strong>{_("Area:")}</strong></td>
-                      <td>{parseFloat(stats.area.toFixed(2)).toLocaleString()} m&sup2;</td>
+                       <td>{us.area(parseFloat(stats.area)).toString()}</td>
                     </tr>}
                     {stats && stats.pointcloud && stats.pointcloud.points &&
                     <tr>
                       <td><strong>{_("Points:")}</strong></td>
                       <td>{stats.pointcloud.points.toLocaleString()}</td>
                     </tr>}
-                    {stats && stats.spatial_refs && stats.spatial_refs.length &&
+                    {stats && stats.spatial_refs && stats.spatial_refs.length ?
                     <tr>
                       <td><strong>{_("Georeferencing:")}</strong></td>
                       <td>{this.spatialRefsToHuman(stats.spatial_refs)}</td>
-                    </tr>}
-                    {task.srs && task.srs.name && 
+                    </tr> : null}
+                    {task.srs && task.srs.name ?
                     <tr>
                       <td><strong>{_("CRS:")}</strong></td>
                       <td>{task.srs.name}</td>
-                    </tr>}
+                    </tr> : null}
                     {task.size > 0 && 
                     <tr>
                       <td><strong>{_("Disk Usage:")}</strong></td>
@@ -738,16 +764,13 @@ class TaskListItem extends React.Component {
                     maximumLines={500}
                     /> : ""}
 
-              {showOrthophotoMissingWarning ?
-              <div className="task-warning"><i className="fa fa-exclamation-triangle"></i> <span>{_("An orthophoto could not be generated. To generate one, make sure GPS information is embedded in the EXIF tags of your images, or use a Ground Control Points (GCP) file.")}</span></div> : ""}
-
               {showMemoryErrorWarning ?
               <div className="task-warning"><i className="fa fa-support"></i> <Trans params={{ memlink: `<a href="${memoryErrorLink}" target='_blank'>${_("enough RAM allocated")}</a>`, cloudlink: `<a href='https://webodm.net' target='_blank'>${_("cloud processing node")}</a>` }}>{_("It looks like your processing node ran out of memory. If you are using docker, make sure that your docker environment has %(memlink)s. Alternatively, make sure you have enough physical RAM, reduce the number of images, make your images smaller, or reduce the max-concurrency parameter from the task's options. You can also try to use a %(cloudlink)s.")}</Trans></div> : ""}
 
               {showTaskWarning ?
               <div className="task-warning"><i className="fa fa-support"></i> <span dangerouslySetInnerHTML={{__html: this.state.friendlyTaskError}} /></div> : ""}
 
-              {showExitedWithCodeOneHints ?
+              {showExitedWithCodeOneHints && window.__taskOptionsDocsLink ?
               <div className="task-warning"><i className="fa fa-info-circle"></i> <div className="inline">
                   <Trans params={{link: `<a href="${window.__taskOptionsDocsLink}" target="_blank">${window.__taskOptionsDocsLink.replace("https://", "")}</a>` }}>{_("\"Process exited with code 1\" means that part of the processing failed. Sometimes it's a problem with the dataset, sometimes it can be solved by tweaking the Task Options. Check the documentation at %(link)s")}</Trans>
                 </div>
@@ -845,6 +868,14 @@ class TaskListItem extends React.Component {
         taskActions.push(<li key="edit"><a href="javascript:void(0)" onClick={this.startEditing}><i className="glyphicon glyphicon-pencil"></i>{_("Edit")}</a></li>);
     }
 
+    // Media
+    if (task.status === statusCodes.COMPLETED){
+      taskActions.push(
+            <li key="media"><a href="javascript:void(0)" onClick={() => { this.setState({showMediaDialog: true}); }}><i className="fa fa-image"></i>{_("Media")}</a></li>,
+            <li key="splats"><a href="javascript:void(0)" onClick={() => { this.setState({showSplatsDialog: true}); }}><i className="fa fa-splat"></i>{_("Splats")}</a></li>,
+      );
+    }
+
     if (editable){
         taskActions.push(
             <li key="move"><a href="javascript:void(0)" onClick={this.handleMoveTask}><i className="fa fa-arrows-alt"></i>{_("Move")}</a></li>,
@@ -883,6 +914,23 @@ class TaskListItem extends React.Component {
                 ref={(domNode) => { this.moveTaskDialog = domNode; }}
                 onHide={() => this.setState({showMoveDialog: false})}
                 saveAction={this.moveTaskAction}
+            />
+        : ""}
+        {this.state.showMediaDialog ?
+            <ManageMediaDialog
+                task={task}
+                projectId={task.project}
+                canEdit={this.props.hasPermission("change")}
+                onClose={() => this.setState({showMediaDialog: false})}
+            />
+        : ""}
+        {this.state.showSplatsDialog ?
+            <SplatsDialog
+                task={task}
+                projectId={task.project}
+                canEdit={this.props.hasPermission("change")}
+                onClose={() => this.setState({showSplatsDialog: false})}
+                onTaskChanged={() => this.refresh()}
             />
         : ""}
         <div className="row">

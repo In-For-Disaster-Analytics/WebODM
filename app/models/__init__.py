@@ -9,6 +9,7 @@ from .profile import Profile
 from .oauth2 import TapisOAuth2Client, TapisOAuth2Token, TapisOAuth2State
 from .tapis_preferences import TapisUserPreferences
 from .redirect import Redirect
+from .basemap import Basemap
 
 # deprecated
 def image_directory_path(image_upload, filename):

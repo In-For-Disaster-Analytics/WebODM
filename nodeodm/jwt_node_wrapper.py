@@ -11,12 +11,12 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import requests
-from pyodm import Node
-from pyodm.exceptions import NodeServerError, NodeConnectionError
-from pyodm.types import TaskStatus
+from pyodx import Node
+from pyodx.exceptions import NodeServerError, NodeConnectionError
+from pyodx.types import TaskStatus
+from .url_security import redact_query_params, redact_url
 
 logger = logging.getLogger('app.logger')
-
 
 class JWTTokenExpiredError(Exception):
     """Custom exception for JWT token expiration that can be handled by the frontend."""
@@ -72,7 +72,7 @@ class JWTNodeWrapper:
         if params:
             endpoint += "?" + urlencode(params)
 
-        logger.info(f"[JWTNodeWrapper] GET {log_label}: {endpoint}")
+        logger.info(f"[JWTNodeWrapper] GET {log_label}: {redact_url(endpoint)}")
         try:
             response = requests.get(endpoint, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
@@ -140,7 +140,7 @@ class JWTNodeWrapper:
                 endpoint += "?" + urlencode(params)
             
             token_label = "JWT token" if self.jwt_token else ("node token" if self.token else "no token")
-            logger.info(f"Creating task via ClusterODM at: {endpoint} (auth={token_label})")
+            logger.info(f"Creating task via ClusterODM at: {redact_url(endpoint)} (auth={token_label})")
             logger.info(f"Number of images provided: {len(images)}")
             if len(images) > 0:
                 logger.info(f"First image path: {images[0]}")
@@ -172,8 +172,8 @@ class JWTNodeWrapper:
             # Log detailed request information
             logger.info(f"=== HTTP REQUEST DETAILS ===")
             logger.info(f"Method: POST")
-            logger.info(f"URL: {endpoint}")
-            logger.info(f"Query Parameters: {params}")
+            logger.info(f"URL: {redact_url(endpoint)}")
+            logger.info(f"Query Parameters: {redact_query_params(params)}")
             logger.info(f"Form Data: {data}")
             logger.info(f"Files: {[f[0] for f in files]} ({len(files)} files)")
             logger.info(f"Timeout: {self.timeout}s")
@@ -279,7 +279,7 @@ class JWTNodeWrapper:
             if params:
                 endpoint += "?" + urlencode(params)
 
-            logger.info(f"Creating task from path via ClusterODM at: {endpoint}")
+            logger.info(f"Creating task from path via ClusterODM at: {redact_url(endpoint)}")
             logger.info(f"Directory path: {directory_path}")
 
             data = {'import_path': directory_path}
@@ -345,8 +345,8 @@ class JWTNodeWrapper:
 
         logger.info(f"=== HTTP REQUEST DETAILS (Task Info) ===")
         logger.info(f"Method: GET")
-        logger.info(f"URL: {endpoint}")
-        logger.info(f"Query Parameters: {params}")
+        logger.info(f"URL: {redact_url(endpoint)}")
+        logger.info(f"Query Parameters: {redact_query_params(params)}")
         logger.info(f"Auth: {'jwt' if self.jwt_token else ('node' if self.token else 'none')}")
         logger.info(f"Timeout: {self.timeout}s")
         logger.info(f"=========================================")
@@ -405,8 +405,8 @@ class JWTNodeWrapper:
 
         logger.info(f"=== HTTP REQUEST DETAILS (Task Output) ===")
         logger.info(f"Method: GET")
-        logger.info(f"URL: {endpoint}")
-        logger.info(f"Query Parameters: {params}")
+        logger.info(f"URL: {redact_url(endpoint)}")
+        logger.info(f"Query Parameters: {redact_query_params(params)}")
         logger.info(f"Auth: {'jwt' if self.jwt_token else ('node' if self.token else 'none')}")
         logger.info(f"Timeout: {self.timeout}s")
         logger.info(f"==========================================")
@@ -466,7 +466,7 @@ class JWTNodeWrapper:
             else:
                 token_label = "none"
             attempt_info = f"[attempt {idx + 1}/{len(tokens_to_try)} | token={token_label}]"
-            logger.info(f"[JWTNodeWrapper] Downloading task assets from {zip_endpoint} {attempt_info}")
+            logger.info(f"[JWTNodeWrapper] Downloading task assets from {redact_url(zip_endpoint)} {attempt_info}")
 
             try:
                 with requests.get(zip_endpoint, stream=True, timeout=self.timeout) as response:
@@ -554,7 +554,7 @@ class JWTNodeWrapper:
                         self._info_data['output'] = []
                     elif isinstance(self._info_data['output'], str):
                         self._info_data['output'] = self._info_data['output'].splitlines()
-                    from pyodm.types import TaskInfo
+                    from pyodx.types import TaskInfo
                     return TaskInfo(self._info_data)
 
                 def output(self, line=0):
@@ -569,8 +569,8 @@ class JWTNodeWrapper:
 
                         logger.info(f"=== HTTP REQUEST DETAILS (Task Output) ===")
                         logger.info(f"Method: GET")
-                        logger.info(f"URL: {output_endpoint}")
-                        logger.info(f"Query Parameters: {params}")
+                        logger.info(f"URL: {redact_url(output_endpoint)}")
+                        logger.info(f"Query Parameters: {redact_query_params(params)}")
                         logger.info(f"==========================================")
 
                         try:
@@ -645,7 +645,7 @@ class JWTNodeWrapper:
                             else:
                                 token_label = "none"
                             attempt_info = f"[attempt {idx + 1}/{len(tokens_to_try)} | token={token_label}]"
-                            logger.info(f"[JWTNodeWrapper] Downloading task assets from {zip_endpoint} {attempt_info}")
+                            logger.info(f"[JWTNodeWrapper] Downloading task assets from {redact_url(zip_endpoint)} {attempt_info}")
 
                             try:
                                 with requests.get(zip_endpoint, stream=True, timeout=self.timeout) as response:
@@ -748,8 +748,8 @@ class JWTNodeWrapper:
 
                         logger.info(f"=== HTTP REQUEST DETAILS (Task Remove) ===")
                         logger.info(f"Method: POST")
-                        logger.info(f"URL: {remove_endpoint}")
-                        logger.info(f"Query Parameters: {params}")
+                        logger.info(f"URL: {redact_url(remove_endpoint)}")
+                        logger.info(f"Query Parameters: {redact_query_params(params)}")
                         logger.info(f"Payload Keys: {['uuid']}")
                         logger.info(f"==========================================")
 
@@ -817,8 +817,8 @@ class JWTNodeWrapper:
 
                         logger.info(f"=== HTTP REQUEST DETAILS (Task Cancel) ===")
                         logger.info(f"Method: POST")
-                        logger.info(f"URL: {cancel_endpoint}")
-                        logger.info(f"Query Parameters: {params}")
+                        logger.info(f"URL: {redact_url(cancel_endpoint)}")
+                        logger.info(f"Query Parameters: {redact_query_params(params)}")
                         logger.info(f"Payload Keys: {['uuid']}")
                         logger.info(f"==========================================")
 
@@ -887,8 +887,8 @@ class JWTNodeWrapper:
 
         logger.info(f"=== HTTP REQUEST DETAILS (Task Cancel - Direct) ===")
         logger.info(f"Method: POST")
-        logger.info(f"URL: {cancel_endpoint}")
-        logger.info(f"Query Parameters: {params}")
+        logger.info(f"URL: {redact_url(cancel_endpoint)}")
+        logger.info(f"Query Parameters: {redact_query_params(params)}")
         logger.info(f"Payload Keys: {['uuid']}")
         logger.info(f"==========================================")
 

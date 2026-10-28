@@ -1,9 +1,9 @@
 import os
 import shutil
+import subprocess
 import tempfile
 import traceback
 import json
-import socket
 import requests
 
 import time
@@ -23,6 +23,7 @@ import worker
 from .celery import app
 from app.raster_utils import export_raster as export_raster_sync, extension_for_export_format
 from app.pointcloud_utils import export_pointcloud as export_pointcloud_sync
+from app import splats
 from django.utils import timezone
 from datetime import timedelta
 import redis
@@ -37,27 +38,10 @@ TestSafeAsyncResult = worker.celery.MockAsyncResult if settings.TESTING else app
 def update_nodes_info():
     if settings.NODE_OPTIMISTIC_MODE:
         return
-    
+
     processing_nodes = ProcessingNode.objects.all()
     for processing_node in processing_nodes:
         processing_node.update_node_info()
-
-        # Workaround for mysterious "webodm_node-odm-1" or "webodm-node-odm-1" hostname switcharoo on Mac
-        # Technically we already check for the correct hostname during setup, 
-        # but sometimes that doesn't work?
-        check_hostname = 'webodm_node-odm-1'
-        if processing_node.hostname == check_hostname and not processing_node.is_online():
-            try:
-                socket.gethostbyname(processing_node.hostname)
-            except:
-                # Hostname was invalid, try renaming
-                processing_node.hostname = 'webodm-node-odm-1'
-                processing_node.update_node_info()
-                if processing_node.is_online():
-                    logger.info("Found and fixed webodm_node-odm-1 hostname switcharoo")
-                else:
-                    processing_node.hostname = check_hostname
-                processing_node.save()
 
 @app.task(ignore_result=True)
 def cleanup_projects():
@@ -67,7 +51,7 @@ def cleanup_projects():
         tasks_count=Count('task')
     ).filter(tasks_count=0)
     for p in deletion_projects:
-        p.delete()     
+        p.delete()
 
     # Delete projects that have no tasks and are owned by users with
     # no disk quota
@@ -84,10 +68,10 @@ def cleanup_projects():
 
 @app.task(ignore_result=True)
 def cleanup_tasks():
-    # Delete tasks that are older than 
+    # Delete tasks that are older than
     if settings.CLEANUP_PARTIAL_TASKS is None:
         return
-    
+
     tasks_to_delete = Task.objects.filter(partial=True, created_at__lte=timezone.now() - timedelta(hours=settings.CLEANUP_PARTIAL_TASKS))
     for t in tasks_to_delete:
         logger.info("Cleaning up partial task {}".format(t))
@@ -199,8 +183,8 @@ def process_task(taskId):
                     pass
         except Exception as e:
             logger.error(
-                "Uncaught error! This is potentially bad. Please report it to http://github.com/OpenDroneMap/WebODM/issues: {} {}".format(
-                    e, traceback.format_exc()))
+                "Uncaught error while processing task {}. This is potentially bad. Please report it to http://github.com/WebODM/WebODM/issues: {} {}".format(
+                    taskId, e, traceback.format_exc()))
             if settings.TESTING: raise e
     finally:
         if cancel_monitor is not None:
@@ -240,7 +224,7 @@ def export_raster(self, input, **opts):
         tmpfile = tempfile.mktemp('_raster.{}'.format(extension_for_export_format(opts.get('format', 'gtiff'))), dir=settings.MEDIA_TMP)
         def progress_callback(status, perc):
             self.update_state(state="PROGRESS", meta={"status": status, "progress": perc})
-        
+
         export_raster_sync(input, tmpfile, progress_callback=progress_callback, **opts)
         result = {'file': tmpfile}
 
@@ -268,6 +252,82 @@ def export_pointcloud(self, input, **opts):
     except Exception as e:
         logger.error(str(e))
         return {'error': str(e)}
+
+@app.task(bind=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
+def export_splats(self, task_id, image_size=0):
+    try:
+        logger.info("Exporting splats data for {} (image size: {})".format(task_id, image_size))
+        task = Task.objects.get(pk=task_id)
+
+        # The download endpoint derives this same directory from the celery task id
+        tmpdir = os.path.join(settings.MEDIA_TMP, "splats_export_{}".format(self.request.id))
+        os.makedirs(tmpdir, exist_ok=True)
+
+        def progress_callback(status, perc):
+            self.update_state(state="PROGRESS", meta={"status": status, "progress": perc})
+
+        splats.prepare_export(task, tmpdir, image_size=image_size,
+                              progress_callback=progress_callback)
+        result = {'output': "ok"}
+
+        if settings.TESTING:
+            TestSafeAsyncResult.set(self.request.id, result)
+
+        return result
+    except Exception as e:
+        logger.error(str(e))
+
+        result = {'error': str(e)}
+        if settings.TESTING:
+            TestSafeAsyncResult.set(self.request.id, result)
+        return result
+
+@app.task(bind=True, time_limit=settings.WORKERS_MAX_TIME_LIMIT)
+def process_splats(self, task_id, splats_file):
+    if not os.path.isfile(splats_file):
+        raise Exception("Splats file not found")
+
+    tmp_out = tempfile.mktemp('_model.rad', dir=settings.MEDIA_TMP)
+    try:
+        logger.info("Processing splats {} for task {}".format(splats_file, task_id))
+        task = Task.objects.get(pk=task_id)
+
+        if shutil.which("splat-tools") is None:
+            raise Exception("splat-tools is not available")
+
+        p = subprocess.run(["splat-tools", '--quality', '-o', tmp_out, splats_file],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if p.returncode != 0 or not os.path.isfile(tmp_out):
+            raise Exception("splat-tools failed (exit code %s)" % p.returncode)
+
+        task_splats = task.get_asset_file_or_stream('splats.rad')
+
+        os.makedirs(os.path.dirname(task_splats), exist_ok=True)
+        shutil.move(tmp_out, task_splats)
+
+        task.refresh_from_db()
+        task.update_available_assets_field()
+        task.update_size()
+        task.save()
+
+        result = {'output': "ok"}
+
+        if settings.TESTING:
+            TestSafeAsyncResult.set(self.request.id, result)
+
+        return result
+    except Exception as e:
+        logger.error(str(e))
+        if os.path.isfile(tmp_out):
+            os.unlink(tmp_out)
+
+        result = {'error': str(e)}
+        if settings.TESTING:
+            TestSafeAsyncResult.set(self.request.id, result)
+        return result
+    finally:
+        if os.path.isfile(splats_file):
+            os.unlink(splats_file)
 
 @app.task(ignore_result=True)
 def check_quotas():
@@ -314,7 +374,7 @@ def check_quotas():
                         last_task.delete()
                     except Exception as e:
                         logger.warn("Cannot delete %s for %s: %s" % (str(last_task), str(p.user.username), str(e)))
-                    
+
                     c += 1
                     if c >= task_count:
                         break

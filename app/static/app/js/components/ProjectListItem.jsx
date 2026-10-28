@@ -4,6 +4,7 @@ import update from 'immutability-helper';
 import TaskList from './TaskList';
 import NewTaskPanel from './NewTaskPanel';
 import ImportTaskPanel from './ImportTaskPanel';
+import ImportExternalPanel from './ImportExternalPanel';
 import UploadProgressBar from './UploadProgressBar';
 import ErrorMessage from './ErrorMessage';
 import EditProjectDialog from './EditProjectDialog';
@@ -11,6 +12,7 @@ import SortPanel from './SortPanel';
 import Dropzone from '../vendor/dropzone';
 import csrf from '../django/csrf';
 import HistoryNav from '../classes/HistoryNav';
+import Storage from '../classes/Storage';
 import PropTypes from 'prop-types';
 import ResizeModes from '../classes/ResizeModes';
 import Tags from '../classes/Tags';
@@ -24,12 +26,16 @@ const supportsDirectoryUpload = (() => {
 })();
 
 class ProjectListItem extends React.Component {
+  static defaultProps = {
+    basemaps: []
+  }
   static propTypes = {
       history: PropTypes.object.isRequired,
       data: PropTypes.object.isRequired, // project json
       onDelete: PropTypes.func,
       onTaskMoved: PropTypes.func,
-      onProjectDuplicated: PropTypes.func
+      onProjectDuplicated: PropTypes.func,
+      basemaps: PropTypes.array
   }
 
   constructor(props){
@@ -44,8 +50,10 @@ class ProjectListItem extends React.Component {
       data: props.data,
       refreshing: false,
       importing: false,
+      importingExternal: false,
       buttons: [],
-      sortKey: "-created_at",
+      importItems: [],
+      sortKey: Storage.getItem("task_ordering") || "-created_at",
       filterTags: [],
       selectedTags: [],
       filterText: ""
@@ -80,7 +88,7 @@ class ProjectListItem extends React.Component {
     // Update project information based on server
     this.setState({refreshing: true});
 
-    this.refreshRequest = 
+    this.refreshRequest =
       $.getJSON(`/api/projects/${this.state.data.id}/`)
         .done((json) => {
           this.setState({data: json});
@@ -96,6 +104,7 @@ class ProjectListItem extends React.Component {
   componentWillUnmount(){
     if (this.deleteProjectRequest) this.deleteProjectRequest.abort();
     if (this.refreshRequest) this.refreshRequest.abort();
+    if (this.checkQueueCompletedOnTabActivation) document.removeEventListener("visibilitychange", this.checkQueueCompletedOnTabActivation);
   }
 
   componentDidUpdate(prevProps, prevState){
@@ -116,7 +125,8 @@ class ProjectListItem extends React.Component {
       uploadedCount: 0,
       totalBytes: 0,
       totalBytesSent: 0,
-      lastUpdated: 0
+      lastUpdated: 0,
+      serverTimeouts: 0
     };
   }
 
@@ -140,26 +150,87 @@ class ProjectListItem extends React.Component {
     Dropzone.autoDiscover = false;
 
     if (this.hasPermission("add")){
+      const unstableConnection = !!Storage.getItem("unstable_connection");
+
       this.dz = new Dropzone(this.dropzone, {
           paramName: "images",
           url : 'TO_BE_CHANGED',
-          parallelUploads: 4,
+          parallelUploads: unstableConnection ? 1 : 6,
           uploadMultiple: false,
-          acceptedFiles: "image/*,text/plain,.las,.laz,video/*,.srt,.dng,.nef",
+          acceptedFiles: "image/*,text/plain,.las,.laz,video/*,.srt,.dng,.nef,.gpx",
           autoProcessQueue: false,
           createImageThumbnails: false,
           clickable: this.uploadButton,
           maxFilesize: 131072, // 128G
           timeout: 2147483647,
           chunking: true,
-          chunkSize: 8000000, // 8MB,
+          chunkSize: unstableConnection ? 1000000 : 8000000, // 8MB,
           retryChunks: true,
           retryChunksLimit: 20,
-          
+          serverTimeoutCallback: () => {
+            if (!unstableConnection && this.state.upload.uploading && this.state.upload.progress < 100.0){
+              this.setUploadState({serverTimeouts: this.state.upload.serverTimeouts + 1});
+            }
+          },
+
           headers: {
             [csrf.header]: csrf.token
           }
       });
+
+      const checkQueueCompleted = () => {
+        // Prevent double calls to /commit
+        if (this.checkTimeout){
+          clearTimeout(this.checkTimeout);
+          this.checkTimeout = null;
+        }
+        this.checkTimeout = setTimeout(() => {
+          const remainingFilesCount = this.state.upload.totalCount - this.state.upload.uploadedCount;
+          if (remainingFilesCount === 0 && this.state.upload.uploadedCount > 0 && this.state.upload.uploading){
+            // All files have uploaded!
+            const COMMIT_RETRIES = 20;
+
+            const commitUploads = (attempt) => {
+              const retryCommit = () => {
+                if (attempt < COMMIT_RETRIES){
+                  console.warn(`Commit failed, retrying... (${attempt})`);
+                  setTimeout(() => {
+                    if (this.state.upload.uploading){
+                      commitUploads(attempt + 1);
+                    }
+                  }, 2500 * attempt);
+                }else{
+                  this.setUploadState({uploading: false, error: _("Cannot create new task. Please try again later.")});
+                }
+              };
+
+              $.ajax({
+                  url: `/api/projects/${this.state.data.id}/tasks/${this.dz._taskInfo.id}/commit/`,
+                  contentType: 'application/json',
+                  dataType: 'json',
+                  type: 'POST',
+                  timeout: 15000,
+                }).done((task) => {
+                  if (task && task.id){
+                      this.setUploadState({uploading: false});
+                      this.newTaskAdded();
+                  }else{
+                    retryCommit();
+                  }
+                }).fail(() => {
+                  retryCommit();
+                });
+            };
+            commitUploads(0);
+          }else if (this.dz.getQueuedFiles() === 0){
+              // Done but didn't upload all?
+              this.setUploadState({
+                  uploading: false,
+                  error: interpolate(_('%(count)s files cannot be uploaded. As a reminder, only images (.jpg, .tif, .png) and GCP files (.txt) can be uploaded. Try again.'), { count: remainingFilesCount })
+              });
+          }
+        }, 250);
+      };
 
       this.dz.on("addedfiles", files => {
           let totalBytes = 0;
@@ -173,7 +244,7 @@ class ProjectListItem extends React.Component {
               if (!fileMap[filename]) fileMap[filename] = 1;
               else fileMap[filename]++;
             }
-            
+
             for (let i = 0; i < files.length; i++){
               const f = files[i];
               const filename = f.upload.filename;
@@ -210,7 +281,7 @@ class ProjectListItem extends React.Component {
             const now = new Date().getTime();
 
             if (bytesSent > file.size) bytesSent = file.size;
-            
+
             if (progress === 100 || now - this.state.upload.lastUpdated > 500){
                 const deltaBytesSent = bytesSent - file.deltaBytesSent;
                 file.trackedBytesSent += deltaBytesSent;
@@ -225,12 +296,16 @@ class ProjectListItem extends React.Component {
                 });
 
                 file.deltaBytesSent = bytesSent;
+
+                if (this.state.upload.progress === 100){
+                  checkQueueCompleted();
+                }
             }
         })
         .on("complete", (file) => {
             // Retry
             const retry = () => {
-                const MAX_RETRIES = 20;
+                const MAX_RETRIES = 30;
 
                 if (!file.accepted){
                   throw new Error(interpolate(_('%(filename)s is not a valid file'), {filename: file.name }));
@@ -240,19 +315,27 @@ class ProjectListItem extends React.Component {
                     // Update progress
                     const totalBytesSent = this.state.upload.totalBytesSent - file.trackedBytesSent;
                     const progress = totalBytesSent / this.state.upload.totalBytes * 100;
-        
+
                     this.setUploadState({
                         progress,
                         totalBytesSent,
                     });
-        
+
                     file.status = Dropzone.QUEUED;
                     file.deltaBytesSent = 0;
                     file.trackedBytesSent = 0;
                     file.retries++;
+
+                    const retryTime = 2500 * file.retries;
+
+                    // Update serverTimeout so that its at lest 3x retryTime
+                    // otherwise a file waiting to be retried could trigger
+                    // a serverTimeout
+                    this.dz.options.serverTimeout = Math.max(this.dz.options.serverTimeout, 3 * retryTime);
+
                     setTimeout(() => {
                       this.dz.processQueue();
-                    }, 5000 * file.retries);
+                    }, retryTime);
                 }else{
                     throw new Error(interpolate(_('Cannot upload %(filename)s, exceeded max retries (%(max_retries)s)'), {filename: file.name, max_retries: MAX_RETRIES}));
                 }
@@ -274,18 +357,21 @@ class ProjectListItem extends React.Component {
                     let response = JSON.parse(file.xhr.response);
                     if (response.success){
                       if (response.uploaded && response.uploaded[file.upload.filename] === file.size){
-                        // Update progress by removing the tracked progress and 
+                        // Update progress by removing the tracked progress and
                         // use the file size as the true number of bytes
                         let totalBytesSent = this.state.upload.totalBytesSent + file.size;
                         if (file.trackedBytesSent) totalBytesSent -= file.trackedBytesSent;
-        
+
                         const progress = totalBytesSent / this.state.upload.totalBytes * 100;
-        
+
                         this.setUploadState({
                             progress,
                             totalBytesSent,
-                            uploadedCount: this.state.upload.uploadedCount + 1
+                            uploadedCount: this.state.upload.uploadedCount + 1,
+                            serverTimeouts: 0
                         });
+
+                        checkQueueCompleted();
                       }else{
                         // Chunk success, wait for end
                       }
@@ -306,52 +392,6 @@ class ProjectListItem extends React.Component {
                 if (this.dz.files.length) this.dz.cancelUpload();
             }
         })
-        .on("queuecomplete", () => {
-            const remainingFilesCount = this.state.upload.totalCount - this.state.upload.uploadedCount;
-            if (remainingFilesCount === 0 && this.state.upload.uploadedCount > 0){
-                // All files have uploaded!
-                const COMMIT_RETRIES = 10;
-
-                const commitUploads = (attempt) => {
-                  const retryCommit = () => {
-                    if (attempt < COMMIT_RETRIES){
-                      console.warn(`Commit failed, retrying... (${attempt})`);
-                      setTimeout(() => {
-                        if (this.state.upload.uploading){
-                          commitUploads(attempt + 1);
-                        }
-                      }, 5000 * attempt);
-                    }else{
-                      this.setUploadState({uploading: false, error: _("Cannot create new task. Please try again later.")});
-                    }
-                  };
-
-                  $.ajax({
-                      url: `/api/projects/${this.state.data.id}/tasks/${this.dz._taskInfo.id}/commit/`,
-                      contentType: 'application/json',
-                      dataType: 'json',
-                      type: 'POST',
-                      timeout: 30000,
-                    }).done((task) => {
-                      if (task && task.id){
-                          this.setUploadState({uploading: false});
-                          this.newTaskAdded();
-                      }else{
-                        retryCommit();
-                      }
-                    }).fail(() => {
-                      retryCommit();
-                    });
-                };
-                commitUploads(0);
-            }else if (this.dz.getQueuedFiles() === 0){
-                // Done but didn't upload all?
-                this.setUploadState({
-                    uploading: false,
-                    error: interpolate(_('%(count)s files cannot be uploaded. As a reminder, only images (.jpg, .tif, .png) and GCP files (.txt) can be uploaded. Try again.'), { count: remainingFilesCount })
-                });
-            }
-        })
         .on("reset", () => {
           this.resetUploadState();
         })
@@ -360,8 +400,15 @@ class ProjectListItem extends React.Component {
             this.resetUploadState();
           }
         });
+
+      this.checkQueueCompletedOnTabActivation = () => {
+        if (document.visibilityState === "visible" && this.state.upload.uploading){
+          checkQueueCompleted();
+        }
+      }
+      document.addEventListener("visibilitychange", this.checkQueueCompletedOnTabActivation);
     }
-    
+
     PluginsAPI.Dashboard.triggerAddNewTaskButton({projectId: this.state.data.id, onNewTaskAdded: this.newTaskAdded}, (button) => {
         if (!button) return;
 
@@ -369,11 +416,19 @@ class ProjectListItem extends React.Component {
             buttons: {$push: [button]}
         }));
     });
+
+    PluginsAPI.Dashboard.triggerAddImportTaskItem({projectId: this.state.data.id, onNewTaskAdded: this.newTaskAdded}, (item) => {
+        if (!item) return;
+
+        this.setState(update(this.state, {
+            importItems: {$push: [item]}
+        }));
+    });
   }
 
   newTaskAdded = () => {
-    this.setState({importing: false});
-    
+    this.setState({importing: false, importingExternal: false});
+
     if (this.state.showTaskList){
       this.taskList.refresh();
     }else{
@@ -393,7 +448,7 @@ class ProjectListItem extends React.Component {
     const showTaskList = !this.state.showTaskList;
 
     this.historyNav.toggleQSListItem("project_task_open", this.state.data.id, showTaskList);
-    
+
     this.setState({
       showTaskList: showTaskList
     });
@@ -401,6 +456,10 @@ class ProjectListItem extends React.Component {
 
   closeUploadError(){
     this.setUploadState({error: ""});
+  }
+
+  resetServerTimeouts = () => {
+    this.setUploadState({serverTimeouts: 0});
   }
 
   cancelUpload(){
@@ -564,12 +623,21 @@ class ProjectListItem extends React.Component {
   }
 
   handleImportTask = () => {
-    this.setState({importing: true});
+    this.setState({importing: true, importingExternal: false});
   }
 
   handleCancelImportTask = () => {
     this.setState({importing: false});
   }
+
+  handleImportExternal = () => {
+    this.setState({importingExternal: true, importing: false});
+  }
+
+  handleCancelImportExternal = () => {
+    this.setState({importingExternal: false});
+  }
+
 
   handleTaskTitleHint = (hasGPSCallback) => {
       return new Promise((resolve, reject) => {
@@ -587,7 +655,7 @@ class ProjectListItem extends React.Component {
                   reject();
                   return;
               }
-              
+
               // Parse EXIF
               const options = {
                 ifd0: false,
@@ -606,8 +674,8 @@ class ProjectListItem extends React.Component {
 
                 let dateTime = exif.DateTimeOriginal;
                 if (dateTime && dateTime.toLocaleDateString) dateTime = dateTime.toLocaleDateString();
-                
-                // Fallback to file modified date if 
+
+                // Fallback to file modified date if
                 // no exif info is available
                 if (!dateTime){
                   if (f.lastModifiedDate) dateTime = f.lastModifiedDate.toLocaleDateString();
@@ -632,6 +700,7 @@ class ProjectListItem extends React.Component {
   sortChanged = key => {
     if (this.taskList){
       this.setState({sortKey: key});
+      Storage.setItem("task_ordering", key);
       setTimeout(() => {
         this.taskList.refresh();
       }, 0);
@@ -684,6 +753,12 @@ class ProjectListItem extends React.Component {
     }
   }
 
+  enableStableMode = () => {
+    Storage.setItem("unstable_connection", "1");
+    this.handleTaskCanceled();
+    location.reload(true);
+  }
+
   render() {
     const { refreshing, data, filterTags } = this.state;
     const numTasks = data.tasks.length;
@@ -691,15 +766,16 @@ class ProjectListItem extends React.Component {
     const userTags = Tags.userTags(data.tags);
     let deleteWarning = _("All tasks, images and models associated with this project will be permanently deleted. Are you sure you want to continue?");
     if (!data.owned) deleteWarning = _("This project was shared with you. It will not be deleted, but simply hidden from your dashboard. Continue?")
+    const ordering = Storage.getItem("task_ordering") || "-created_at";
 
     return (
       <li className={"project-list-item list-group-item " + (refreshing ? "refreshing" : "")}
          href="javascript:void(0);"
          ref={this.setRef("dropzone")}
          >
-        
-        {canEdit ? 
-            <EditProjectDialog 
+
+        {canEdit ?
+            <EditProjectDialog
             ref={(domNode) => { this.editProjectDialog = domNode; }}
             title={_("Edit Project")}
             saveLabel={_("Save Changes")}
@@ -721,7 +797,7 @@ class ProjectListItem extends React.Component {
         <div className="row no-margin">
           <ErrorMessage bind={[this, 'error']} />
           <div className="btn-group project-buttons">
-            {this.hasPermission("add") ? 
+            {this.hasPermission("add") ?
               <div className={"asset-download-buttons btn-group " + (this.state.upload.uploading ? "hide" : "")}>
                 <button type="button"
                       className="btn btn-primary btn-sm"
@@ -747,26 +823,33 @@ class ProjectListItem extends React.Component {
                       style={{display: "none"}}
                       onChange={this.handleDirectorySelect} />
                 <button type="button"
-                      className="btn btn-default btn-sm"
-                      onClick={this.handleImportTask}>
-                  <i className="glyphicon glyphicon-import"></i> <span className="hidden-xs">{_("Import")}</span>
+                      className="btn btn-default btn-sm btn-import"
+                      data-toggle="dropdown">
+                  <i className="glyphicon glyphicon-import"></i> <span className="hidden-xs">{_("Import")}</span> <span className="caret hidden-xs"></span>
                 </button>
+                <ul className="dropdown-menu import-dropdown">
+                  <li><a href="javascript:void(0)" onClick={this.handleImportTask}><i className={"far fa-file-archive fa-fw"}></i> {_("Assets / Backups")}</a></li>
+                  <li><a href="javascript:void(0)" onClick={this.handleImportExternal}><i className={"fa fa-cloud-upload-alt fa-fw"}></i> {_("External Data")}</a></li>
+                  {this.state.importItems.length ?
+                    this.state.importItems.map((item, i) => <React.Fragment key={i}>{item}</React.Fragment>)
+                  : ""}
+                </ul>
                 {this.state.buttons.map((button, i) => <React.Fragment key={i}>{button}</React.Fragment>)}
               </div>
             : ""}
 
-            <button disabled={this.state.upload.error !== ""} 
+            <button disabled={this.state.upload.error !== ""}
                     type="button"
-                    className={"btn btn-danger btn-sm " + (!this.state.upload.uploading ? "hide" : "")} 
+                    className={"btn btn-danger btn-sm " + (!this.state.upload.uploading ? "hide" : "")}
                     onClick={this.handleCancel}>
               <i className="glyphicon glyphicon-remove-circle"></i>
               Cancel Upload
-            </button> 
+            </button>
           </div>
 
           <div className="project-name">
             {data.name}
-            {userTags.length > 0 ? 
+            {userTags.length > 0 ?
               userTags.map((t, i) => <div key={i} className="tag-badge small-badge" onClick={this.handleTagClick(t)}>{t}</div>)
               : ""}
           </div>
@@ -774,7 +857,7 @@ class ProjectListItem extends React.Component {
             {data.description}
           </div>
           <div className="row project-links">
-            {numTasks > 0 ? 
+            {numTasks > 0 ?
               <span>
                 <i className='fa fa-tasks'></i>
                 <a href="javascript:void(0);" onClick={this.toggleTaskList}>
@@ -782,11 +865,11 @@ class ProjectListItem extends React.Component {
                 </a>
               </span>
               : ""}
-            
-            {this.state.showTaskList && numTasks > 1 ? 
+
+            {this.state.showTaskList && numTasks > 1 ?
               <div className="task-filters">
                 <div className="btn-group">
-                  {this.state.selectedTags.length || this.state.filterText !== "" ? 
+                  {this.state.selectedTags.length || this.state.filterText !== "" ?
                     <a className="quick-clear-filter" href="javascript:void(0)" onClick={this.clearFilter}>×</a>
                   : ""}
                   <i className='fa fa-filter'></i>
@@ -795,7 +878,7 @@ class ProjectListItem extends React.Component {
                   </a>
                   <ul className="dropdown-menu dropdown-menu-right filter-dropdown">
                   <li className="filter-text-container">
-                    <input type="text" className="form-control filter-text theme-border-secondary-07" 
+                    <input type="text" className="form-control filter-text theme-border-secondary-07"
                           value={this.state.filterText}
                           ref={domNode => {this.filterTextInput = domNode}}
                           placeholder=""
@@ -819,24 +902,24 @@ class ProjectListItem extends React.Component {
                   <a href="javascript:void(0);" className="dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                     {_("Sort")}
                   </a>
-                  <SortPanel selected="-created_at" items={this.sortItems} onChange={this.sortChanged} />
+                  <SortPanel selected={ordering} items={this.sortItems} onChange={this.sortChanged} />
                 </div>
               </div> : ""}
 
-              {numTasks > 0 ? 
+              {numTasks > 0 ?
                 [<i key="edit-icon" className='fa fa-globe'></i>
                 ,<a key="edit-text" href="javascript:void(0);" onClick={this.viewMap}>
                   {_("View Map")}
                 </a>]
               : ""}
-              
-            {canEdit ? 
+
+            {canEdit ?
                 [<i key="edit-icon" className='far fa-edit'></i>
                 ,<a key="edit-text" href="javascript:void(0);" onClick={this.handleEditProject}> {_("Edit")}
                 </a>]
             : ""}
 
-            {!canEdit && !data.owned ? 
+            {!canEdit && !data.owned ?
               [<i key="edit-icon" className='far fa-eye-slash'></i>
               ,<a key="edit-text" href="javascript:void(0);" onClick={this.handleHideProject(deleteWarning, this.handleDelete)}> {_("Delete")}
               </a>]
@@ -846,16 +929,27 @@ class ProjectListItem extends React.Component {
         </div>
         <i className="drag-drop-icon fa fa-inbox"></i>
         <div className="row">
+          {this.state.upload.uploading && this.state.upload.serverTimeouts >= 5 ?
+            <div className="alert alert-warning alert-dismissible">
+              <button type="button" className="close" title={_("Close")} onClick={this.resetServerTimeouts}><span aria-hidden="true">&times;</span></button>
+              <i className="fa fa-exclamation-triangle"></i> {_("Unstable connection detected. If the upload gets stuck, press the button below to enable stable mode. You will then need to restart the upload.")}
+              <button style={{display: "block", marginTop: 16}} type="button" className="btn btn-primary btn-sm"
+                onClick={this.enableStableMode}
+              ><i className="fa fa-plug"></i> {_("Enable Stable Mode")}
+              </button>
+            </div>
+          : ""}
+
           {this.state.upload.uploading ? <UploadProgressBar {...this.state.upload}/> : ""}
-          
-          {this.state.upload.error !== "" ? 
+
+          {this.state.upload.error !== "" ?
             <div className="alert alert-warning alert-dismissible">
                 <button type="button" className="close" title={_("Close")} onClick={this.closeUploadError}><span aria-hidden="true">&times;</span></button>
                 {this.state.upload.error}
             </div>
             : ""}
 
-          {this.state.upload.editing ? 
+          {this.state.upload.editing ?
             <NewTaskPanel
               onSave={this.handleTaskSaved}
               onCancel={this.handleTaskCanceled}
@@ -865,10 +959,11 @@ class ProjectListItem extends React.Component {
               showAlign={numTasks > 0}
               projectId={this.state.data.id}
               getFiles={() => this.state.upload.files }
+              basemaps={this.props.basemaps}
             />
           : ""}
 
-          {this.state.importing ? 
+          {this.state.importing ?
             <ImportTaskPanel
               onImported={this.newTaskAdded}
               onCancel={this.handleCancelImportTask}
@@ -876,9 +971,17 @@ class ProjectListItem extends React.Component {
             />
           : ""}
 
-          {this.state.showTaskList ? 
-            <TaskList 
-                ref={this.setRef("taskList")} 
+          {this.state.importingExternal ?
+            <ImportExternalPanel
+              onImported={this.newTaskAdded}
+              onCancel={this.handleCancelImportExternal}
+              projectId={this.state.data.id}
+            />
+          : ""}
+
+          {this.state.showTaskList ?
+            <TaskList
+                ref={this.setRef("taskList")}
                 source={`/api/projects/${data.id}/tasks/?ordering=${this.state.sortKey}`}
                 onDelete={this.taskDeleted}
                 onTaskMoved={this.taskMoved}

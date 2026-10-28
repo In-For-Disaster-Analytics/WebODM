@@ -54,15 +54,15 @@ export default class ExportAssetPanel extends React.Component {
         },
         'laz': {
             label: "LAZ",
-            icon: "fa fa-cube"
+            icon: "fa fa-pointcloud"
         },
         'las': {
             label: "LAS",
-            icon: "fa fa-cube"
+            icon: "fa fa-pointcloud"
         },
         'ply': {
             label: "PLY",
-            icon: "fa fa-cube"
+            icon: "fa fa-pointcloud"
         },
         'csv': {
             label: "CSV",

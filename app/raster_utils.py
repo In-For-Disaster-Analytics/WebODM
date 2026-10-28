@@ -207,7 +207,7 @@ def export_raster(input, output, progress_callback=None, **opts):
             band_count = src.count
 
         if bigtiff:
-            profile.update(BIGTIFF='IF_SAFER')
+            profile.update(BIGTIFF='IF_SAFER', BLOCKXSIZE=window_size, BLOCKYSIZE=window_size, TILED='YES')
 
         if reproject:
             path_base, _ = os.path.splitext(output_raster)
@@ -245,6 +245,9 @@ def export_raster(input, output, progress_callback=None, **opts):
                                 ci.index(ColorInterp.green) + 1,
                                 ci.index(ColorInterp.blue) + 1,
                                 ci.index(ColorInterp.alpha) + 1)
+                # No? pick first three + alpha
+                elif ColorInterp.alpha in ci:
+                    indexes = (1, 2, 3, ci.index(ColorInterp.alpha) + 1)
             
             # Only 2 bands (common with thermal)?
             elif len(ci) == 2 and ColorInterp.gray in ci and ColorInterp.alpha in ci:

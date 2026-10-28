@@ -6,9 +6,6 @@ import PropTypes from 'prop-types';
 import $ from 'jquery';
 import ErrorMessage from './ErrorMessage';
 import Utils from '../classes/Utils';
-import '../vendor/leaflet/Leaflet.Autolayers/css/leaflet.auto-layers.css';
-import '../vendor/leaflet/Leaflet.Autolayers/leaflet-autolayers';
-import Basemaps from '../classes/Basemaps';
 import Standby from './Standby';
 import exifr from '../vendor/exifr';
 import '../vendor/leaflet/leaflet-markers-canvas';
@@ -16,23 +13,27 @@ import { _, interpolate } from '../classes/gettext';
 import CropButton from './CropButton';
 import 'leaflet-fullscreen/dist/Leaflet.fullscreen';
 import 'leaflet-fullscreen/dist/leaflet.fullscreen.css';
+import '../vendor/leaflet/Leaflet.Autolayers/css/leaflet.auto-layers.css';
+import '../vendor/leaflet/Leaflet.Autolayers/leaflet-autolayers';
 
 class MapPreview extends React.Component {
   static defaultProps = {
     getFiles: null,
     onPolygonChange: () => {},
-    onImagesBboxChanged: () => {}
+    onImagesBboxChanged: () => {},
+    basemaps: []
   };
-    
+
   static propTypes = {
     getFiles: PropTypes.func.isRequired,
     onPolygonChange: PropTypes.func,
-    onImagesBboxChanged: PropTypes.func
+    onImagesBboxChanged: PropTypes.func,
+    basemaps: PropTypes.array
   };
 
   constructor(props) {
     super(props);
-    
+
     this.state = {
         showLoading: true,
         error: ""
@@ -67,43 +68,67 @@ class MapPreview extends React.Component {
     }).addTo(this.map);
 
     this.basemaps = {};
-    
-    Basemaps.forEach((src, idx) => {
-    const { url, ...props } = src;
-    const tileProps = Utils.clone(props);
-    tileProps.maxNativeZoom = tileProps.maxZoom;
-    tileProps.maxZoom = tileProps.maxZoom + 99;
-    const layer = L.tileLayer(url, tileProps);
+    const basemaps = this.props.basemaps;
+    if (basemaps.length > 0) {
+      let defaultBmLayer = null;
+      let osmLayer = null;
 
-    if (idx === 2) {
-        layer.addTo(this.map);
+      basemaps.forEach(bm => {
+        let layer;
+        const opts = {
+          layers: bm.layers || '0',
+          styles: bm.styles || 'default',
+          format: bm.format || 'image/png',
+          transparent: (bm.format || 'image/png') == 'image/png',
+          attribution: bm.attribution || bm.label,
+          maxZoom: (bm.maxzoom || 21) + 99,
+          maxNativeZoom: bm.maxzoom || 21,
+          minZoom: bm.minzoom || 0,
+          subdomains: bm.subdomains || [],
+        }
+        if (bm.type === 'wms') {
+          layer = L.tileLayer.wms(bm.url, opts);
+        } else {
+          layer = L.tileLayer(bm.url, opts);
+        }
+
+        if (bm['default']) {
+          defaultBmLayer = layer;
+        }
+        if (bm.label === "OpenStreetMap"){
+          osmLayer = layer;
+        }
+
+        this.basemaps[bm.label] = layer;
+      });
+
+      // Prioritize OSM layer for map preview (if available)
+      if (osmLayer) osmLayer.addTo(this.map);
+      else if (defaultBmLayer) defaultBmLayer.addTo(this.map);
     }
-
-    this.basemaps[props.label] = layer;
-    });
 
     const customLayer = L.layerGroup();
     customLayer.on("add", a => {
-        const defaultCustomBm = window.localStorage.getItem('lastCustomBasemap') || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-      
-        let url = window.prompt([_('Enter a tile URL template. Valid coordinates are:'),
+      const defaultCustomBm = window.localStorage.getItem('lastCustomBasemap') || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+      let url = window.prompt([_('Enter a tile URL template. Valid coordinates are:'),
 _('{z}, {x}, {y} for Z/X/Y tile scheme'),
-_('{-y} for flipped TMS-style Y coordinates'),
+_('{−y} for flipped TMS-style Y coordinates'),
 '',
 _('Example:'),
 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'].join("\n"), defaultCustomBm);
-        
-    if (url){
+
+      if (url){
         customLayer.clearLayers();
         const l = L.tileLayer(url, {
-        maxNativeZoom: 24,
-        maxZoom: 99,
-        minZoom: 0
+          maxNativeZoom: 24,
+          maxZoom: 99,
+          minZoom: 0
         });
         customLayer.addLayer(l);
         l.bringToBack();
         window.localStorage.setItem('lastCustomBasemap', url);
-    }
+      }
     });
     this.basemaps[_("Custom")] = customLayer;
     this.basemaps[_("None")] = L.layerGroup();
@@ -214,7 +239,7 @@ _('Example:'),
         if (this.hasTimestamp) layer.feature.properties["Timestamp"] = exif.timestamp;
         return layer;
       });
-      
+
       if (this.capturePath){
         this.map.removeLayer(this.capturePath);
         this.capturePath = null;
@@ -229,7 +254,7 @@ _('Example:'),
         });
         this.capturePath.addTo(this.map);
       }
-      
+
       if (images.length > 0){
         this.imagesGroup = L.featureGroup(images).addTo(this.map);
         this.map.fitBounds(this.imagesGroup.getBounds());
@@ -293,7 +318,7 @@ _('Example:'),
           resolve();
         }
       };
-      
+
       const parseImage = i => {
         const img = images[i];
         exifr.parse(img, options).then(exif => {
@@ -350,7 +375,7 @@ _('Example:'),
     }
 
     const [xmin, ymin, xmax, ymax] = task.extent;
-    
+
     this.alignPoly = L.polygon([
       [ymin, xmin],
       [ymax, xmin],
@@ -420,12 +445,12 @@ _('Example:'),
       <div style={{height: "280px"}} className="map-preview">
         <ErrorMessage bind={[this, 'error']} />
 
-        <Standby 
+        <Standby
             message={_("Plotting GPS locations...")}
             show={this.state.showLoading}
             />
 
-        {this.state.error === "" && this.exifData.length > this.MaxImagesPlot ? 
+        {this.state.error === "" && this.exifData.length > this.MaxImagesPlot ?
         <div className="plot-warning btn-warning" title={interpolate(_("For performance reasons, only %(num)s images are plotted"), {num: this.MaxImagesPlot})}>
           <i className="fa fa-exclamation-triangle"></i>
         </div>
@@ -444,11 +469,11 @@ _('Example:'),
           </ul>
         </div> : ""}
 
-        <div 
+        <div
           style={{height: "100%"}}
           ref={(domNode) => (this.container = domNode)}
         >
-          
+
         </div>
 
 

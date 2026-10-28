@@ -6,7 +6,7 @@ volumes:
   appmedia:
 services:
   db:
-    image: opendronemap/webodm_db
+    image: webodm/webodm_db
     container_name: db
     expose:
       - "5432"
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     oom_score_adj: -100
   webapp:
-    image: opendronemap/webodm_webapp
+    image: webodm/webodm_webapp
     container_name: webapp
     entrypoint: /bin/bash -c "service cron start && chmod +x /webodm/*.sh && /bin/bash -c \"/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/start.sh\""
     volumes:
@@ -24,7 +24,8 @@ services:
     group_add:
       - ${WO_CORRAL_GROUP_ID}
     ports:
-      - "${WO_PORT}:8000"
+      - "${WO_PORT}:8000/tcp"
+      - "${WO_PORT}:8000/udp"
     depends_on:
       - db
       - broker
@@ -80,7 +81,7 @@ services:
     oom_score_adj: -500
     command: redis-server --save "" --stop-writes-on-bgsave-error no
   worker:
-    image: opendronemap/webodm_webapp
+    image: webodm/webodm_webapp
     container_name: worker
     entrypoint: /bin/bash -c "/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/scripts/entrypoint-tapis.sh /webodm/wait-for-it.sh -t 0 webapp:8000 -- /webodm/worker.sh start"
     volumes:

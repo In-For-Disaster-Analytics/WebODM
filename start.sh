@@ -61,15 +61,11 @@ fi
 
 echo Running migrations
 python manage.py migrate
+echo Syncing grids
+python manage.py syncgrids --watch &
 
 if [[ "$WO_DEFAULT_NODES" > 0 ]]; then
-    i=0
-    while [ $i -ne "$WO_DEFAULT_NODES" ]
-    do
-        i=$(($i+1))
-        NODE_HOST=$(python manage.py getnodehostname webodm_node-odm_$i)
-        python manage.py addnode $NODE_HOST 3000 --label node-odm-$i
-    done
+    python manage.py addnode node-odx-1 3000 --label node-odx-1
 fi
 
 if [[ "$WO_CREATE_MICMAC_PNODE" = "YES" ]]; then

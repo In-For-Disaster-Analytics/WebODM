@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 from webodm import settings
 
 import json
-from pyodm import Node
-from pyodm import exceptions
+from pyodx import Node
+from pyodx import exceptions
 from django.db.models import signals
 from datetime import timedelta
 import logging
@@ -82,11 +82,12 @@ class ProcessingNode(models.Model):
         return self.last_refreshed is not None and \
                self.last_refreshed >= timezone.now() - timedelta(minutes=settings.NODE_OFFLINE_MINUTES)
 
-    def update_node_info(self):
+    def update_node_info(self, save=True):
         """
         Retrieves information and options from the node API
         and saves it into the database.
 
+        :param save: whether to save the updated information into the database
         :returns: True if information could be updated, False otherwise
         """
         api_client = self.api_client(timeout=5)
@@ -132,9 +133,10 @@ class ProcessingNode(models.Model):
                     raise
 
             self.last_refreshed = timezone.now()
-            self.save()
+            if save:
+                self.save()
             return True
-        except exceptions.OdmError:
+        except exceptions.GenericError:
             return False
 
     def api_client(self, timeout=30, jwt_token=None):
@@ -314,7 +316,7 @@ def auto_update_node_info(sender, instance, created, **kwargs):
     if created:
         try:
             instance.update_node_info()
-        except exceptions.OdmError:
+        except exceptions.GenericError:
             pass
         except Exception as e:
             logger.warning("auto_update_node_info: " + str(e))

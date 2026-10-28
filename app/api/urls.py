@@ -3,12 +3,17 @@ from django.conf.urls import url, include
 from app.api.presets import PresetViewSet
 from app.plugins.views import api_view_handler
 from .projects import ProjectViewSet
-from .tasks import TaskViewSet, TaskDownloads, TaskThumbnail, TaskAssets, TaskBackup, TaskAssetsImport, TaskSafeTexturedModel
+from .tasks import TaskViewSet, TaskDownloads, TaskThumbnail, TaskAssets, TaskBackup, \
+  TaskAssetsImport, TaskExternalImportInit, TaskExternalImportUpload, TaskExternalImportCommit, TaskSafeTexturedModel, TaskRtc
+from .media import TaskMediaUpload, TaskMediaManage, TaskMediaDownload, TaskMediaThumbnail, TaskMediaList, TaskMediaGeoJSON, TaskVideoFlightPath
+from .splats import TaskSplatsDownload, TaskSplatsUpload, TaskSplatsDelete
+from .overlays import TaskOverlayConvert, TaskOverlaysSync, TaskOverlay, overlayStamp
+from .panorama import TaskPanoramaTiles
 from .imageuploads import Thumbnail, ImageDownload
 from .processingnodes import ProcessingNodeViewSet, ProcessingNodeOptionsView
 from .admin import AdminUserViewSet, AdminGroupViewSet, AdminProfileViewSet
 from rest_framework_nested import routers
-from rest_framework_jwt.views import obtain_jwt_token
+from .jwt import obtain_jwt_token, refresh_jwt_token
 from .tiler import TileJson, Bounds, Metadata, Tiles, Export
 from .potree import Scene, CameraView
 from .workers import CheckTask, GetTaskResult
@@ -16,14 +21,17 @@ from .users import UsersList
 # External auth removed - Tapis OAuth2 only
 # from .externalauth import ExternalTokenAuth
 from .tapis_oauth2 import (
-    TapisOAuth2AuthorizeView, 
-    TapisOAuth2CallbackView, 
+    TapisOAuth2AuthorizeView,
+    TapisOAuth2CallbackView,
     TapisOAuth2StatusView,
     TapisOAuth2RevokeView
 )
 from .tapis_storage import TapisStorageViewSet
 from .tapis_preferences import TapisUserPreferencesView, TapisDiscoveryControlView
 from .tas_allocations import TASAllocationsView
+from .workers import CancelTask
+from .users import UsersProfile
+from .groups import GroupsList
 from webodm import settings
 
 router = routers.DefaultRouter()
@@ -59,8 +67,33 @@ urlpatterns = [
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/textured_model/$', TaskSafeTexturedModel.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/assets/(?P<unsafe_asset_path>.+)$', TaskAssets.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/import$', TaskAssetsImport.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/import/external/init$', TaskExternalImportInit.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/import/external/upload$', TaskExternalImportUpload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/import/external/commit$', TaskExternalImportCommit.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/thumbnail$', TaskThumbnail.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/backup$', TaskBackup.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/rtc$', TaskRtc.as_view()),
+
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/overlays/(?P<overlay_id>[^/]+)\.geojson$', TaskOverlay.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/overlays/convert$', TaskOverlayConvert.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/overlays/sync$', TaskOverlaysSync.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/overlays/stamp$', overlayStamp),
+
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media.geojson$', TaskMediaGeoJSON.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/$', TaskMediaList.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/upload$', TaskMediaUpload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/download/(?P<filename>.+)$', TaskMediaDownload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/thumbnail/(?P<filename>.+)$', TaskMediaThumbnail.as_view()),
+
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/video/(?P<filename>[^/]+)/flightpath\.geojson$', TaskVideoFlightPath.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/manage/(?P<filename>.+)$', TaskMediaManage.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/media/panorama/(?P<filename>[^/]+)/tiles/(?P<level>\d+)/(?P<face>\w)/(?P<row>\d+)/(?P<col>\d+)\.jpg$', TaskPanoramaTiles.as_view()),
+
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/splats/download$', TaskSplatsDownload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/splats/download/(?P<celery_task_id>[^/]+)$', TaskSplatsDownload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/splats/upload$', TaskSplatsUpload.as_view()),
+    url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/splats/delete$', TaskSplatsDelete.as_view()),
+
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/images/thumbnail/(?P<image_filename>.+)$', Thumbnail.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/images/download/(?P<image_filename>.+)$', ImageDownload.as_view()),
 
@@ -69,15 +102,23 @@ urlpatterns = [
 
     url(r'workers/check/(?P<celery_task_id>.+)', CheckTask.as_view()),
     url(r'workers/get/(?P<celery_task_id>.+)', GetTaskResult.as_view()),
+    url(r'workers/cancel/(?P<celery_task_id>.+)', CancelTask.as_view()),
+
 
     url(r'^auth/', include('rest_framework.urls')),
-    url(r'^token-auth/', obtain_jwt_token),
+
+    url(r'^token-auth/refresh/?$', refresh_jwt_token),
+    url(r'^token-auth/?$', obtain_jwt_token),
+
 
     url(r'^plugins/(?P<plugin_name>[^/.]+)/(.*)$', api_view_handler),
+
+    url(r'^user/profile/$', UsersProfile.as_view())
 ]
 
 if settings.ENABLE_USERS_API:
     urlpatterns.append(url(r'users', UsersList.as_view()))
+    urlpatterns.append(url(r'groups', GroupsList.as_view()))
 
 # External auth disabled - Tapis OAuth2 only
 # if settings.EXTERNAL_AUTH_ENDPOINT != '':
@@ -89,7 +130,7 @@ urlpatterns.extend([
     url(r'^oauth2/tapis/callback/$', TapisOAuth2CallbackView.as_view(), name='tapis_oauth2_callback'),
     url(r'^oauth2/tapis/status/$', TapisOAuth2StatusView.as_view(), name='tapis_oauth2_status'),
     url(r'^oauth2/tapis/revoke/(?P<client_id>[^/]+)/$', TapisOAuth2RevokeView.as_view(), name='tapis_oauth2_revoke'),
-    
+
     # Tapis preferences and discovery control
     url(r'^tapis-preferences/$', TapisUserPreferencesView.as_view(), name='tapis_user_preferences'),
     url(r'^tapis-discovery/trigger/$', TapisDiscoveryControlView.as_view(), name='tapis_discovery_trigger'),

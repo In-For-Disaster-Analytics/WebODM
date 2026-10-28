@@ -120,3 +120,12 @@ except Exception as e:
         logger.info("Explicitly imported tapis_storage tasks")
     except Exception as e:
         logger.warning(f"Failed to import tapis_storage tasks: {e}")
+
+
+class MockAsyncBackend:
+    def store_result(self, celery_task_id, result, *args, **kwargs):
+        if result is not None:
+            MockAsyncResult.results[celery_task_id] = result
+
+
+MockAsyncResult.backend = MockAsyncBackend()

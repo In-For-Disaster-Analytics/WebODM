@@ -3,6 +3,7 @@ import '../css/Paginator.scss';
 import { Link, withRouter  } from 'react-router-dom';
 import SortPanel from './SortPanel';
 import Utils from '../classes/Utils';
+import Storage from '../classes/Storage';
 import { _ } from '../classes/gettext';
 
 let decodeSearch = (search) => {
@@ -17,7 +18,7 @@ class Paginator extends React.Component {
         
         this.state = {
             searchText: decodeSearch(q.search || ""),
-            sortKey: q.ordering || "-created_at"
+            sortKey: q.ordering || Storage.getItem("project_ordering") || "-created_at"
         }
 
         this.sortItems = [{
@@ -79,16 +80,29 @@ class Paginator extends React.Component {
     sortChanged = key => {
         this.setState({sortKey: key});
         setTimeout(() => {
+            Storage.setItem("project_ordering", key);
             this.props.history.push({search: this.getQueryForPage(this.props.currentPage)});
         }, 0);
     }
 
-    getQueryForPage = (num) => {
+    getPageSize = () => {
+        return this.props.itemsPerPage || 10;
+    }
+
+    getQueryForPage = (num, overridePageSize) => {
         return Utils.toSearchQuery({
             page: num,
+            page_size: overridePageSize !== undefined ? overridePageSize : this.getPageSize(),
             ordering: this.state.sortKey,
             search: this.state.searchText.replace(/#/g, ":")
         });
+    }
+
+    pageSizeChanged = size => {
+        const firstItem = (this.props.currentPage - 1) * this.getPageSize() + 1;
+        const equivalentPage = Math.ceil(firstItem / size);
+        Storage.setItem("project_page_size", size);
+        this.props.history.push({ search: this.getQueryForPage(equivalentPage, size) });
     }
 
     addTagAndSearch = e => {
@@ -111,19 +125,20 @@ class Paginator extends React.Component {
 
         let paginator = null;
         let clearSearch = null;
+        const pageSize = this.getPageSize();
         let toolbar = (<ul className={"pagination pagination-sm toolbar " + (totalItems == 0 && !searchText ? "hidden " : " ") + (totalItems / itemsPerPage <= 1 ? "no-margin" : "")}>
             <li className="btn-group" ref={domNode => { this.searchContainer = domNode; }}>
                 <a href="javascript:void(0);" className="dropdown-toggle"
-                        data-toggle-outside 
+                        data-toggle-outside
                         data-toggle="dropdown"
                         aria-haspopup="true" aria-expanded="false"
                         onClick={this.toggleSearch}
                         title={_("Search")}><i className="fa fa-search"></i></a>
                 <ul className="dropdown-menu dropdown-menu-right search-popup">
                     <li>
-                        <input type="text" 
+                        <input type="text"
                             ref={(domNode) => { this.searchInput = domNode}}
-                            className="form-control search theme-border-secondary-07" 
+                            className="form-control search theme-border-secondary-07"
                             placeholder={_("Search names, #tags or @user")}
                             spellCheck="false"
                             autoComplete="false"
@@ -137,6 +152,18 @@ class Paginator extends React.Component {
             <li className="btn-group">
                 <a href="javascript:void(0);" className="dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><i className="fa fa-sort-alpha-down" title={_("Sort")}></i></a>
                 <SortPanel selected={this.state.sortKey} items={this.sortItems} onChange={this.sortChanged} />
+            </li>
+            <li className="btn-group">
+                <a href="javascript:void(0);" className="dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title={_("Items per page")}><i className="fa fa-list-ol"></i></a>
+                <ul className="dropdown-menu dropdown-menu-right">
+                    {[10, 25, 50, 100].map(size => (
+                        <li key={size}>
+                            <a className="page-size" href="javascript:void(0);" onClick={() => this.pageSizeChanged(size)}>
+                                {size} {pageSize === size ? <i className="fa fa-check"></i> : ""}
+                            </a>
+                        </li>
+                    ))}
+                </ul>
             </li>
         </ul>);
 

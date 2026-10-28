@@ -277,7 +277,7 @@ class Metadata(TaskNestedView):
                 if has_alpha_band(src.dataset):
                     band_count -= 1
                 nodata = None
-                # Workaround for https://github.com/OpenDroneMap/WebODM/issues/894
+                # Workaround for https://github.com/WebODM/WebODM/issues/894
                 if tile_type == 'orthophoto':
                     nodata = 0
                 histogram_options = {"bins": 255, "range": hrange}
@@ -524,16 +524,15 @@ class Tiles(TaskNestedView):
                 elif has_alpha:
                     indexes = non_alpha_indexes(src.dataset)
 
-            # Workaround for https://github.com/OpenDroneMap/WebODM/issues/894
+            # Workaround for https://github.com/WebODM/WebODM/issues/894
             if nodata is None and tile_type == 'orthophoto':
                 nodata = 0
 
-            resampling = "nearest"
+            resampling = "bilinear"
             padding = 0
             tile_buffer = None
 
             if tile_type in ["dsm", "dtm"]:
-                resampling = "bilinear"
                 padding = 16
 
                 # WarpedVRT is really slow with compound CRSes

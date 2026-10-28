@@ -61,7 +61,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get -qq install -y -o APT::Keep-Downloaded-Packages=false nodejs
     # Python3.9, GDAL, PDAL, nginx, letsencrypt, psql
     apt-get install -y --no-install-recommends -o APT::Keep-Downloaded-Packages=false \
-        python$PYTHON_VERSION python$PYTHON_VERSION-venv python$PYTHON_VERSION-dev libpq-dev build-essential git libproj-dev gdal-bin pdal \
+        python$PYTHON_VERSION python$PYTHON_VERSION-venv python$PYTHON_VERSION-distutils python$PYTHON_VERSION-dev libpq-dev build-essential git libproj-dev gdal-bin pdal \
         libgdal-dev nginx certbot gettext-base cron postgresql-client gettext tzdata
     nginx_version="$(dpkg-query -W -f='${Version}' nginx)"
     dpkg --compare-versions "$nginx_version" ge "$MIN_NGINX_VERSION"
@@ -72,7 +72,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
     # Build entwine
     mkdir /staging && cd /staging
-    git clone -b 290 https://github.com/OpenDroneMap/entwine && cd entwine
+    git clone -b 290 https://github.com/WebODM/entwine && cd entwine
     mkdir build && cd build && cmake .. -DWITH_TESTS=OFF -DWITH_ZSTD=OFF -DCMAKE_INSTALL_PREFIX=/staging/entwine/build/install && make -j6 && make install
     cd /webodm
 EOT
@@ -87,7 +87,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     # the legacy geospatial packages in requirements.txt import it from their
     # setup.py, and pip's isolated build environments otherwise resolve a
     # newer setuptools that removed the module.
-    pip install pip==24.0 setuptools==69.5.1 wheel Cython==0.29.36 numpy==1.26.2
+    # Wheel 0.48 requires packaging>=24; WebODM still pins packaging==16.8.
+    pip install pip==24.0 setuptools==69.5.1 wheel==0.43.0 Cython==0.29.36 numpy==1.26.2
     # Install Python requirements, including correct Python GDAL bindings.
     # Keep builds in this venv so legacy setup.py packages see the pinned
     # setuptools instead of a newer isolated build environment.
@@ -142,7 +143,7 @@ RUN <<EOT
     # Setup cron
     chmod 0644 ./nginx/crontab
     ln -s ./nginx/crontab /var/spool/cron/crontabs/root
-    # NodeODM setup
+    # NodeODX setup
     chmod +x ./nginx/letsencrypt-autogen.sh
     ./nodeodm/setup.sh
     ./nodeodm/cleanup.sh
@@ -154,7 +155,8 @@ RUN <<EOT
     python manage.py collectstatic --noinput
     python manage.py rebuildplugins
     python manage.py translate build --safe
-    # Final cleanup
+    # Install ffmpeg
+    python /webodm/app/scripts/install_ffmpeg.py
     # Remove stale temp files
     rm -rf /tmp/* /var/tmp/*
     # Remove auto-generated secret key (happens on import of settings when none is defined)
@@ -200,6 +202,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Install webpack, webpack CLI (single install so webpack-cli links
     # against this exact webpack instead of vendoring its own newer copy)
     npm install --quiet -g webpack@5.89.0 webpack-cli@5.1.4
+    # Install splat-tools
+    curl -fsSL "https://github.com/uav4geo/Splat-Tools/releases/download/v1.0.3/splat-tools-1.0.3-$(uname -m)-linux.tar.gz" | tar -xz -C /usr/bin --strip-components=1 "splat-tools-1.0.3-$(uname -m)-linux/splat-tools" && /usr/bin/splat-tools --version
     # Cleanup of build requirements
     apt-get autoremove -y
     apt-get clean
@@ -210,6 +214,7 @@ EOT
 
 COPY --from=build /staging/entwine/build/install/bin/entwine /usr/bin/entwine
 COPY --from=build /staging/entwine/build/install/lib/libentwine* /usr/lib/
+COPY --from=build /usr/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=build $WORKDIR ./
 
 VOLUME /webodm/app/media

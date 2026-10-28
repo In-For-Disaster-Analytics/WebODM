@@ -1,13 +1,50 @@
 .model-view{
     position: relative;
+    width: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    .model-view-header{
+        display: flex;
+        justify-content: space-between;
+        flex: none;
+
+        .model-title{
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .model-type-selector{
+            flex: none;
+        }
+    }
+
+    #potree_render_area{
+        transition: none;
+    }
 
     #potree_render_area > canvas{
         width: 100% !important;
         height: 100% !important;
 
+        &:focus, &:focus-visible{
+            outline: none;
+        }
+
         &.pointer-cursor{
             cursor: pointer;
+        }
+    }
+
+    .asset-download-buttons{
+        button{
+            padding: 5px 9px;
+            i{
+                left: 0;
+                margin: 0;
+            }
         }
     }
 
@@ -22,6 +59,8 @@
         filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#4f4f4f', endColorstr='#161616',GradientType=1 );
     	position: relative;
     	padding: 0;
+        flex: 1 1 auto;
+        min-height: 0;
     }
     .dg{
 	    &.main{
@@ -77,13 +116,19 @@
         }
         .asset-download-buttons{
             .dropdown-menu{
-                left: -150px;
+                left: -125px;
             }
         }
 
         & > *{
             display: inline-block;
             margin-right: 8px;
+        }
+
+        @media screen and (max-width: 400px){
+            .unit-selector{
+                display: none;
+            }
         }
     }
 
@@ -110,6 +155,10 @@
     }
 
     #potree_menu{
+        h3{
+            box-shadow: none;
+        }
+
         input{
             color: buttontext;
         }
@@ -153,6 +202,10 @@
         height: calc(100% - 25px); 
         border: 2px solid rgba(0,0,0,0.5); 
         box-sizing: border-box;
+    }
+
+    &.sidebar-open #potree_sidebar_container{
+        z-index: 2;
     }
 
     #potree_sidebar_container{

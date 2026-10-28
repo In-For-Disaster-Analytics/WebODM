@@ -2,6 +2,7 @@ from django.conf.urls import url, include
 from django.views.i18n import JavaScriptCatalog
 
 from .views import app as app_views, public as public_views, dev as dev_views, tapis_auth
+from .views import oidc as oidc_views
 from .plugins.views import app_view_handler, root_url_patterns
 
 from app.boot import boot
@@ -47,6 +48,9 @@ urlpatterns = [
     url(r'^login/$', tapis_auth.tapis_login_view, name='tapis_login'),
     url(r'^logout/$', tapis_auth.tapis_logout_view, name='logout'),
     url(r'^auth/tapis/$', tapis_auth.tapis_login_redirect, name='tapis_login_redirect'),
+
+    url(r'^oidc/login/(?P<provider_index>[0-9]+)/$', oidc_views.oidc_login, name='oidc_login'),
+    url(r'^oidc/callback/$', oidc_views.oidc_callback, name='oidc_callback'),
 
     # TODO: add caching: https://docs.djangoproject.com/en/3.1/topics/i18n/translation/#note-on-performance
     url(r'^jsi18n/', JavaScriptCatalog.as_view(packages=['app']), name='javascript-catalog'),

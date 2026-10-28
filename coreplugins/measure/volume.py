@@ -26,6 +26,7 @@ def calc_volume(input_dem, pts=None, pts_epsg=None, geojson_polygon=None, decima
                 raise ValueError(f"{input_dem} does not have a CRS")
             crs = osr.SpatialReference()
             crs.ImportFromWkt(d.crs.to_wkt())
+            crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
             to_meter = get_rasterio_to_meters_factor(d)
 
         if pts is None and pts_epsg is None and geojson_polygon is not None:

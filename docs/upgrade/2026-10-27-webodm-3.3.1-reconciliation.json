@@ -1,0 +1,1824 @@
+{
+  "base": "a4501835a0544c1bcb3acca61e376e9e3a6a4b0b",
+  "target": "51c8f98b35de920d347631bcb99ed06180a6cafd",
+  "conflicts": [
+    "Dockerfile",
+    "README.md",
+    "app/api/tasks.py",
+    "app/api/urls.py",
+    "app/models/task.py",
+    "app/static/app/js/classes/plugins/API.js",
+    "app/static/app/js/components/EditPresetDialog.jsx",
+    "app/static/app/js/components/Map.jsx",
+    "app/static/app/js/components/ProjectListItem.jsx",
+    "app/templates/app/registration/login.html",
+    "app/urls.py",
+    "nodeodm/models.py",
+    "webodm.sh",
+    "webodm/settings.py",
+    "worker.sh",
+    "worker/celery.py"
+  ],
+  "decisions": [
+    [
+      ".env",
+      "explicit configuration/submodule decision"
+    ],
+    [
+      ".github/workflows/build-and-publish.yml",
+      "explicit configuration/submodule decision"
+    ],
+    [
+      ".github/workflows/test-docker.yml",
+      "explicit configuration/submodule decision"
+    ],
+    [
+      "app/migrations/0001_initial.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0004_auto_20170707_1014.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0007_auto_20170712_1319.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0011_auto_20171109_1237.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0031_auto_20210610_1850.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0048_task_media.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0049_profile_oidc_sub.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0050_basemap.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0051_init_basemaps.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0052_grid_shift_correction.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "app/migrations/0053_update_plugins.py",
+      "manual migration graph mapping"
+    ],
+    [
+      "coreplugins/align-service/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/process.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/signals.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/align-service/templates/index.html",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/README.md",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/ThirdParty.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/api_views.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/app_views.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/globals.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/model_tools.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/TaskView.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/AppContext.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/Fetcher.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/FormikErrorFocus.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/IonAssetButton.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/IonAssetButton.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/IonAssetLabel.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/IonField.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/TaskDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/TasksDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/UploadDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/components/UploadDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/defaults/AssetConfig.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/defaults/AssetType.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/defaults/SourceType.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/defaults/index.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/font.css",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/fonts/fa-cesium.svg",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/fonts/fa-cesium.ttf",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/fonts/fa-cesium.woff",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/package.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/utils/fetchCancelable.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/utils/getCookie.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/public/utils/index.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/templates/app.html",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/templates/load_buttons.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/cesiumion/uploader.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/README.md",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/api_views.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/app_views.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/ddb.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/ImportView.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/ImportView.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/ShareButton.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ConfigureNewTaskDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ConfigureNewTaskDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ErrorDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ErrorDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/SelectUrlDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/SelectUrlDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ShareDialog.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/components/ShareDialog.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/fonts/ddb.eot",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/fonts/ddb.svg",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/fonts/ddb.ttf",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/fonts/ddb.woff",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/fonts/ddb.woff2",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/package.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/public/style.css",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/templates/app.html",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/dronedb/templates/load_buttons.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/api.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/public/SLControls.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/public/SLControls.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/editshortlinks/public/main.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/public/main.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/gpslocation/public/package.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/osm-quickedit/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/osm-quickedit/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/osm-quickedit/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/osm-quickedit/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/osm-quickedit/public/main.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/public/Chart.min.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/projects-charts/templates/index.html",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/api.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/public/SLCheckbox.jsx",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/public/SLCheckbox.scss",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/shortlinks/public/main.js",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/.gitignore",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/__init__.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/config.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/disabled",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/email.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/manifest.json",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/plugin.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/public/style.css",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/signals.py",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "coreplugins/tasknotification/templates/index.html",
+      "retain bundled plugin until separately authorized plugin migration"
+    ],
+    [
+      "locale",
+      "explicit configuration/submodule decision"
+    ],
+    [
+      "nodeodm/external/NodeODM",
+      "explicit configuration/submodule decision"
+    ]
+  ],
+  "branch": "upgrade/webodm-3.3.1-tapis",
+  "worktree": "/Users/wmobley/Documents/Github/odm-suite/.worktrees/webodm-3.3.1",
+  "inventory": [
+    {
+      "id": "AUTH-01",
+      "title": "Tapis OAuth2 login and WebODM user provisioning",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/auth/tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/models/oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/views/tapis_auth.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/admin.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/templates/app/registration/login.html",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "AUTH-02",
+      "title": "Token normalization, expiration, warning, and reauthentication",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Jest TapisTokenManager tests passed; connected OAuth expiry/relogin remains pending.",
+      "files": [
+        {
+          "path": "app/models/oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/classes/TapisTokenManager.js",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/contexts/tapis.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/tests/test_tapis_oauth2_tokens.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "AUTH-03",
+      "title": "JWT-aware processing-node API adapter",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "11-test offline backend set passed, including authenticated submission/status/lifecycle and redaction checks; live asset transfer remains pending.",
+      "files": [
+        {
+          "path": "nodeodm/jwt_node_wrapper.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "nodeodm/models.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "NODE-01",
+      "title": "Cluster node registration, HTTPS, metadata, and visibility",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Consumer source reconciled; live node metadata/visibility checks remain pending.",
+      "files": [
+        {
+          "path": "connect_clusterodm.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "debug_clusterodm.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "fix_clusterodm.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "nodeodm/models.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/boot.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "NODE-02",
+      "title": "Authenticated cluster admin shortcut",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/views/app.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/templates/app/clusterodm_redirect.html",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/templates/app/logged_in_base.html",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/tests/test_clusterodm_admin.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "DATA-01",
+      "title": "Tapis flight discovery and project creation",
+      "disposition": "Preserve existing partial implementation; no completion claimed",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/services/tapis_storage.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tapis_storage.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/management/commands/discover_tapis_flights.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "DATA-02",
+      "title": "Discovery preferences and background task support",
+      "disposition": "Preserve existing partial implementation; no completion claimed",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/models/tapis_preferences.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tapis_preferences.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/tasks/tapis_storage.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "DATA-03",
+      "title": "Server-side file/directory import browser",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "ImportTaskPanel Jest smoke test passed; real directory imports remain pending.",
+      "files": [
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/ImportTaskPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/tests/test_api_task_import.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "DATA-04",
+      "title": "Shared-filesystem submission to processing nodes",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Mocked shared import_path submission passed; real Corral mapping remains pending.",
+      "files": [
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "nodeodm/models.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "nodeodm/jwt_node_wrapper.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "webodm/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "DATA-05",
+      "title": "Browser folder upload and chained folder selection",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "ProjectListItem directory-upload tests passed; browser folder-picker acceptance remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/components/ProjectListItem.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/tests/ProjectListItem.directoryUpload.test.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "DATA-06",
+      "title": "Large-image limits and temporary-directory resilience",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "webodm/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "HPC-01",
+      "title": "TAS allocation lookup and processing controls",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "EditTaskForm frontend tests passed; live allocation lookup remains pending.",
+      "files": [
+        {
+          "path": "app/services/tas_allocations.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/tas_allocations.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/components/EditTaskForm.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docker-compose.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/tests/test_tas_allocations.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "HPC-02",
+      "title": "Allocation-based access control and caching",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "New upload endpoint guard assignments checked; TAS permission behavior and outages need connected validation.",
+      "files": [
+        {
+          "path": "app/api/permissions.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/projects.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/services/tas_allocations.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "webodm/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "HPC-03",
+      "title": "Cluster-aware categorical processing options",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "EditPresetDialog/ProcessingNodeOption/EditTaskForm frontend suites passed; live option domains remain pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/classes/PresetUtils.js",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/components/EditTaskForm.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/EditPresetDialog.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/ProcessingNodeOption.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "HPC-04",
+      "title": "Customized default and LS6 Small processing presets",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/boot.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "TASK-01",
+      "title": "Offline/missing-task restart fallback",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Mocked authenticated remote restart passed; offline/purged/checkpoint flows remain pending.",
+      "files": [
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "local-dev/restart-nodeodm-smoke.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/components/TaskListItem.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "TASK-02",
+      "title": "Duplicate submission guard",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "worker/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "TASK-03",
+      "title": "Celery initialization and task discovery restructuring",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "worker/__init__.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "worker/celery.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/tasks/tapis_storage.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "MAP-01",
+      "title": "Interactive distance measurement",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Map and MapView suites passed; interactive measurement acceptance remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/components/Map.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/css/Map.scss",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "MAP-02",
+      "title": "Temporary WMS and XYZ tile overlays",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "TemporaryMapLayerDialog/LayersControlLayer tests passed; real WMS/XYZ interaction remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/components/TemporaryMapLayerDialog.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/components/Map.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/LayersControlLayer.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "MAP-03",
+      "title": "Raster tile/metadata caching and CPU-load reductions",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "docker-compose.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/components/Map.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tiler.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "VIEW-01",
+      "title": "EPT-first point-cloud loading with legacy fallback",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "ModelView production bundle compiled; EPT/legacy asset rendering remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/ModelView.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "VIEW-02",
+      "title": "HTTP byte-range asset responses",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Byte start/end/suffix/open-ended ranges and unsatisfiable ranges passed with closeable streams.",
+      "files": [
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "VIEW-03",
+      "title": "Potree v2 experiment and subsequent removal",
+      "disposition": "Preserve removed state; do not restore the experiment",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/ModelView.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/templates/app/3d_model_js.html",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "PLUGIN-01",
+      "title": "Upstream sensor connections and 2D overlays",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/upstream/plugin.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/upstream/api.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/upstream/public/app.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "PLUGIN-02",
+      "title": "Upstream sensor overlay in the 3D viewer",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Both Model and ModelView hook APIs compile in production bundle; live sensor overlay remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/classes/plugins/Model.js",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/static/app/js/classes/plugins/API.js",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/ModelView.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "coreplugins/upstream/public/model.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "CKAN-01",
+      "title": "Agent-assisted dataset metadata and publishing conversation",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/ckan/plugin.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/ckan/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/ckan/publisher.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/ckan/public/CKANPublishPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/ckan/README.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "CKAN-02",
+      "title": "Published resource links, visibility, and republish tracking",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/ckan/publisher.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/ckan/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/models/task.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/migrations/0047_task_ckan_url.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/tests/test_ckan_plugin.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-01",
+      "title": "Admin-only embeddings panel and site/visit storage",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/plugin.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/public/EmbeddingsPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-02",
+      "title": "Real tile candidates and map-based sample selection",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/tile_math.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/public/tileMath.js",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/public/EmbeddingsPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-03",
+      "title": "Inline label painting, class creation, and eraser",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/public/EmbeddingsPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-04",
+      "title": "Label Studio authentication and annotation webhooks",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/label_studio_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/tests.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-05",
+      "title": "LS6 embedding generation jobs",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "webodm/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docs/design/2026-07-22-geospatial-embeddings-classification.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-06",
+      "title": "Embedding job polling and Continue workflow",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/public/EmbeddingsPanel.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/tests.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "EMBED-07",
+      "title": "Embeddings workspace, diagnostics, STAC, GeoJSON import and training",
+      "disposition": "Preserve scaffolding; defer unfinished features",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "coreplugins/embeddings/views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/templates/index.html",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/templates/model_diagnostics.html",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/api_views.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "coreplugins/embeddings/embeddings_client.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "OPS-01",
+      "title": "Tapis/Corral deployment bootstrap and configuration",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "setup.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "setup_tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "scripts/setup_tapis_oauth2.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "scripts/entrypoint-tapis.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/boot.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docker-compose.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "OPS-02",
+      "title": "Corral service-account ownership and group inheritance",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "start.sh",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "worker.sh",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "setup.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "Dockerfile",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docker-compose.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "OPS-03",
+      "title": "Corral-safe backups, opt-in scheduling, and operator control",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "scripts/backup-ctl.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "setup.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "OPS-04",
+      "title": "Nginx logging, compression, worker and status tuning",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "nginx/nginx.conf.template",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docker-compose.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "start.sh",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "BUILD-01",
+      "title": "Custom source builds and update behavior",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Production webpack and clean container image builds passed; final-image dependency checks passed.",
+      "files": [
+        {
+          "path": "webodm.sh",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "Dockerfile",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "docker-compose.build.yml",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": ".dockerignore",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": ".gitmodules",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "BUILD-02",
+      "title": "Database/runtime dependency compatibility",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "requirements.txt",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "webodm/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "Dockerfile",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "db/Dockerfile",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "DEV-01",
+      "title": "Isolated local connected stack and restart smoke harness",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "local-dev/README.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "local-dev/docker-compose.local.yml",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "local-dev/up.sh",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "local-dev/restart-nodeodm-smoke.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/localdev.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/api/authentication.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "DEV-02",
+      "title": "Project intelligence and fork CI workflow removals",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": ".wolf/OPENWOLF.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": ".wolf/anatomy.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": ".claude/settings.json",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "CLAUDE.md",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        }
+      ]
+    },
+    {
+      "id": "UPGRADE-01",
+      "title": "Prior 3.1.2-era upstream reconciliation and migration preservation",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "63 historical migrations byte-identical; Django MigrationLoader has no conflicts and app leaf0057; autodetector has no model drift. No database migration executed.",
+      "files": [
+        {
+          "path": "app/migrations/0002_tapis_oauth2_models.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0045_merge_20250910_1747.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0046_auto_20250910_1902.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0047_task_ckan_url.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0048_profile_cluster_id.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0049_redirect.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "app/migrations/0050_task_wkt.py",
+          "present": true,
+          "unchanged_from_original_checkout": true
+        },
+        {
+          "path": "docs/design/2026-10-05-webodm-upstream-3-1-2-reconciliation.md",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "OPS-05",
+      "title": "Restore missing application logo after media loss",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/boot.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "UI-01",
+      "title": "Theme color normalization and invalid-value handling",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Template helper source retained; runtime theme rendering remains pending.",
+      "files": [
+        {
+          "path": "app/templatetags/settings.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    },
+    {
+      "id": "UI-02",
+      "title": "Processing UUID visibility and console diagnostics",
+      "disposition": "Preserve existing behavior/source; reconcile shared upstream files",
+      "evidence": "Referenced source paths retained; source comparison only. Feature-specific connected/runtime validation remains pending.",
+      "files": [
+        {
+          "path": "app/static/app/js/components/TaskListItem.jsx",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/static/app/js/css/TaskListItem.scss",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "app/api/tasks.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        },
+        {
+          "path": "nodeodm/jwt_node_wrapper.py",
+          "present": true,
+          "unchanged_from_original_checkout": false
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "frontend_suites": 56,
+    "frontend_tests": 71,
+    "offline_backend_tests": 11,
+    "production_webpack": "passed with upstream bundle/deprecation warnings",
+    "historical_migrations_unchanged": 63,
+    "app_migration_leaf": "0057_setting_organization_website",
+    "container_build": "passed",
+    "database_migrations": "not executed",
+    "connected_acceptance": "not executed",
+    "container_focused_backend_tests": 35,
+    "model_checks": "passed",
+    "url_checks": "passed with database-free plugin mocks",
+    "migration_autodetector": "no drift",
+    "migration_conflicts": {},
+    "docker_cache_cleanup": {
+      "approved": true,
+      "command": "docker builder prune --force",
+      "reclaimed": "7.188GB",
+      "images_containers_volumes_removed": false
+    },
+    "container_image": "webodm-upgrade-3.3.1:local",
+    "container_image_id": "sha256:20bfd0e6c8174b46c45826e26b4a39c4a7f1db40d0b7cd6045f8cb3496176695",
+    "container_frontend_suites": 56,
+    "container_frontend_tests": 71,
+    "pip_check": "passed; wheel pinned0.43.0",
+    "full_database_backend_suite": "not executed"
+  },
+  "additional_reconciliation_migrations": [
+    "0057_setting_organization_website"
+  ]
+}

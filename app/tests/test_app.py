@@ -108,7 +108,7 @@ class TestApp(BootTestCase):
         settings.DASHBOARD_ONBOARDING = False
         res = c.get('/dashboard/', follow=True)
         self.assertFalse('To create a map, press the' in res.content.decode("utf-8"))
-        settings.DASHBOARD_ONBOARDING  = True        
+        settings.DASHBOARD_ONBOARDING  = True
 
         # The API should return 3 nodes
         res = c.get('/api/processingnodes/')
@@ -120,6 +120,10 @@ class TestApp(BootTestCase):
         res = c.get('/dashboard/', follow=True)
         self.assertEqual(res.content.decode("utf-8").count('href="/processingnode/'), 1)
         self.assertTemplateUsed(res, 'app/dashboard.html')
+
+        # There's no og:graph tag (no thumb)
+        self.assertEqual(res.content.decode("utf-8").count('<meta property="og:image"'), 0)
+
 
         res = c.get('/api/processingnodes/')
         self.assertEqual(len(res.data), 1)
@@ -166,26 +170,34 @@ class TestApp(BootTestCase):
         def test_public_task_views(client, expectedStatus):
             res = client.get('/public/task/{}/map/'.format(task.id))
             self.assertTrue(res.status_code == expectedStatus)
+            if expectedStatus == status.HTTP_200_OK:
+                self.assertEqual(res.content.decode("utf-8").count('<meta property="og:image"'), 1)
+
             res = client.get('/public/task/{}/3d/'.format(task.id))
             self.assertTrue(res.status_code == expectedStatus)
+            if expectedStatus == status.HTTP_200_OK:
+                self.assertEqual(res.content.decode("utf-8").count('<meta property="og:image"'), 1)
+
             res = client.get('/public/task/{}/iframe/3d/'.format(task.id))
             self.assertTrue(res.status_code == expectedStatus)
             res = client.get('/public/task/{}/iframe/map/'.format(task.id))
             self.assertTrue(res.status_code == expectedStatus)
             res = client.get('/public/task/{}/json/'.format(task.id))
             self.assertTrue(res.status_code == expectedStatus)
-        
+
         # Cannot access certain public URLs unless a project is shared
         def test_public_project_views(client, expectedStatus):
             if project.public_id is not None:
                 res = client.get('/public/project/{}/map/'.format(project.public_id))
                 self.assertTrue(res.status_code == expectedStatus)
+                if expectedStatus == status.HTTP_200_OK:
+                    self.assertEqual(res.content.decode("utf-8").count('<meta property="og:image"'), 0)
                 res = client.get('/public/project/{}/iframe/map/'.format(project.public_id))
                 self.assertTrue(res.status_code == expectedStatus)
                 res = client.get('/api/projects/{}/tasks/{}/'.format(project.id, task.id))
                 self.assertTrue(res.status_code == expectedStatus)
 
-            
+
         test_public_task_views(c, status.HTTP_404_NOT_FOUND)
         test_public_project_views(c, status.HTTP_404_NOT_FOUND)
 
@@ -244,7 +256,7 @@ class TestApp(BootTestCase):
         settings.DEV = False
         self.assertEqual(c.get('/dev-tools/').status_code, status.HTTP_404_NOT_FOUND)
         settings.DEV = True
-        
+
         # Can access in dev mode
         self.assertEqual(c.get('/dev-tools/').status_code, status.HTTP_200_OK)
 

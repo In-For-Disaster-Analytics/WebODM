@@ -15,7 +15,6 @@ from app.models import Preset
 from app.models import Theme
 from app.plugins import init_plugins
 from nodeodm.models import ProcessingNode
-# noinspection PyUnresolvedReferencesapp/boot.py#L20
 from webodm.settings import MEDIA_ROOT
 from . import signals
 import logging
@@ -87,7 +86,7 @@ def boot():
             # Assign viewprocessing node object permission to default processing node (if present)
             # Otherwise non-root users will not be able to process
             try:
-                pnode = ProcessingNode.objects.get(hostname="node-odm-1")
+                pnode = ProcessingNode.objects.get(hostname="node-odx-1")
                 assign_perm('view_processingnode', default_group, pnode)
                 logger.info("Added view_processingnode permissions to default group")
             except ObjectDoesNotExist:

@@ -220,7 +220,8 @@ class TestApiTask(BootTransactionTestCase):
                 'dzuuid': 'abc-test',
                 'dzchunkindex': 0,
                 'dztotalchunkcount': 2,
-                'dzchunkbyteoffset': 0
+                'dzchunkbyteoffset': 0,
+                'public': True
             }, format="multipart")
             self.assertEqual(res.status_code, status.HTTP_200_OK)
             self.assertTrue(res.data['uploaded'])
@@ -231,7 +232,8 @@ class TestApiTask(BootTransactionTestCase):
                 'dzuuid': 'abc-test',
                 'dzchunkindex': 1,
                 'dztotalchunkcount': 2,
-                'dzchunkbyteoffset': chunk_1_size
+                'dzchunkbyteoffset': chunk_1_size,
+                'public': True
             }, format="multipart")
             self.assertEqual(res.status_code, status.HTTP_201_CREATED)
             chunk_2.close()
@@ -249,6 +251,7 @@ class TestApiTask(BootTransactionTestCase):
 
             self.assertEqual(file_import_task.import_url, "file://all.zip")
             self.assertEqual(file_import_task.images_count, 1)
+            self.assertTrue(file_import_task.public)
 
             # Prepare staged dataset in media/imports
             imports_dir = os.path.join(settings.MEDIA_ROOT, "imports")
