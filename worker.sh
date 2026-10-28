@@ -81,7 +81,8 @@ start(){
 	action=$1
 	echo "Starting worker using broker at $WO_BROKER"
 	umask 002
-	run_as_service python manage.py syncgrids
+	# Keep the one-shot setup in a subshell: run_as_service uses exec.
+	(run_as_service python manage.py syncgrids) || return $?
 	# Group-writable default so media files created by task processing stay g+rw
 	# for the corral allocation group.
 	run_as_service celery -A worker worker --autoscale $WEB_CONCURRENCY,2 --max-tasks-per-child 1000 --loglevel=warn > /dev/null
