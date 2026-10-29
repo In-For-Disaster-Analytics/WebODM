@@ -259,7 +259,9 @@ def _regular_file_within(path, root):
 def collect_inputs(task):
     """
     Validate a task's registered assets and return what must be snapshotted:
-    (relative path -> source path, images manifest entries)
+    (relative path -> source path, images manifest entries, de-duplicated shots document).
+    Like the training export, only the first shot of each image filename is kept;
+    OpenSfM can list the same image more than once (e.g. overlapping submodels).
     """
     task_root = task.task_path()
     sources = {}
@@ -274,12 +276,13 @@ def collect_inputs(task):
 
     with open(sources['cameras.json']) as f:
         cameras = {normalize_camera_id(k) for k in json.load(f)}
-    with open(sources['shots.geojson']) as f:
-        features = json.load(f).get('features', [])
+    with open(sources.pop('shots.geojson')) as f:
+        shots_doc = json.load(f)
 
     images = []
+    shots = []
     seen = set()
-    for feat in features:
+    for feat in shots_doc.get('features', []):
         props = feat.get('properties') or {}
         if not props.get('filename'):
             continue
@@ -287,7 +290,7 @@ def collect_inputs(task):
         if normalize_camera_id(props.get('camera', '')) not in cameras:
             raise OpenSplatError(_("Image %(name)s references an unknown camera.") % {'name': filename})
         if filename in seen:
-            raise OpenSplatError(_("Duplicate image filename %(name)s.") % {'name': filename})
+            continue
         seen.add(filename)
         if os.path.splitext(filename)[1].lower() not in ('.jpg', '.jpeg'):
             raise OpenSplatError(_("%(name)s is not a JPEG image.") % {'name': filename})
@@ -301,6 +304,7 @@ def collect_inputs(task):
         rel = 'images/' + filename
         sources[rel] = path
         images.append({'filename': filename, 'path': rel})
+        shots.append(feat)
 
     if not images:
         raise OpenSplatError(_("Task has no registered images."))
@@ -311,7 +315,8 @@ def collect_inputs(task):
     if total > settings.OPENSPLAT_MAX_INPUT_BYTES:
         raise OpenSplatError(_("Task input is too large for a training run."))
 
-    return sources, images
+    shots_doc['features'] = shots
+    return sources, images, shots_doc
 
 
 def stage_run_input(run):
@@ -320,7 +325,7 @@ def stage_run_input(run):
     Copies (no hard links) so later changes to the task cannot alter the run.
     """
     task = run.task
-    sources, images = collect_inputs(task)
+    sources, images, shots_doc = collect_inputs(task)
     rtc_offset = get_rtc_offset(task)
 
     input_dir = run_input_dir(run)
@@ -345,6 +350,9 @@ def stage_run_input(run):
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns) or \
                     os.path.getsize(dst) != before.st_size:
                 raise OpenSplatError(_("A task file changed while it was being copied. Try again."))
+
+        with open(os.path.join(input_dir, 'shots.geojson'), 'w') as f:
+            json.dump(shots_doc, f)
 
         manifest = {
             'schema_version': 1,

@@ -192,10 +192,7 @@ class TestSplatRuns(BootTestCase):
             opensplat.stage_run_input(run)
         self.assertFalse(os.path.exists(os.path.join(self.root, 'staging', str(run.id))))
 
-        # Duplicate filenames and unknown cameras
-        dup = self.make_task(self.project, filenames=("a.jpg", "a.jpg"))
-        with self.assertRaises(opensplat.OpenSplatError):
-            opensplat.collect_inputs(dup)
+        # Unknown cameras
         bad = self.make_task(self.project)
         with open(bad.get_asset_file_or_stream('cameras.json'), 'w') as f:
             json.dump({"other": {}}, f)
@@ -209,6 +206,18 @@ class TestSplatRuns(BootTestCase):
         with override_settings(OPENSPLAT_MAX_INPUT_BYTES=4):
             with self.assertRaises(opensplat.OpenSplatError):
                 opensplat.collect_inputs(self.make_task(self.project))
+
+    def test_stage_keeps_first_shot_of_duplicated_images(self):
+        task = self.make_task(self.project, filenames=("a.jpg", "a.jpg", "b.jpg"))
+        _sources, images, shots = opensplat.collect_inputs(task)
+        self.assertEqual([i['filename'] for i in images], ['a.jpg', 'b.jpg'])
+        self.assertEqual([f['properties']['filename'] for f in shots['features']], ['a.jpg', 'b.jpg'])
+
+        run = self.make_run(task=task)
+        input_dir = opensplat.stage_run_input(run)
+        with open(os.path.join(input_dir, 'shots.geojson')) as f:
+            staged = json.load(f)
+        self.assertEqual(len(staged['features']), 2)
 
     # --- submission ----------------------------------------------------
 
