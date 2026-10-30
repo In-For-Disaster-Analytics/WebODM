@@ -103,19 +103,36 @@ class TestNodeSplatModelAndConfig(NodeSplatBase):
 
     def test_is_configured_clusterodx(self):
         self.assertTrue(opensplat.is_configured())
-        for override in (dict(NODESPLAT_CLUSTER_URL=''), dict(NODESPLAT_GRANT_KEY_ID=''),
+        for override in (dict(NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL=''), dict(NODESPLAT_GRANT_KEY_ID=''),
                          dict(NODESPLAT_GRANT_SECRET=''), dict(NODESPLAT_GRANT_SECRET='short'),
                          dict(NODESPLAT_AUDIENCE=''), dict(NODESPLAT_CLUSTER_URL='ftp://x'),
                          dict(NODESPLAT_CLUSTER_URL='https://u:p@x.org')):
             with override_settings(**override):
                 self.assertFalse(opensplat.is_configured(), override)
 
+    def test_cluster_url_falls_back_to_clusterodm_url(self):
+        from app.services import nodesplat
+        with override_settings(NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL='https://clusterodm.example.org:3000'):
+            self.assertEqual(nodesplat.cluster_url(), 'https://clusterodm.example.org:3000')
+            self.assertTrue(opensplat.is_configured())
+        # A bare host follows the existing CLUSTERODM_URL convention
+        with override_settings(NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL='clusterodm.example.org'):
+            self.assertEqual(nodesplat.cluster_url(), 'https://clusterodm.example.org')
+        # An explicit value wins
+        with override_settings(NODESPLAT_CLUSTER_URL='https://splat.example.org', CLUSTERODM_URL='https://other.example.org'):
+            self.assertEqual(nodesplat.cluster_url(), 'https://splat.example.org')
+        # An unsafe fallback is rejected like an unsafe explicit URL
+        with override_settings(NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL='https://u:p@x.org'):
+            self.assertFalse(opensplat.is_configured())
+        with override_settings(NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL=''):
+            self.assertEqual(nodesplat.cluster_url(), '')
+
     def test_is_configured_clusterodx_does_not_need_tapis_roots(self):
         with override_settings(TAPIS_BASE_URL='', OPENSPLAT_STAGING_LS6_ROOT='', OPENSPLAT_OUTPUT_ARCHIVE_ROOT=''):
             self.assertTrue(opensplat.is_configured())
 
     def test_direct_backend_unchanged(self):
-        with override_settings(OPENSPLAT_BACKEND='direct_tapis', NODESPLAT_CLUSTER_URL='', NODESPLAT_GRANT_SECRET=''):
+        with override_settings(OPENSPLAT_BACKEND='direct_tapis', NODESPLAT_CLUSTER_URL='', CLUSTERODM_URL='', NODESPLAT_GRANT_SECRET=''):
             self.assertTrue(opensplat.is_configured())
             with override_settings(TAPIS_BASE_URL=''):
                 self.assertFalse(opensplat.is_configured())

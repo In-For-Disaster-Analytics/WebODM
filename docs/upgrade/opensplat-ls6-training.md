@@ -88,13 +88,13 @@ owner-only, per-attempt console in the Splats dialog.
 | Variable | Default | Purpose |
 |---|---|---|
 | `WO_OPENSPLAT_BACKEND` | `direct_tapis` | `clusterodx` enables the NodeSplat backend |
-| `WO_NODESPLAT_CLUSTER_URL` | empty | ClusterODX base URL (http/https, no credentials/query) |
+| `WO_NODESPLAT_CLUSTER_URL` | empty | Optional override. When empty, the existing `WO_CLUSTERODM_URL` is used (a bare host means `https://`). http/https only, no credentials/query |
 | `WO_NODESPLAT_PROFILE` | `nodesplat-v1` | Fixed profile id recorded on each run |
 | `WO_NODESPLAT_AUDIENCE` | empty | Must equal ClusterODX `splat.instanceId` |
 | `WO_NODESPLAT_GRANT_KEY_ID` | empty | Selects the verifier key in ClusterODX `splat.grantKeys` |
 | `WO_NODESPLAT_GRANT_SECRET` | empty | HMAC secret (at least 32 bytes); deployment secret, never committed |
 
-An empty URL, audience, key id or short secret disables ClusterODX starts. With this backend,
+With neither URL set, or an empty audience, key id or a short secret, ClusterODX starts are disabled. With this backend,
 `WO_OPENSPLAT_APP_ID` / `WO_OPENSPLAT_APP_VERSION` must match the NodeSplat app, because the
 result manifest's app identity is verified before import. Apply the additive migration
 `0059_nodesplat_backend` only after backing up the database. Logs: `GET

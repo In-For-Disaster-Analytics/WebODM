@@ -644,6 +644,7 @@ except ImportError:
 
 # NodeSplat via ClusterODX is opt-in; no production destination is assumed.
 OPENSPLAT_BACKEND = os.environ.get('WO_OPENSPLAT_BACKEND', 'direct_tapis')
+# Empty means: use CLUSTERODM_URL (the existing primary ClusterODM URL)
 NODESPLAT_CLUSTER_URL = os.environ.get('WO_NODESPLAT_CLUSTER_URL', '')
 NODESPLAT_PROFILE = os.environ.get('WO_NODESPLAT_PROFILE', 'nodesplat-v1')
 NODESPLAT_AUDIENCE = os.environ.get('WO_NODESPLAT_AUDIENCE', '')
