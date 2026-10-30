@@ -12,8 +12,15 @@ from django.conf import settings
 from .opensplat import OpenSplatError, SigninRequired, SubmissionUnknown, get_user_token
 
 
+def cluster_url():
+    """Explicit NodeSplat URL, else the primary ClusterODM URL WebODM already uses for its node."""
+    url = (settings.NODESPLAT_CLUSTER_URL or getattr(settings, 'CLUSTERODM_URL', '') or '').strip()
+    # Same convention as the existing CLUSTERODM_URL handling: a bare host means https
+    return url if not url or '://' in url else 'https://' + url
+
+
 def configured():
-    url = urlsplit(settings.NODESPLAT_CLUSTER_URL)
+    url = urlsplit(cluster_url())
     return bool(url.scheme in ('https', 'http') and url.netloc and not url.username and not url.password
                 and not url.query and not url.fragment and settings.NODESPLAT_AUDIENCE
                 and settings.NODESPLAT_GRANT_KEY_ID and len(settings.NODESPLAT_GRANT_SECRET.encode('utf-8')) >= 32)
@@ -28,7 +35,7 @@ class ClusterClient:
 
     def request(self, method, path, **kwargs):
         try:
-            response = requests.request(method, settings.NODESPLAT_CLUSTER_URL.rstrip('/') + path,
+            response = requests.request(method, cluster_url().rstrip('/') + path,
                 headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'},
                 timeout=settings.OPENSPLAT_HTTP_TIMEOUT, allow_redirects=False, **kwargs)
         except requests.RequestException:
