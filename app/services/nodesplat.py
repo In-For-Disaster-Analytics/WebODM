@@ -33,13 +33,23 @@ class ClusterClient:
         if not self.token:
             raise SigninRequired('Your Tapis session has expired. Please sign in again.')
 
-    def request(self, method, path, **kwargs):
+    def request(self, method, path, allow_missing=False, **kwargs):
         try:
             response = requests.request(method, cluster_url().rstrip('/') + path,
                 headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'},
                 timeout=settings.OPENSPLAT_HTTP_TIMEOUT, allow_redirects=False, **kwargs)
         except requests.RequestException:
             raise SubmissionUnknown('Cannot reach ClusterODX. Submission status may be unknown; refresh this attempt before starting another.')
+        if response.status_code == 404 and allow_missing:
+            # Only NodeSplat's own not_found counts as "no such run"; any other 404 (proxy, wrong service)
+            # is an unknown outcome and must never be read as permission to discard the run.
+            try:
+                error = response.json().get('error')
+            except (ValueError, AttributeError):
+                error = None
+            if isinstance(error, dict) and error.get('code') == 'not_found':
+                return None
+            raise SubmissionUnknown('ClusterODX returned an unexpected response. Refresh this attempt.')
         if response.status_code == 401:
             raise SigninRequired('Your Tapis session was rejected. Please sign in again.')
         if response.status_code == 403:
@@ -76,6 +86,10 @@ class ClusterClient:
             'run_id': str(run.id), 'source_task_id': str(run.task_id),
             'manifest_sha256': manifest_hash, 'profile_id': run.backend_profile,
             'settings': run.settings, 'grant': envelope})
+
+    def lookup(self, run_id):
+        """The ClusterODX task for this run, or None when ClusterODX never accepted it."""
+        return self.request('GET', '/splat/run/{}'.format(run_id), allow_missing=True)
 
     def sync(self, uuid):
         return self.request('POST', '/splat/task/{}/sync'.format(uuid), json={})

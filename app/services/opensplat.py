@@ -625,6 +625,22 @@ def cleanup_runs(days, dry_run=False):
 
 
 def cancel_run(run):
+    if run.backend == 'clusterodx' and not run.cluster_task_uuid and \
+            run.state in (SplatRun.SUBMITTING, SplatRun.SUBMISSION_UNKNOWN):
+        # The submission outcome is unknown: ask ClusterODX instead of guessing or re-submitting.
+        from .nodesplat import ClusterClient
+        remote = ClusterClient(run.user).lookup(run.id)
+        if remote is None:
+            # ClusterODX never accepted this run, so there is nothing remote to stop.
+            if SplatRun.objects.filter(pk=run.pk, state=run.state, cluster_task_uuid__isnull=True) \
+                    .update(state=SplatRun.CANCELED, error='', updated_at=timezone.now()):
+                shutil.rmtree(os.path.dirname(run_input_dir(run)), ignore_errors=True)
+            run.refresh_from_db()
+            return run
+        apply_cluster_status(run, remote)  # adopt the task id, then cancel through it below
+        run.refresh_from_db()
+        if not run.is_active:
+            return run
     if run.backend == 'clusterodx' and run.state not in (SplatRun.PREPARING, SplatRun.AWAITING_SIGNIN):
         if not run.is_active or run.state == SplatRun.IMPORTING or not run.cluster_task_uuid:
             raise ActiveRunExists(_("This run cannot be canceled right now. Refresh its status first."))
