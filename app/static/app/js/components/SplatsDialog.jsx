@@ -23,6 +23,8 @@ const LS6_STATE_LABELS = {
   submission_unknown: "Checking whether the job was submitted...",
   queued: "Queued on LS6",
   running: "Training on LS6...",
+  result_ready: "Finalizing training output...",
+  cancel_pending: "Canceling training...",
   importing: "Importing the trained model...",
   ready: "Training complete",
   failed: "Training failed",
@@ -61,6 +63,14 @@ class SplatsDialog extends React.Component {
       deleting: false,
       ls6: null,
       ls6Busy: false,
+      selectedRunId: null,
+      consoleOpen: false,
+      consoleLines: [],
+      consoleCursor: 0,
+      consoleFollow: true,
+      consoleError: "",
+      trainIterations: 100,
+      trainImageSize: 1920,
       signinUrl: null,
       checkingShots: true,
       nadirWarning: false,
@@ -263,6 +273,7 @@ class SplatsDialog extends React.Component {
   componentWillUnmount() {
     this._mounted = false;
     clearTimeout(this._ls6Timer);
+    clearTimeout(this._consoleTimer);
     ['dragenter', 'dragover', 'dragleave', 'drop', 'dragend'].forEach(eventName => {
       $(this.modal).off(eventName);
     });
@@ -399,6 +410,7 @@ class SplatsDialog extends React.Component {
       if (!this._mounted) return;
       this.setState({ls6: data, signinUrl: data.signin_url || null});
       this.scheduleLs6Sync(data.run);
+      if (this.state.consoleOpen) this.loadConsole();
     }); // Ignore errors: the action simply stays hidden
   }
 
@@ -410,7 +422,8 @@ class SplatsDialog extends React.Component {
 
   applyLs6Run = (run) => {
     const previous = this.state.ls6 && this.state.ls6.run;
-    this.setState({ls6: {...this.state.ls6, run}, ls6Busy: false});
+    this.setState(state => ({ls6: {...state.ls6, run, runs: [run].concat(
+      (state.ls6.runs || []).filter(r => r.id !== run.id))}, ls6Busy: false}));
     if (run.state === 'ready' && (!previous || previous.state !== 'ready')) this.handleModelAdded();
     this.scheduleLs6Sync(run);
   }
@@ -429,8 +442,12 @@ class SplatsDialog extends React.Component {
 
   handleTrainLs6 = () => {
     this.setState({ls6Busy: true, error: ""});
-    $.ajax({url: this.apiUrl("runs"), type: 'POST', dataType: 'json'})
-      .done(resp => { if (this._mounted) this.applyLs6Run(resp.run); })
+    $.ajax({url: this.apiUrl("runs"), type: 'POST', dataType: 'json',
+      data: {num_iterations: this.state.trainIterations, image_size: this.state.trainImageSize}})
+      .done(resp => { if (this._mounted) {
+        this.applyLs6Run(resp.run);
+        this.selectConsoleRun(resp.run.id);
+      } })
       .fail(e => {
         if (this._mounted) this.setState({ls6Busy: false, error: this.ls6Error(e)});
       });
@@ -446,6 +463,81 @@ class SplatsDialog extends React.Component {
       });
   }
 
+  consoleRun = () => {
+    const ls6 = this.state.ls6 || {};
+    return (ls6.runs || []).find(r => r.id === this.state.selectedRunId) || ls6.run;
+  }
+
+  selectConsoleRun = (id) => {
+    this._consoleGeneration = (this._consoleGeneration || 0) + 1;
+    clearTimeout(this._consoleTimer);
+    this.setState({selectedRunId: id, consoleLines: [], consoleCursor: 0,
+      consoleError: "", consoleFollow: true}, () => {
+      if (this.state.consoleOpen) this.loadConsole();
+    });
+  }
+
+  loadConsole = () => {
+    clearTimeout(this._consoleTimer);
+    const run = this.consoleRun();
+    if (!this._mounted || !this.state.consoleOpen || !run || !run.is_owner || run.backend !== 'clusterodx') return;
+    const generation = this._consoleGeneration || 0;
+    const cursor = this.state.consoleCursor;
+    $.getJSON(this.apiUrl(`runs/${run.id}/output`), {line: cursor}).done(data => {
+      if (!this._mounted || generation !== (this._consoleGeneration || 0) || !this.state.consoleOpen ||
+          !this.consoleRun() || this.consoleRun().id !== run.id) return;
+      this.setState(state => ({consoleLines: state.consoleLines.concat(data.lines || []).slice(-5000),
+        consoleCursor: data.next_line, consoleError: ""}), () => {
+        if (this.state.consoleFollow && this.consoleElement) this.consoleElement.scrollTop = this.consoleElement.scrollHeight;
+      });
+      if (!data.eof) this._consoleTimer = setTimeout(this.loadConsole,
+        data.next_line > cursor && (data.lines || []).length >= 500 ? 100 : 3000);
+    }).fail(e => {
+      if (!this._mounted || generation !== (this._consoleGeneration || 0) || !this.consoleRun() || this.consoleRun().id !== run.id) return;
+      this.setState({consoleError: this.ls6Error(e)});
+      if (!(e.responseJSON || {}).signin_required) this._consoleTimer = setTimeout(this.loadConsole, LS6_POLL_MS);
+    });
+  }
+
+  toggleConsole = () => {
+    this._consoleGeneration = (this._consoleGeneration || 0) + 1;
+    clearTimeout(this._consoleTimer);
+    this.setState(state => ({consoleOpen: !state.consoleOpen}), this.loadConsole);
+  }
+
+  renderTrainingConsole = () => {
+    const run = this.consoleRun();
+    if (!run || !run.is_owner || run.backend !== 'clusterodx') return null;
+    const runs = ((this.state.ls6 || {}).runs || [run]).filter(r => r.is_owner && r.backend === 'clusterodx');
+    return <div className="splat-console">
+      <button type="button" className="btn btn-default" onClick={this.toggleConsole} aria-expanded={this.state.consoleOpen}>
+        {this.state.consoleOpen ? _("Hide training logs") : _("Show training logs")}
+      </button>
+      {this.state.consoleOpen ? <div>
+        <label>{_("Training attempt")}
+          <select value={run.id} onChange={e => this.selectConsoleRun(e.target.value)}>
+            {runs.map(r => <option key={r.id} value={r.id}>
+              {r.created_at} — {(r.settings || {}).num_iterations} {_("iterations")} — {r.state}
+            </option>)}
+          </select>
+        </label>
+        <p>{_("Training logs are separate from photogrammetry logs.")}</p>
+        <button type="button" className="btn btn-default" onClick={() => {
+          if (navigator.clipboard) navigator.clipboard.writeText(this.state.consoleLines.join('\n')).catch(() => this.setState({consoleError: _("Cannot copy logs. Use Download logs.")}));
+          else this.setState({consoleError: _("Cannot copy logs. Use Download logs.")});
+        }}>{_("Copy visible logs")}</button>
+        <a className="btn btn-default" href={this.apiUrl(`runs/${run.id}/output`) + '?download=1'}>{_("Download logs")}</a>
+        <label><input type="checkbox" checked={this.state.consoleFollow} onChange={e => this.setState({consoleFollow: e.target.checked})} /> {_("Follow output")}</label>
+        {this.state.consoleError ? <p role="alert">{this.state.consoleError}</p> : null}
+        <pre ref={el => { this.consoleElement = el; }} tabIndex="0" aria-label={_("Training output")}
+          onScroll={e => { const el = e.currentTarget;
+            if (el.scrollHeight - el.scrollTop - el.clientHeight > 30 && this.state.consoleFollow) this.setState({consoleFollow: false});
+          }}>{this.state.consoleLines.length ? this.state.consoleLines.join('\n') : _("Waiting for worker output...")}</pre>
+        <small>{_("The console shows the latest 5000 loaded lines. Download logs for the full retained output.")}</small>
+      </div> : null}
+    </div>;
+  }
+
   renderLs6() {
     const { ls6, ls6Busy, signinUrl } = this.state;
     if (!ls6 || !ls6.enabled) return "";
@@ -454,7 +546,7 @@ class SplatsDialog extends React.Component {
     const run = ls6.run;
     const active = run && run.active;
     const canTrain = this.props.canEdit && hasPointCloud && hasCameras && !this.assetsInfo().missingImages;
-    const cancelable = this.props.canEdit && active && run.is_owner && ['preparing', 'awaiting_signin', 'queued', 'running'].indexOf(run.state) !== -1;
+    const cancelable = this.props.canEdit && active && run.is_owner && ['preparing', 'awaiting_signin', 'queued', 'running', 'result_ready'].indexOf(run.state) !== -1;
 
     return (
       <div className="ls6-training">
@@ -469,11 +561,20 @@ class SplatsDialog extends React.Component {
           <p>{signinUrl ? <a href={`${signinUrl}?redirect_after=${encodeURIComponent(window.location.pathname)}`}>{_("Sign in again")}</a> : _("Sign in again to continue.")}</p>
         : ""}
         {active && !run.is_owner ? <p>{_("Another user started this run.")}</p> : ""}
+        {run && run.phase ? <p>{_("Phase")}: {run.phase}
+          {run.progress ? ` (${run.progress.iteration} / ${run.progress.total})` : ''}</p> : null}
+        {canTrain ? <div className="splat-training-settings">
+          <label>{_("Iterations")} <input type="number" min="1" max="1000" value={this.state.trainIterations} disabled={active}
+            onChange={e => this.setState({trainIterations: e.target.value})} /></label>
+          <label>{_("Maximum image size")} <input type="number" min="0" max="4096" value={this.state.trainImageSize} disabled={active}
+            onChange={e => this.setState({trainImageSize: e.target.value})} /></label>
+        </div> : null}
         {canTrain ?
           <button type="button" className="btn btn-primary" onClick={this.handleTrainLs6} disabled={ls6Busy || active}>
             <i className={ls6Busy ? "fa fa-circle-notch fa-spin fa-fw" : "fa fa-bolt fa-fw"}></i> {_("Train on LS6")}
           </button>
         : ""}
+        {this.renderTrainingConsole()}
         {cancelable ?
           <button type="button" className="btn btn-default" onClick={this.handleCancelLs6} disabled={ls6Busy}>
             {_("Cancel")}

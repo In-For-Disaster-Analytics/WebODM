@@ -5,6 +5,7 @@ import os
 import shutil
 import stat
 import tempfile
+import uuid
 from datetime import timedelta
 
 import requests
@@ -58,9 +59,13 @@ class SubmissionUnknown(OpenSplatError):
 
 
 def is_configured():
-    return bool(settings.OPENSPLAT_ENABLED and settings.TAPIS_BASE_URL and
-                settings.OPENSPLAT_STAGING_ROOT and settings.OPENSPLAT_STAGING_LS6_ROOT and
-                settings.OPENSPLAT_OUTPUT_ROOT and settings.OPENSPLAT_OUTPUT_ARCHIVE_ROOT)
+    common = bool(settings.OPENSPLAT_ENABLED and settings.OPENSPLAT_STAGING_ROOT and
+                  settings.OPENSPLAT_OUTPUT_ROOT)
+    if settings.OPENSPLAT_BACKEND == 'clusterodx':
+        from .nodesplat import configured
+        return common and configured()
+    return bool(common and settings.OPENSPLAT_BACKEND == 'direct_tapis' and settings.TAPIS_BASE_URL and
+                settings.OPENSPLAT_STAGING_LS6_ROOT and settings.OPENSPLAT_OUTPUT_ARCHIVE_ROOT)
 
 
 def run_input_dir(run):
@@ -397,6 +402,8 @@ def find_result(run):
     Validate the run's archived output and return (ply_path, bytes).
     Success is never inferred without the job's own provenance manifest.
     """
+    if run.backend == 'clusterodx':
+        return find_cluster_result(run)
     out_dir = run_output_dir(run)
     ply = os.path.join(out_dir, 'opensplat-{}.ply'.format(run.tapis_job_uuid))
     manifest_path = os.path.join(out_dir, 'opensplat-{}.manifest.json'.format(run.tapis_job_uuid))
@@ -447,7 +454,9 @@ def create_run(task, user, data):
         Task.objects.select_for_update().get(pk=task.pk)
         if SplatRun.objects.filter(task=task, state__in=SplatRun.ACTIVE_STATES).exists():
             raise ActiveRunExists(_("This task already has a training run in progress."))
-        run = SplatRun.objects.create(task=task, user=user, settings=run_settings)
+        run = SplatRun.objects.create(task=task, user=user, settings=run_settings,
+            backend=settings.OPENSPLAT_BACKEND,
+            backend_profile=settings.NODESPLAT_PROFILE if settings.OPENSPLAT_BACKEND == 'clusterodx' else '')
 
     stage_splat_run.delay(str(run.id))
     return run
@@ -472,6 +481,10 @@ def submit_run(run_id):
             SplatRun.objects.filter(pk=run.pk, state=SplatRun.PREPARING).update(
                 snapshot_path=run.snapshot_path, output_path=run.output_path)
             os.makedirs(run.output_path, exist_ok=True)
+
+        if run.backend == 'clusterodx':
+            submit_cluster_run(run)
+            return
 
         try:
             client = TapisJobsClient(run.user)
@@ -526,6 +539,9 @@ def sync_run(run):
     """
     from worker.tasks import stage_splat_run
 
+    if run.backend == 'clusterodx':
+        return sync_cluster_run(run)
+
     if run.state == SplatRun.AWAITING_SIGNIN:
         if get_user_token(run.user)[0] is None:
             raise SigninRequired(_("Your Tapis session has expired. Please sign in again."))
@@ -573,7 +589,8 @@ def reconcile_runs():
     if not is_configured():
         return
 
-    states = (SplatRun.QUEUED, SplatRun.RUNNING, SplatRun.SUBMISSION_UNKNOWN, SplatRun.IMPORTING)
+    states = (SplatRun.QUEUED, SplatRun.RUNNING, SplatRun.SUBMISSION_UNKNOWN, SplatRun.IMPORTING,
+              SplatRun.RESULT_READY, SplatRun.CANCEL_PENDING)
     for run in SplatRun.objects.filter(state__in=states).select_related('user', 'task'):
         try:
             sync_run(run)
@@ -608,6 +625,15 @@ def cleanup_runs(days, dry_run=False):
 
 
 def cancel_run(run):
+    if run.backend == 'clusterodx' and run.state not in (SplatRun.PREPARING, SplatRun.AWAITING_SIGNIN):
+        if not run.is_active or run.state == SplatRun.IMPORTING or not run.cluster_task_uuid:
+            raise ActiveRunExists(_("This run cannot be canceled right now. Refresh its status first."))
+        from .nodesplat import ClusterClient
+        # Persist cancellation intent before contacting the remote service.
+        SplatRun.objects.filter(pk=run.pk, state__in=SplatRun.ACTIVE_STATES).update(state=SplatRun.CANCEL_PENDING)
+        apply_cluster_status(run, ClusterClient(run.user).cancel(run.cluster_task_uuid))
+        run.refresh_from_db()
+        return run
     if run.state in (SplatRun.PREPARING, SplatRun.AWAITING_SIGNIN):
         if SplatRun.objects.filter(pk=run.pk, state=run.state).update(state=SplatRun.CANCELED):
             shutil.rmtree(os.path.dirname(run_input_dir(run)), ignore_errors=True)
@@ -641,7 +667,8 @@ def import_run(run_id):
         tmp_copy = tempfile.mktemp('_splats.ply', dir=wo_settings.MEDIA_TMP)
         shutil.copyfile(ply, tmp_copy)
         # Re-verify the private copy so a swap after validation cannot slip through
-        manifest = os.path.join(run_output_dir(run), 'opensplat-{}.manifest.json'.format(run.tapis_job_uuid))
+        manifest = os.path.join(run_output_dir(run), 'manifest.json' if run.backend == 'clusterodx' else
+                                'opensplat-{}.manifest.json'.format(run.tapis_job_uuid))
         with open(manifest) as f:
             if json.load(f)['output']['sha256'] != _hash_file(tmp_copy):
                 raise OpenSplatError(_("The training result failed integrity verification."))
@@ -668,6 +695,9 @@ def run_status(run, is_owner):
         'active': run.is_active,
         'error': run.error,
         'settings': run.settings,
+        'backend': run.backend,
+        'phase': run.phase,
+        'progress': run.progress,
         'created_at': run.created_at,
         'updated_at': run.updated_at,
         'is_owner': is_owner,
@@ -679,3 +709,130 @@ def run_status(run, is_owner):
 
 class ActiveRunExists(OpenSplatError):
     pass
+
+
+def apply_cluster_status(run, data):
+    """Accept only a response bound to this immutable run/task."""
+    try:
+        task_uuid = uuid.UUID(str(data['uuid']))
+    except (ValueError, KeyError, TypeError):
+        raise SubmissionUnknown(_("Invalid NodeSplat task response. Refresh this attempt."))
+    if data.get('run_id', str(run.id)) != str(run.id) or (run.cluster_task_uuid and run.cluster_task_uuid != task_uuid):
+        raise OpenSplatError(_("The training response does not match this run."))
+    remote_state = data.get('state')
+    allowed = (SplatRun.PREPARING, SplatRun.SUBMITTING, SplatRun.SUBMISSION_UNKNOWN, SplatRun.QUEUED,
+               SplatRun.RUNNING, SplatRun.RESULT_READY, SplatRun.CANCEL_PENDING, SplatRun.FAILED, SplatRun.CANCELED, SplatRun.READY)
+    if remote_state not in allowed:
+        raise OpenSplatError(_("Invalid training state."))
+    state = SplatRun.IMPORTING if remote_state == SplatRun.READY else remote_state
+    values = {'cluster_task_uuid': task_uuid, 'state': state, 'phase': str(data.get('phase') or '')[:64],
+              'error': '', 'updated_at': timezone.now()}
+    job = data.get('tapis_job_uuid')
+    if job:
+        if not isinstance(job, str) or len(job) > 64 or (run.tapis_job_uuid and run.tapis_job_uuid != job):
+            raise OpenSplatError(_("The training job does not match this run."))
+        values['tapis_job_uuid'] = job
+    if state == SplatRun.IMPORTING and not (job or run.tapis_job_uuid):
+        raise OpenSplatError(_("Training completed without a job identifier."))
+    progress = data.get('progress')
+    values['progress'] = progress if (isinstance(progress, dict) and
+        all(isinstance(progress.get(k), int) for k in ('iteration', 'total')) and
+        0 <= progress['iteration'] <= progress['total'] <= MAX_ITERATIONS) else None
+    if state == SplatRun.FAILED:
+        values['error'] = _("Training failed. Open the training logs for details.")
+    changed = SplatRun.objects.filter(pk=run.pk, state__in=tuple(s for s in SplatRun.ACTIVE_STATES if s != SplatRun.IMPORTING)).update(**values)
+    if changed and state == SplatRun.IMPORTING:
+        from worker.tasks import import_splat_run
+        import_splat_run.delay(str(run.id))
+    run.refresh_from_db()
+
+
+def submit_cluster_run(run):
+    from .nodesplat import ClusterClient
+    try:
+        client = ClusterClient(run.user)
+    except SigninRequired:
+        SplatRun.objects.filter(pk=run.pk, state=SplatRun.PREPARING).update(state=SplatRun.AWAITING_SIGNIN)
+        return
+    if not SplatRun.objects.filter(pk=run.pk, state=SplatRun.PREPARING).update(state=SplatRun.SUBMITTING):
+        return
+    try:
+        data = client.submit(run, _hash_file(os.path.join(run_input_dir(run), MANIFEST_NAME)))
+        apply_cluster_status(run, data)
+    except SubmissionUnknown as e:
+        _fail(run, str(e), SplatRun.SUBMISSION_UNKNOWN)
+    except SigninRequired as e:
+        # Acceptance is unknown; preserve this attempt for idempotent recovery.
+        _fail(run, str(e), SplatRun.SUBMISSION_UNKNOWN)
+
+
+def sync_cluster_run(run):
+    from .nodesplat import ClusterClient
+    from worker.tasks import stage_splat_run
+    if run.state == SplatRun.IMPORTING:
+        requeue_stale_import(run)
+    elif run.state == SplatRun.AWAITING_SIGNIN:
+        ClusterClient(run.user)
+        if SplatRun.objects.filter(pk=run.pk, state=SplatRun.AWAITING_SIGNIN).update(state=SplatRun.PREPARING):
+            stage_splat_run.delay(str(run.id))
+    elif run.is_active and run.state != SplatRun.PREPARING:
+        client = ClusterClient(run.user)
+        if not run.cluster_task_uuid:
+            # Same signed immutable run is idempotent at ClusterODX, including after timeout.
+            data = client.submit(run, _hash_file(os.path.join(run_input_dir(run), MANIFEST_NAME)))
+        else:
+            data = client.sync(run.cluster_task_uuid)
+        apply_cluster_status(run, data)
+    run.refresh_from_db()
+    return run
+
+
+def find_cluster_result(run):
+    root = run_output_dir(run)
+    ply, st = _regular_file_within(os.path.join(root, 'model.ply'), root)
+    manifest_path, mst = _regular_file_within(os.path.join(root, 'manifest.json'), root)
+    if st.st_size > settings.OPENSPLAT_MAX_RESULT_BYTES or mst.st_size > MAX_METADATA_BYTES:
+        raise OpenSplatError(_("The training result is too large."))
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    expected = {'schema_version': 1, 'run_id': str(run.id), 'source_task_id': str(run.task_id),
+                'cluster_task_uuid': str(run.cluster_task_uuid), 'tapis_job_uuid': run.tapis_job_uuid,
+                'profile_id': run.backend_profile, 'settings': run.settings}
+    if any(manifest.get(k) != v for k, v in expected.items()) or not run.tapis_job_uuid:
+        raise OpenSplatError(_("The training result does not match this run."))
+    app = manifest.get('app') or {}
+    if app.get('id') != settings.OPENSPLAT_APP_ID or app.get('version') != settings.OPENSPLAT_APP_VERSION:
+        raise OpenSplatError(_("The training result belongs to a different application."))
+    output = manifest.get('output') or {}
+    if output.get('bytes') != st.st_size or output.get('sha256') != _hash_file(ply):
+        raise OpenSplatError(_("The training result failed integrity verification."))
+    return ply, st.st_size
+
+
+def run_output(run, line):
+    if run.backend != 'clusterodx' or not run.cluster_task_uuid:
+        return {'run_id': str(run.id), 'lines': [], 'from_line': line, 'next_line': line,
+                'truncated': False, 'eof': not run.is_active}
+    from .nodesplat import ClusterClient
+    data = ClusterClient(run.user).output(run.cluster_task_uuid, line)
+    data['run_id'] = str(run.id)
+    return data
+
+
+def download_run_log(run):
+    """Read the fixed run-local retained console, without altering any log."""
+    if run.backend != 'clusterodx':
+        raise OpenSplatError(_("This attempt does not have a NodeSplat console."))
+    root = run_output_dir(run)
+    try:
+        path, st = _regular_file_within(os.path.join(root, 'console.txt'), root)
+    except OSError:
+        raise OpenSplatError(_("Worker logs are not available yet."))
+    limit = 50 * 1024 * 1024 + 1024
+    if st.st_size > limit:
+        raise OpenSplatError(_("Training log exceeds its retention limit."))
+    with open(path, 'rb') as f:
+        value = f.read(limit + 1)
+    if len(value) > limit:
+        raise OpenSplatError(_("Training log exceeds its retention limit."))
+    return value

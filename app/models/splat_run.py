@@ -18,12 +18,14 @@ class SplatRun(models.Model):
     SUBMISSION_UNKNOWN = 'submission_unknown'
     QUEUED = 'queued'
     RUNNING = 'running'
+    RESULT_READY = 'result_ready'
+    CANCEL_PENDING = 'cancel_pending'
     IMPORTING = 'importing'
     READY = 'ready'
     FAILED = 'failed'
     CANCELED = 'canceled'
 
-    ACTIVE_STATES = (PREPARING, AWAITING_SIGNIN, SUBMITTING, SUBMISSION_UNKNOWN, QUEUED, RUNNING, IMPORTING)
+    ACTIVE_STATES = (PREPARING, AWAITING_SIGNIN, SUBMITTING, SUBMISSION_UNKNOWN, QUEUED, RUNNING, RESULT_READY, CANCEL_PENDING, IMPORTING)
     STATE_CHOICES = tuple((s, s) for s in ACTIVE_STATES + (READY, FAILED, CANCELED))
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -31,6 +33,11 @@ class SplatRun(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='splat_runs',
                              help_text="The user who submitted the run; only they can sync or cancel it")
     state = models.CharField(max_length=24, choices=STATE_CHOICES, default=PREPARING, db_index=True)
+    backend = models.CharField(max_length=24, default='direct_tapis')
+    cluster_task_uuid = models.UUIDField(null=True, blank=True)
+    backend_profile = models.CharField(max_length=100, blank=True, default='')
+    phase = models.CharField(max_length=64, blank=True, default='')
+    progress = JSONField(null=True, blank=True)
     tapis_job_uuid = models.CharField(max_length=64, blank=True, default='')
     settings = JSONField(default=dict, blank=True)
     snapshot_path = models.CharField(max_length=1024, blank=True, default='')
@@ -44,7 +51,7 @@ class SplatRun(models.Model):
         ordering = ('-created_at', )
         constraints = [
             # At most one active run per task, enforced by the database
-            models.UniqueConstraint(fields=['task'], condition=Q(state__in=('preparing', 'awaiting_signin', 'submitting', 'submission_unknown', 'queued', 'running', 'importing')),
+            models.UniqueConstraint(fields=['task'], condition=Q(state__in=('preparing', 'awaiting_signin', 'submitting', 'submission_unknown', 'queued', 'running', 'result_ready', 'cancel_pending', 'importing')),
                                     name='one_active_splat_run_per_task'),
         ]
 
