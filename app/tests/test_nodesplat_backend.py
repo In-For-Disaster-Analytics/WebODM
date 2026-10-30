@@ -397,12 +397,67 @@ class TestCancelClusterRun(NodeSplatBase):
             self.assertEqual(opensplat.cancel_run(run).state, SplatRun.CANCELED)
 
     def test_cancel_refused_while_importing_or_without_task(self):
-        for kwargs in ({'state': SplatRun.IMPORTING, 'cluster_task_uuid': uuid.uuid4()}, {'state': SplatRun.SUBMISSION_UNKNOWN}):
-            run = self.make_run(**kwargs)
-            with self.assertRaises(opensplat.OpenSplatError):
+        run = self.make_run(state=SplatRun.IMPORTING, cluster_task_uuid=uuid.uuid4())
+        with self.assertRaises(opensplat.OpenSplatError):
+            opensplat.cancel_run(run)
+
+    def _client_patch(self):
+        return mock.patch.object(nodesplat, 'get_user_token', return_value=('tok', mock.Mock()))
+
+    def test_cancel_unknown_submission_never_accepted_by_cluster(self):
+        for state in (SplatRun.SUBMITTING, SplatRun.SUBMISSION_UNKNOWN):
+            run = self.make_run(state=state)
+            with self._client_patch(), mock.patch.object(nodesplat.ClusterClient, 'lookup', return_value=None) as lookup, \
+                    mock.patch.object(nodesplat.ClusterClient, 'cancel') as cancel:
+                result = opensplat.cancel_run(run)
+            lookup.assert_called_once()
+            cancel.assert_not_called()
+            self.assertEqual(result.state, SplatRun.CANCELED)
+            self.assertFalse(result.is_active)
+        # The run no longer blocks a new attempt on the same task
+        self.make_run(state=SplatRun.PREPARING)
+
+    def test_cancel_unknown_submission_adopts_and_cancels_the_cluster_task(self):
+        cu = uuid.uuid4()
+        run = self.make_run(state=SplatRun.SUBMISSION_UNKNOWN)
+        found = {'uuid': str(cu), 'run_id': str(run.id), 'state': 'queued', 'tapis_job_uuid': JOB}
+        with self._client_patch(), mock.patch.object(nodesplat.ClusterClient, 'lookup', return_value=found), \
+                mock.patch.object(nodesplat.ClusterClient, 'cancel', autospec=True,
+                                  return_value={'uuid': str(cu), 'state': 'cancel_pending', 'cancel_pending': True}) as cancel:
+            result = opensplat.cancel_run(run)
+        cancel.assert_called_once()
+        self.assertEqual(cancel.call_args[0][1], cu)
+        self.assertEqual(result.cluster_task_uuid, cu)
+        self.assertEqual(result.state, SplatRun.CANCEL_PENDING)
+
+    def test_cancel_unknown_submission_keeps_run_when_cluster_unreachable(self):
+        run = self.make_run(state=SplatRun.SUBMISSION_UNKNOWN)
+        with self._client_patch(), mock.patch.object(nodesplat.ClusterClient, 'lookup',
+                                                     side_effect=opensplat.SubmissionUnknown('down')):
+            with self.assertRaises(opensplat.SubmissionUnknown):
                 opensplat.cancel_run(run)
-            run.state = SplatRun.FAILED
-            run.save()
+        run.refresh_from_db()
+        self.assertEqual(run.state, SplatRun.SUBMISSION_UNKNOWN)
+        self.assertTrue(run.is_active)
+
+    def test_lookup_only_trusts_the_nodesplat_not_found_shape(self):
+        client = nodesplat.ClusterClient.__new__(nodesplat.ClusterClient)
+        client.token, client.client, client.user = 'tok', mock.Mock(), self.user
+
+        def response(status, body):
+            r = mock.Mock(status_code=status, ok=status < 400)
+            r.json.return_value = body
+            return r
+        with mock.patch.object(nodesplat.requests, 'request',
+                               return_value=response(404, {'error': {'code': 'not_found'}, 'uuid': None})):
+            self.assertIsNone(client.lookup(uuid.uuid4()))
+        # A 404 from anything else (proxy, wrong service) is an unknown outcome, never "not found"
+        for body in ({'error': 'Cannot handle /splat/run/x'}, {'other': 1}, {'error': {'code': 'disabled'}}):
+            with mock.patch.object(nodesplat.requests, 'request', return_value=response(404, body)):
+                with self.assertRaises(opensplat.SubmissionUnknown):
+                    client.lookup(uuid.uuid4())
+        with mock.patch.object(nodesplat.requests, 'request', return_value=response(200, {'uuid': 'x', 'state': 'queued'})):
+            self.assertEqual(client.lookup(uuid.uuid4())['state'], 'queued')
 
 
 class TestRunOutputApi(NodeSplatBase):

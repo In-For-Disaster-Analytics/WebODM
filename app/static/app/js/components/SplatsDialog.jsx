@@ -546,7 +546,7 @@ class SplatsDialog extends React.Component {
     const run = ls6.run;
     const active = run && run.active;
     const canTrain = this.props.canEdit && hasPointCloud && hasCameras && !this.assetsInfo().missingImages;
-    const cancelable = this.props.canEdit && active && run.is_owner && ['preparing', 'awaiting_signin', 'queued', 'running', 'result_ready'].indexOf(run.state) !== -1;
+    const cancelable = this.props.canEdit && active && run.is_owner && ['preparing', 'awaiting_signin', 'submitting', 'submission_unknown', 'queued', 'running', 'result_ready', 'cancel_pending'].indexOf(run.state) !== -1;
 
     return (
       <div className="ls6-training">
