@@ -641,3 +641,11 @@ try:
     from .settings_override import *
 except ImportError:
     pass
+
+# NodeSplat via ClusterODX is opt-in; no production destination is assumed.
+OPENSPLAT_BACKEND = os.environ.get('WO_OPENSPLAT_BACKEND', 'direct_tapis')
+NODESPLAT_CLUSTER_URL = os.environ.get('WO_NODESPLAT_CLUSTER_URL', '')
+NODESPLAT_PROFILE = os.environ.get('WO_NODESPLAT_PROFILE', 'nodesplat-v1')
+NODESPLAT_AUDIENCE = os.environ.get('WO_NODESPLAT_AUDIENCE', '')
+NODESPLAT_GRANT_KEY_ID = os.environ.get('WO_NODESPLAT_GRANT_KEY_ID', '')
+NODESPLAT_GRANT_SECRET = os.environ.get('WO_NODESPLAT_GRANT_SECRET', '')

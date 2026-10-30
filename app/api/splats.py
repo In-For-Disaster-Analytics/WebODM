@@ -9,6 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import status, exceptions, parsers
 from rest_framework.response import Response
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.http import HttpResponse
 
 from app import splats
 from app.models import SplatRun
@@ -207,6 +208,7 @@ class TaskSplatsRuns(TaskNestedView):
         return Response({
             'enabled': opensplat.is_configured(),
             'signin_url': opensplat.signin_url(),
+            'runs': [opensplat.run_status(r, r.user_id == request.user.id) for r in task.splat_runs.all()[:50]],
             'run': opensplat.run_status(run, run.user_id == request.user.id) if run else None
         }, status=status.HTTP_200_OK)
 
@@ -262,3 +264,32 @@ class TaskSplatsRunSync(TaskSplatsRunAction):
 
 class TaskSplatsRunCancel(TaskSplatsRunAction):
     action = 'cancel'
+
+
+class TaskSplatsRunOutput(TaskNestedView):
+    """Read-only, task-scoped console. Never writes the photogrammetry log."""
+    def get(self, request, pk=None, project_pk=None, run_pk=None):
+        task = self.get_and_check_task(request, pk)
+        try:
+            run = task.splat_runs.select_related('user').get(pk=run_pk)
+        except (ObjectDoesNotExist, DjangoValidationError):
+            raise exceptions.NotFound()
+        if run.user_id != request.user.id:
+            raise exceptions.PermissionDenied(_("Only the user who started this run can read its logs."))
+        try:
+            line = int(request.query_params.get('line', '0'))
+            if not 0 <= line <= 10000000:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise exceptions.ValidationError(_("Invalid log cursor"))
+        try:
+            if request.query_params.get('download') == '1':
+                text = opensplat.download_run_log(run)
+                response = HttpResponse(text, content_type='text/plain; charset=utf-8')
+                response['Content-Disposition'] = 'attachment; filename="nodesplat-{}.txt"'.format(run.id)
+                response['Cache-Control'] = 'private, no-store'
+                return response
+            data = opensplat.run_output(run, line)
+        except opensplat.OpenSplatError as e:
+            return _opensplat_error_response(e)
+        return Response(data)

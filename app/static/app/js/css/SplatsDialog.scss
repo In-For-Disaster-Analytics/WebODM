@@ -107,3 +107,12 @@
     }
   }
 }
+
+.splat-console {
+  margin-top: 1em;
+  pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #20252b; color: #eee; }
+  label { margin: .5em; }
+  select { max-width: 100%; }
+}
+.splat-training-settings label { margin-right: 1em; }
+.splat-training-settings input { width: 7em; }
