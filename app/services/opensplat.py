@@ -727,6 +727,9 @@ class ActiveRunExists(OpenSplatError):
     pass
 
 
+CLUSTER_SAFE_ERROR_CODES = ('submission_rejected', 'tapis_forbidden', 'signin_required', 'training_failed')
+
+
 def apply_cluster_status(run, data):
     """Accept only a response bound to this immutable run/task."""
     try:
@@ -755,7 +758,12 @@ def apply_cluster_status(run, data):
         all(isinstance(progress.get(k), int) for k in ('iteration', 'total')) and
         0 <= progress['iteration'] <= progress['total'] <= MAX_ITERATIONS) else None
     if state == SplatRun.FAILED:
-        values['error'] = _("Training failed. Open the training logs for details.")
+        # Only ClusterODX's own curated failure codes are shown (they can carry Tapis's explanation of a
+        # rejected job); any other remote text stays hidden behind the generic message.
+        remote = data.get('error') if isinstance(data.get('error'), dict) else {}
+        reason = remote.get('message') if remote.get('code') in CLUSTER_SAFE_ERROR_CODES else None
+        reason = ' '.join(reason.split())[:300] if isinstance(reason, str) else ''
+        values['error'] = reason or _("Training failed. Open the training logs for details.")
     changed = SplatRun.objects.filter(pk=run.pk, state__in=tuple(s for s in SplatRun.ACTIVE_STATES if s != SplatRun.IMPORTING)).update(**values)
     if changed and state == SplatRun.IMPORTING:
         from worker.tasks import import_splat_run
