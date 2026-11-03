@@ -240,11 +240,7 @@ def add_default_presets():
                                                               {'name': 'sm-cluster', 'value': 'https://clusterodm.tacc.utexas.edu'},
                                                               {'name': 'sm-no-align', 'value': True},
                                                               {'name': 'max-concurrency', 'value': 128},
-                                                              {'name': 'merge', 'value': 'all'},
-                                                              {'name': 'allocation', 'value': 'PT2050-DataX'},
-                                                              {'name': 'max-run-time', 'value': 480},
-                                                              {'name': 'num-nodes', 'value': 3},
-                                                              {'name': 'queue', 'value': 'normal'}]})
+                                                              {'name': 'merge', 'value': 'all'}]})
         Preset.objects.update_or_create(name='LS6 Small', system=True,
                                         defaults={'options': [{'name': 'auto-boundary', 'value': True},
                                                               {'name': 'dsm', 'value': True},
@@ -264,11 +260,7 @@ def add_default_presets():
                                                               {'name': 'sm-cluster', 'value': 'https://clusterodm.tacc.utexas.edu'},
                                                               {'name': 'sm-no-align', 'value': True},
                                                               {'name': 'max-concurrency', 'value': 64},
-                                                              {'name': 'merge', 'value': 'all'},
-                                                              {'name': 'allocation', 'value': 'PT2050-DataX'},
-                                                              {'name': 'max-run-time', 'value': 360},
-                                                              {'name': 'num-nodes', 'value': 1},
-                                                              {'name': 'queue', 'value': 'vm-small'}]})
+                                                              {'name': 'merge', 'value': 'all'}]})
 
     except MultipleObjectsReturned:
         # Mostly to handle a legacy code problem where

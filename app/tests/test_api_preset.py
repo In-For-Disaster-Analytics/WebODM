@@ -29,6 +29,16 @@ class TestApiPreset(BootTestCase):
         self.assertTrue(Preset.objects.filter(name="3D Model", system=True).exists())
         self.assertTrue(Preset.objects.filter(name="Multispectral", system=True).exists())
 
+    def test_system_presets_carry_no_legacy_cluster_keys(self):
+        # ClusterODX reads tapis-queue / tapis-allocation / tapis-max-run-time / tapis-node.
+        # The pre-Tapis names below are never advertised by a processing node, so they were
+        # silently dropped at submission while still displaying a stale allocation code.
+        legacy_keys = {'allocation', 'queue', 'num-nodes', 'max-run-time'}
+        for preset in Preset.objects.filter(system=True):
+            names = {opt.get('name') for opt in preset.options}
+            self.assertFalse(names & legacy_keys,
+                             "System preset %r still carries legacy cluster keys %s" % (preset.name, names & legacy_keys))
+
     def test_preset(self):
         client = APIClient()
 
