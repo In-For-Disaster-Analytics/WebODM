@@ -50,6 +50,9 @@ def tapis_logout_view(request):
     if request.user.is_authenticated:
         username = request.user.username
         TapisOAuth2Token.objects.filter(user=request.user).update(refresh_token='')
+        # Forget the cached HPC access check so the next login re-probes Tapis.
+        from app.services.tapis_credentials import clear_cached_status
+        clear_cached_status(request.user)
         logout(request)
         messages.success(request, _('You have been logged out successfully.'))
         logger.info(f"User {username} logged out")

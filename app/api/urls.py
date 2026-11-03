@@ -28,6 +28,7 @@ from .tapis_oauth2 import (
 )
 from .tapis_storage import TapisStorageViewSet
 from .tapis_preferences import TapisUserPreferencesView, TapisDiscoveryControlView
+from .tapis_credentials import HpcAccessView
 from .tas_allocations import TASAllocationsView
 from .workers import CancelTask
 from .users import UsersProfile
@@ -137,5 +138,7 @@ urlpatterns.extend([
 
     # Tapis preferences and discovery control
     url(r'^tapis-preferences/$', TapisUserPreferencesView.as_view(), name='tapis_user_preferences'),
+    # Per-user Tapis system credential (TMS keys) check and creation
+    url(r'^tapis/hpc-access/$', HpcAccessView.as_view(), name='tapis_hpc_access'),
     url(r'^tapis-discovery/trigger/$', TapisDiscoveryControlView.as_view(), name='tapis_discovery_trigger'),
 ])

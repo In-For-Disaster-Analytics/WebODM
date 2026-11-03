@@ -1,4 +1,4 @@
-import os, sys, json
+import os, sys, json, re
 
 import datetime
 
@@ -358,6 +358,11 @@ REST_FRAMEWORK = {
     'rest_framework.filters.OrderingFilter',
   ],
   'DEFAULT_AUTHENTICATION_CLASSES': DEFAULT_AUTHENTICATION_CLASSES,
+  'DEFAULT_THROTTLE_RATES': {
+    # Per-user limits for the Tapis HPC access check / credential creation endpoint
+    'hpc_access_get': '10/min',
+    'hpc_access_post': '3/min',
+  },
   'PAGE_SIZE': 10,
   'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
 }
@@ -416,6 +421,20 @@ if _force_expiration:
         TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS = None
 else:
     TAPIS_FORCE_TOKEN_EXPIRATION_SECONDS = None
+
+# Tapis execution system that ClusterODX submits jobs to (must equal ClusterODX's
+# system.executionSystemId). WebODM checks, and on request creates, the per-user
+# TMS credential on this system so first job submissions do not fail with
+# SYSTEMS_MISSING_CREDENTIALS.
+TAPIS_EXEC_SYSTEM_ID = (os.environ.get('WO_TAPIS_EXEC_SYSTEM_ID', 'ls6') or 'ls6').strip()
+if not re.match(r'^[A-Za-z0-9._-]+$', TAPIS_EXEC_SYSTEM_ID):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("WO_TAPIS_EXEC_SYSTEM_ID must match ^[A-Za-z0-9._-]+$ (got %r)" % TAPIS_EXEC_SYSTEM_ID)
+# Seconds to cache a positive ("ready") credential check per user and system.
+try:
+    TAPIS_CREDENTIAL_CACHE_SECONDS = int(os.environ.get('WO_TAPIS_CREDENTIAL_CACHE_SECONDS', '600') or 600)
+except (TypeError, ValueError):
+    TAPIS_CREDENTIAL_CACHE_SECONDS = 600
 # Number of parallel connections for uploading/downloading to/from processing nodes
 NODE_CONNECTIONS = 6
 

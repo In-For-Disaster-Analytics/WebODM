@@ -18,6 +18,8 @@ import Tags from '../classes/Tags';
 import Trans from './Trans';
 import Utils from '../classes/Utils';
 import PdfPopup from './PdfPopup';
+import HpcAccess from '../classes/HpcAccess';
+import HpcAccessBanner from './HpcAccessBanner';
 import { unitSystem } from '../classes/Units';
 import { _, interpolate } from '../classes/gettext';
 
@@ -763,6 +765,12 @@ class TaskListItem extends React.Component {
                     showConsoleButtons={true}
                     maximumLines={500}
                     /> : ""}
+
+              {task.status === statusCodes.FAILED && HpcAccess.errorLooksLikeMissingCredential(task.last_error) ?
+              <div className="task-warning hpc-access-task-warning">
+                <i className="fa fa-key"></i> {_("This task failed because your TACC account has no credential on the processing system yet.")}
+                <HpcAccessBanner compact={true} refreshOnMount={true} />
+              </div> : ""}
 
               {showMemoryErrorWarning ?
               <div className="task-warning"><i className="fa fa-support"></i> <Trans params={{ memlink: `<a href="${memoryErrorLink}" target='_blank'>${_("enough RAM allocated")}</a>`, cloudlink: `<a href='https://webodm.net' target='_blank'>${_("cloud processing node")}</a>` }}>{_("It looks like your processing node ran out of memory. If you are using docker, make sure that your docker environment has %(memlink)s. Alternatively, make sure you have enough physical RAM, reduce the number of images, make your images smaller, or reduce the max-concurrency parameter from the task's options. You can also try to use a %(cloudlink)s.")}</Trans></div> : ""}

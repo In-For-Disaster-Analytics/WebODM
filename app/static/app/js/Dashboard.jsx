@@ -3,6 +3,7 @@ import PropTypes from 'prop-types';
 import './css/Dashboard.scss';
 import ProjectList from './components/ProjectList';
 import EditProjectDialog from './components/EditProjectDialog';
+import HpcAccessBanner from './components/HpcAccessBanner';
 import Storage from './classes/Storage';
 import Utils from './classes/Utils';
 import Toaster from './components/Toaster';
@@ -74,7 +75,8 @@ class Dashboard extends React.Component {
     return [
       <Router key="router" basename="/dashboard">
         <div>
-          {this.props.permissions.indexOf("add_project") !== -1 ? 
+          <HpcAccessBanner />
+          {this.props.permissions.indexOf("add_project") !== -1 ?
           <div className="text-right add-button">
              <button type="button" 
                     className="btn btn-primary btn-sm"
