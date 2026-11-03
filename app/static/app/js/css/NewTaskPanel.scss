@@ -53,3 +53,113 @@
         margin-left: 10px;
     }
 }
+// Guided wizard (WO_UI_TASK_WIZARD)
+.new-task-panel{
+    .wizard-steps{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 4px 0 12px 0;
+        padding: 0;
+        list-style: none;
+
+        li{
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 90%;
+            opacity: 0.7;
+            border: 1px solid transparent;
+
+            .step-number{
+                display: inline-block;
+                min-width: 1.6em;
+                text-align: center;
+                border-radius: 50%;
+                margin-right: 4px;
+                font-weight: bold;
+            }
+
+            &.active{
+                opacity: 1;
+                font-weight: bold;
+            }
+            &.done{
+                opacity: 0.9;
+            }
+        }
+    }
+
+    .processing-goal-step{
+        p.header{ margin: 4px 0 8px 0; }
+    }
+
+    .goal-cards{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .goal-card{
+        display: flex;
+        align-items: flex-start;
+        text-align: left;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid;
+        border-radius: 4px;
+        background: transparent;
+        position: relative;
+        min-height: 84px;
+
+        .goal-icon{ font-size: 20px; margin-top: 2px; opacity: 0.8; }
+        .goal-title{ font-weight: bold; }
+        .goal-help{ font-size: 85%; margin-top: 2px; }
+        .goal-preset{ font-size: 80%; margin-top: 4px; }
+        .goal-check{ position: absolute; top: 6px; right: 8px; }
+
+        &.selected{
+            border-width: 2px;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.05);
+        }
+        &:focus{ outline: none; }
+    }
+
+    .compute-plan-step{
+        .compute-plan-summary{
+            border: 1px solid;
+            border-radius: 4px;
+            padding: 10px 12px;
+
+            .plan-headline{ font-size: 105%; }
+            .plan-reasons{ margin: 6px 0 0 0; padding-left: 0; list-style: none; font-size: 90%; li{ margin-top: 2px; } }
+            .plan-suggestion, .plan-warning{ margin-top: 6px; font-size: 92%; }
+        }
+        .plan-actions{
+            margin-top: 6px;
+            .reset-plan{ margin-left: 10px; font-size: 90%; }
+        }
+        .plan-adjust{
+            margin-top: 8px;
+            .adjust-field{
+                display: inline-block;
+                margin-right: 14px;
+                margin-bottom: 6px;
+                label{ display: block; font-size: 85%; font-weight: normal; opacity: 0.8; }
+                input.plan-nodes{ width: 5em; }
+                input.plan-minutes{ width: 7em; }
+            }
+        }
+    }
+
+    .wizard-review{
+        dl{ margin-bottom: 8px; }
+        dt{ font-weight: normal; opacity: 0.7; font-size: 90%; margin-top: 6px; }
+        dd{ margin-left: 0; }
+        .review-options{ font-family: monospace; font-size: 85%; word-break: break-word; }
+    }
+
+    .wizard-buttons{
+        button{ margin-left: 4px; }
+    }
+}

@@ -15,7 +15,10 @@ class EditTaskForm extends React.Component {
     selectedNode: null,
     task: null,
     onFormChanged: () => {},
-    inReview: false
+    inReview: false,
+    onStateChange: null,
+    tapisOverrides: null,
+    presetDialogHiddenGroups: []
   };
 
   static propTypes = {
@@ -29,7 +32,12 @@ class EditTaskForm extends React.Component {
       task: PropTypes.object,
       suggestedTaskName: PropTypes.oneOfType([PropTypes.string, PropTypes.func]),
       getCropPolygon: PropTypes.func,
-      getGcpFile: PropTypes.func
+      getGcpFile: PropTypes.func,
+      // Wizard integration: observe internal state, own the tapis-* values, hide their
+      // group in the option editor.
+      onStateChange: PropTypes.func,
+      tapisOverrides: PropTypes.object,
+      presetDialogHiddenGroups: PropTypes.array
   };
 
   constructor(props){
@@ -346,15 +354,45 @@ class EditTaskForm extends React.Component {
   }
 
   componentDidUpdate(prevProps, prevState){
+    // Let a wrapping wizard observe the form's internal state (nodes, presets, dialog).
+    let stateChanged = false;
+    ['selectedNode', 'selectedPreset', 'presets', 'processingNodes', 'editingPreset',
+     'loadedPresets', 'loadedProcessingNodes', 'loadingTASAllocations'].forEach(prop => {
+        if (prevState[prop] !== this.state[prop]) stateChanged = true;
+    });
+    if (stateChanged) this.emitStateChange();
+
     // Monitor changes of certain form items (user driven)
     // and fire event when appropriate
     if (!this.formReady()) return;
-    
+
     let changed = false;
     ['name', 'selectedNode', 'selectedPreset'].forEach(prop => {
         if (prevState[prop] !== this.state[prop]) changed = true;
     });
     if (changed) this.props.onFormChanged();
+  }
+
+  emitStateChange(){
+    if (!this.props.onStateChange) return;
+    const { selectedNode, selectedPreset, presets, processingNodes, editingPreset } = this.state;
+    this.props.onStateChange({
+      selectedNode,
+      selectedPreset,
+      presets,
+      processingNodes,
+      editingPreset,
+      availableOptions: selectedNode && Array.isArray(selectedNode.options) ? selectedNode.options : [],
+      formReady: !!this.formReady()
+    });
+  }
+
+  // Select a preset by its display name (used by the goal cards). Returns true when found.
+  selectPresetByName(name){
+    const preset = this.state.presets.find(p => p.name === name);
+    if (!preset) return false;
+    this.setState({selectedPreset: preset});
+    return true;
   }
 
   componentWillUnmount(){
@@ -519,16 +557,39 @@ class EditTaskForm extends React.Component {
     }
   }
 
+  // When a wizard owns the HPC job settings it passes them as `tapisOverrides`
+  // ({queue, nodes, maxMinutes, allocation}); they replace any tapis-* values coming
+  // from the preset. Missing keys fall back to the node defaults as before.
+  applyTapisOverrides(options, availableOptions, overrides){
+    const names = {
+      queue: 'tapis-queue',
+      nodes: 'tapis-node',
+      maxMinutes: 'tapis-max-run-time',
+      allocation: 'tapis-allocation'
+    };
+    const available = {};
+    availableOptions.forEach(opt => available[opt.name] = true);
+
+    const result = Utils.clone(options).filter(opt => Object.values(names).indexOf(opt.name) === -1);
+    Object.keys(names).forEach(key => {
+      const value = overrides[key];
+      if (value === undefined || value === null || value === "") return;
+      if (!available[names[key]]) return;
+      result.push({name: names[key], value: String(value)});
+    });
+    return this.withDefaultTapisOptions(result, availableOptions);
+  }
+
   getTaskInfo(){
     const { name, selectedNode, selectedPreset, tags } = this.state;
+    const presetOptions = this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options);
 
     return {
       name: name !== "" ? name : this.state.namePlaceholder,
       selectedNode: selectedNode,
-      options: this.withDefaultTapisOptions(
-        this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options),
-        selectedNode.options
-      ),
+      options: this.props.tapisOverrides
+        ? this.applyTapisOverrides(presetOptions, selectedNode.options, this.props.tapisOverrides)
+        : this.withDefaultTapisOptions(presetOptions, selectedNode.options),
       tags
     };
   }
@@ -760,6 +821,7 @@ class EditTaskForm extends React.Component {
               preset={this.state.selectedPreset}
               availableOptions={this.state.selectedNode.options}
               clusterNodeUrls={this.state.clusterNodeUrls}
+              hiddenGroups={this.props.presetDialogHiddenGroups || []}
               onHide={this.handleCancelEditPreset}
               saveAction={this.handlePresetSave}
               deleteAction={this.handleDeletePreset}
