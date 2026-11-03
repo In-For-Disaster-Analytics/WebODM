@@ -163,7 +163,7 @@ def choose_default_allocation(allocations):
     if not allocations:
         return None
 
-    preferred = _setting('TAS_DEFAULT_ALLOCATION', 'PT2050-DataX')
+    preferred = _setting('TAS_DEFAULT_ALLOCATION', 'BCS26030')
     for allocation in allocations:
         if allocation.get('chargeCode') == preferred:
             return preferred

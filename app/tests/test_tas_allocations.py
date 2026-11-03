@@ -63,6 +63,11 @@ class TASAllocationsTest(SimpleTestCase):
         self.assertEqual([a['chargeCode'] for a in allocations], ['OTHER', 'PT2050-DataX'])
         self.assertEqual(tas_allocations.choose_default_allocation(allocations), 'PT2050-DataX')
 
+    @override_settings(TAS_DEFAULT_ALLOCATION='BCS26030')
+    def test_default_prefers_configured_allocation_regardless_of_order(self):
+        allocations = [{'chargeCode': 'PT2050-DataX'}, {'chargeCode': 'BCS26030'}]
+        self.assertEqual(tas_allocations.choose_default_allocation(allocations), 'BCS26030')
+
     @override_settings(TAS_DEFAULT_ALLOCATION='PT2050-DataX')
     def test_default_falls_back_to_first_allocation(self):
         allocations = [{'chargeCode': 'FIRST'}, {'chargeCode': 'SECOND'}]

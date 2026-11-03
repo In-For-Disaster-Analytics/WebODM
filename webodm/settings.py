@@ -467,7 +467,7 @@ TAS_RESOURCE_FILTER = [
 ]
 TAS_DEFAULT_ALLOCATION = os.environ.get(
     'WO_TAS_DEFAULT_ALLOCATION',
-    os.environ.get('TAS_DEFAULT_ALLOCATION', 'PT2050-DataX')
+    os.environ.get('TAS_DEFAULT_ALLOCATION', 'BCS26030')
 )
 
 # Allocation-based access control.

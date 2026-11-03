@@ -141,7 +141,8 @@ This WebODM instance is configured for distributed processing using TACC's Lones
 - `WO_TAS_SERVICE_USERNAME` or `TAS_SERVICE_USERNAME`
 - `WO_TAS_SERVICE_PASSWORD` or `TAS_SERVICE_PASSWORD`
 - `WO_TAS_RESOURCE_FILTER` or `TAS_RESOURCE_FILTER` (comma-separated, defaults to LS6/Lonestar6 names)
-- `WO_TAS_DEFAULT_ALLOCATION` or `TAS_DEFAULT_ALLOCATION` (defaults to `PT2050-DataX`)
+- `WO_TAS_DEFAULT_ALLOCATION` or `TAS_DEFAULT_ALLOCATION` (defaults to `BCS26030`; a user who does not hold it falls back to their first active allocation)
+- `WO_TAS_REQUIRED_ALLOCATIONS` or `TAS_REQUIRED_ALLOCATIONS` (comma-separated gate; must list every allocation users submit under, e.g. `PT2050-DataX,BCS26030`)
 
 If you don't need the default "node-odm-1" node, simply pass `--default-nodes 0` flag when starting WebODM:
 
