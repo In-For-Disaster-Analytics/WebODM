@@ -9,6 +9,7 @@ import update from 'immutability-helper';
 import PluginsAPI from '../classes/plugins/API';
 import statusCodes from '../classes/StatusCodes';
 import Gcp from '../classes/Gcp';
+import HpcAccessBanner from './HpcAccessBanner';
 import { _, interpolate } from '../classes/gettext';
 
 class NewTaskPanel extends React.Component {
@@ -345,8 +346,12 @@ class NewTaskPanel extends React.Component {
 
           </div>
 
-          {this.state.editTaskFormLoaded ? 
+          {this.state.editTaskFormLoaded ?
             <div className="form-group">
+              <div className="col-sm-offset-2 col-sm-10">
+                {/* Advisory only: tells the user if their TACC account still needs HPC access set up. */}
+                <HpcAccessBanner compact={true} />
+              </div>
               <div className="col-sm-offset-2 col-sm-10 text-right">
                 {this.props.onCancel !== undefined && <button type="submit" className="btn btn-danger" onClick={this.cancel} style={{marginRight: 4}}><i className="glyphicon glyphicon-remove-circle"></i> {_("Cancel")}</button>}
                 {this.state.loading ?

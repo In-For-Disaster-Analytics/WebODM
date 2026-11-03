@@ -162,6 +162,63 @@ fetch('/api/oauth2/tapis/status/')
 // Loaded UI pages redirect to /logout/ when the token expires.
 ```
 
+## HPC access (Tapis system credentials)
+
+Signing in proves identity, but running a job needs more: ClusterODX submits Tapis jobs
+with the user's own JWT, and Tapis must hold a credential for that user on the execution
+system (`ls6`, TMS-managed SSH keys). A user without one gets
+`SYSTEMS_MISSING_CREDENTIALS` on their first job.
+
+WebODM therefore checks the credential and can create it on request:
+
+- The dashboard mounts `HpcAccessBanner`. It calls `GET /api/tapis/hpc-access/` and, when
+  the credential is missing and the user holds an active allocation, shows a
+  **Set up HPC access** button. The button calls `POST /api/tapis/hpc-access/`, which asks
+  Tapis to generate TMS keys (`createTmsKeys=true`). WebODM never sees key material.
+- The same banner appears above the task form and inside a failed task whose error
+  contains `SYSTEMS_MISSING_CREDENTIALS`.
+- The check is advisory. `unknown` results (Tapis unreachable, expired token, unexpected
+  response) are shown as a dismissible note and never block task submission.
+
+### Endpoint
+
+`GET /api/tapis/hpc-access/?system_id=<optional>&refresh=1` returns HTTP 200 with the
+payload below whatever Tapis answered (`400` only for a malformed `system_id`, `429` when
+throttled):
+
+```json
+{"system_id": "ls6", "status": "ready|missing|unknown",
+ "code": "ok|credential_missing|token_expired|not_authorized|tapis_unreachable|unexpected_response|no_tapis_token|misconfigured",
+ "detail": "<Tapis message, at most 300 characters>", "checked_at": "2026-11-03T15:04:05Z"}
+```
+
+`POST /api/tapis/hpc-access/` runs a fresh probe first and only creates when it reports
+`missing`. Responses: `200` with the refreshed status; `409` with `already_ready` or
+`cannot_verify`; `429` while another request for the same user is in flight; `502` with
+`create_failed`, `not_authorized`, `token_expired` or `tapis_unreachable`.
+
+Probe rules: `missing` requires an explicit Tapis signal (`SYSAPI_CRED_NOT_FOUND` from the
+credential record, or `SYSTEMS_MISSING_CREDENTIALS` from a Files listing of the system
+root). A bare 404 or 403 is `unknown`. Positive results are cached per user for
+`WO_TAPIS_CREDENTIAL_CACHE_SECONDS`; the cache is cleared on logout and after a create.
+Both methods are throttled per user (`hpc_access_get` 10/min, `hpc_access_post` 3/min).
+The banner stays silent for `no_tapis_token` and `misconfigured`, so stock (non-Tapis)
+accounts and unconfigured dev instances see nothing.
+
+Note for development: with `WO_DEBUG=YES` the cache backend is `DummyCache`, so the
+positive-result cache, the refresh limiter and the create lock are inert there; production
+uses Redis.
+
+### Settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WO_TAPIS_EXEC_SYSTEM_ID` | `ls6` | Execution system to check. Must equal ClusterODX `system.executionSystemId`. |
+| `WO_TAPIS_CREDENTIAL_CACHE_SECONDS` | `600` | How long a `ready` result is cached per user. |
+
+The user's JWT is only sent to the OAuth client's `base_url`, which must equal
+`WO_TAPIS_BASE_URL`; a mismatch yields `misconfigured` and no outbound call.
+
 ## Configuration Options
 
 ### Settings
