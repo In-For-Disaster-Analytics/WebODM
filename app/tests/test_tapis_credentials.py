@@ -40,14 +40,20 @@ def _make_jwt(exp_seconds=3600, username='testuser'):
     return '{}.{}.signature'.format(header, payload)
 
 
-def _resp(status_code, body=None, non_json=False):
+def _resp(status_code, body=None, non_json=False, text=''):
     response = MagicMock()
     response.status_code = status_code
+    response.text = text
     if non_json:
         response.json.side_effect = ValueError('not json')
     else:
         response.json.return_value = body if body is not None else {}
     return response
+
+
+# The Tapis security filter answers with a plain string, not a JSON envelope.
+def _filter_reject(message):
+    return _resp(401, non_json=True, text=message)
 
 
 def _tapis_error(message):
@@ -89,8 +95,20 @@ class ProbeCredentialTests(SimpleTestCase):
 
     def test_401_from_jwt_filter_is_token_expired(self, request_mock):
         message = 'TAPIS_SECURITY_JWT_EXPIRED Expired JWT. Expired on: 2026-11-04T10:00:00Z Claims: {}'
-        result = self._probe(request_mock, _resp(401, _tapis_error(message)))
+        result = self._probe(request_mock, _filter_reject(message))
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TOKEN_EXPIRED))
+        self.assertIn('TAPIS_SECURITY_JWT_EXPIRED', result.detail)
+
+    def test_401_from_jwt_filter_in_json_envelope_is_token_expired(self, request_mock):
+        result = self._probe(request_mock, _resp(401, _tapis_error('TAPIS_SECURITY_JWT_VERIFY_FAIL The jwt failed to verify.')))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TOKEN_EXPIRED))
+
+    def test_401_for_unexpected_header_is_not_ssh_or_token(self, request_mock):
+        message = ('TAPIS_SECURITY_UNEXPECTED_HEADER Unexpected header X-Tapis-Tenant for user testuser '
+                   'in tenant portals with account type user.')
+        result = self._probe(request_mock, _filter_reject(message))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_UNEXPECTED_RESPONSE))
+        self.assertIn('TAPIS_SECURITY_UNEXPECTED_HEADER', result.detail)
 
     def test_401_from_ssh_login_is_ssh_auth_failed_not_token_expired(self, request_mock):
         message = SSH_POOL_ERROR.format('SSH_AUTHENTICATION_FAILURE_USING_KEYPAIR Failure to authenticate using key pair for testuser')
@@ -138,7 +156,9 @@ class ProbeCredentialTests(SimpleTestCase):
         self.assertEqual(kwargs['timeout'], svc.REQUEST_TIMEOUT_SECONDS)
         self.assertFalse(kwargs['allow_redirects'])
         self.assertEqual(kwargs['headers']['X-Tapis-Token'], 'secret-jwt-value')
-        self.assertEqual(kwargs['headers']['X-Tapis-Tenant'], 'portals')
+        # Tapis rejects X-Tapis-Tenant / X-Tapis-User on user tokens (TAPIS_SECURITY_UNEXPECTED_HEADER).
+        self.assertNotIn('X-Tapis-Tenant', kwargs['headers'])
+        self.assertNotIn('X-Tapis-User', kwargs['headers'])
 
     def test_detail_is_capped(self, request_mock):
         result = self._probe(request_mock, _resp(401, _tapis_error(SSH_POOL_ERROR.format('x' * 1000))))
@@ -158,6 +178,18 @@ class CreateTmsCredentialTests(SimpleTestCase):
         self.assertEqual(url, 'https://portals.tapis.io/v3/systems/credential/ls6/user/test%20user?createTmsKeys=true')
         self.assertEqual(kwargs['json'], {})
         self.assertEqual(kwargs['timeout'], svc.REQUEST_TIMEOUT_SECONDS)
+        self.assertNotIn('X-Tapis-Tenant', kwargs['headers'])
+
+    def test_expired_jwt_is_token_expired(self, request_mock):
+        request_mock.return_value = _filter_reject('TAPIS_SECURITY_JWT_EXPIRED Expired JWT.')
+        result = svc.create_tms_credential(**PROBE_ARGS)
+        self.assertEqual((result.ok, result.code), (False, svc.CODE_TOKEN_EXPIRED))
+
+    def test_other_401_is_create_failed_with_message(self, request_mock):
+        request_mock.return_value = _filter_reject('TAPIS_SECURITY_UNEXPECTED_HEADER Unexpected header')
+        result = svc.create_tms_credential(**PROBE_ARGS)
+        self.assertEqual((result.ok, result.code), (False, svc.CODE_CREATE_FAILED))
+        self.assertIn('TAPIS_SECURITY_UNEXPECTED_HEADER', result.detail)
 
     def test_forbidden(self, request_mock):
         request_mock.return_value = _resp(403, _tapis_error('SYSAPI_UNAUTH not authorized'))

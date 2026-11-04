@@ -199,7 +199,9 @@ throttled):
 
 Probe rules: the probe is one Files listing of the system root
 (`GET /v3/files/ops/<system>/?limit=1`) with the user's token, which makes Tapis SSH into
-the host as that user. Tapis Systems refuses `GET /v3/systems/credential/...` for every
+the host as that user. Requests carry `X-Tapis-Token` only: Tapis rejects a user token that
+comes with `X-Tapis-Tenant` or `X-Tapis-User` (`TAPIS_SECURITY_UNEXPECTED_HEADER`, 401,
+plain-text body), those headers are for service tokens. Tapis Systems refuses `GET /v3/systems/credential/...` for every
 user token, so the credential record itself cannot be read. `missing` requires an explicit
 Tapis signal in the message (`SSH_POOL_MISSING_CREDENTIALS`, `SYSTEMS_MISSING_CREDENTIALS`
 or `SYSAPI_CRED_NOT_FOUND`), whatever the HTTP status. A 401 is `token_expired` only when
