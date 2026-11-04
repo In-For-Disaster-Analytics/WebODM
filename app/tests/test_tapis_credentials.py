@@ -54,77 +54,94 @@ def _tapis_error(message):
     return {'result': None, 'status': 'error', 'message': message}
 
 
+# Shape of the Tapis Files error when its SSH session pool cannot log in to the host.
+SSH_POOL_ERROR = ('FILES_CLIENT_SSH_SESSION_POOL_ERROR Error getting ssh session from SSH session pool.  '
+                  'Tenant: portals, Host: ls6.tacc.utexas.edu, Port: 22, EffectiveUserId: testuser, '
+                  'AuthnMethod: TMS_KEYS, Timeout: PT30S, Exception Message: {}')
+
+
 @patch('app.services.tapis_credentials.requests.request')
 class ProbeCredentialTests(SimpleTestCase):
-    def _probe(self, request_mock, *responses):
-        request_mock.side_effect = list(responses)
-        return svc.probe_credential(**PROBE_ARGS)
+    def _probe(self, request_mock, response):
+        request_mock.return_value = response
+        result = svc.probe_credential(**PROBE_ARGS)
+        self.assertEqual(request_mock.call_count, 1)
+        return result
 
     def test_200_is_ready(self, request_mock):
-        result = self._probe(request_mock, _resp(200, {'result': {}}))
+        result = self._probe(request_mock, _resp(200, {'result': []}))
         self.assertEqual((result.status, result.code), (svc.STATUS_READY, svc.CODE_OK))
-        self.assertEqual(request_mock.call_count, 1)
 
-    def test_explicit_not_found_code_is_missing(self, request_mock):
-        result = self._probe(request_mock, _resp(404, _tapis_error('SYSAPI_CRED_NOT_FOUND Credential not found')))
-        self.assertEqual((result.status, result.code), (svc.STATUS_MISSING, svc.CODE_CREDENTIAL_MISSING))
-        self.assertEqual(request_mock.call_count, 1)
-
-    def test_bare_404_then_files_200_is_ready(self, request_mock):
-        result = self._probe(request_mock, _resp(404, _tapis_error('Not found')), _resp(200, {'result': []}))
-        self.assertEqual(result.status, svc.STATUS_READY)
-        self.assertEqual(request_mock.call_count, 2)
-
-    def test_403_then_files_missing_signal_is_missing(self, request_mock):
-        result = self._probe(request_mock,
-                             _resp(403, _tapis_error('SYSAPI_UNAUTH')),
-                             _resp(400, _tapis_error('SYSTEMS_MISSING_CREDENTIALS There are no credentials associated with system ls6')))
+    def test_files_401_with_pool_missing_credentials_is_missing(self, request_mock):
+        message = SSH_POOL_ERROR.format('SSH_POOL_MISSING_CREDENTIALS Missing credentials Tenant: portals, Host: ls6.tacc.utexas.edu')
+        result = self._probe(request_mock, _resp(401, _tapis_error(message)))
         self.assertEqual((result.status, result.code), (svc.STATUS_MISSING, svc.CODE_CREDENTIAL_MISSING))
 
-    def test_403_then_files_403_without_code_is_unknown(self, request_mock):
-        result = self._probe(request_mock, _resp(403, _tapis_error('nope')), _resp(403, _tapis_error('still nope')))
+    def test_files_500_with_pool_missing_credentials_is_missing(self, request_mock):
+        message = SSH_POOL_ERROR.format('SSH_POOL_MISSING_CREDENTIALS Missing credentials')
+        result = self._probe(request_mock, _resp(500, _tapis_error(message)))
+        self.assertEqual((result.status, result.code), (svc.STATUS_MISSING, svc.CODE_CREDENTIAL_MISSING))
+
+    def test_systems_missing_credentials_is_missing(self, request_mock):
+        message = 'SYSTEMS_MISSING_CREDENTIALS There are no credentials associated with system ls6 for tenant portals.'
+        result = self._probe(request_mock, _resp(400, _tapis_error(message)))
+        self.assertEqual((result.status, result.code), (svc.STATUS_MISSING, svc.CODE_CREDENTIAL_MISSING))
+
+    def test_401_from_jwt_filter_is_token_expired(self, request_mock):
+        message = 'TAPIS_SECURITY_JWT_EXPIRED Expired JWT. Expired on: 2026-11-04T10:00:00Z Claims: {}'
+        result = self._probe(request_mock, _resp(401, _tapis_error(message)))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TOKEN_EXPIRED))
+
+    def test_401_from_ssh_login_is_ssh_auth_failed_not_token_expired(self, request_mock):
+        message = SSH_POOL_ERROR.format('SSH_AUTHENTICATION_FAILURE_USING_KEYPAIR Failure to authenticate using key pair for testuser')
+        result = self._probe(request_mock, _resp(401, _tapis_error(message)))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_SSH_AUTH_FAILED))
+        self.assertIn('SSH_AUTHENTICATION_FAILURE_USING_KEYPAIR', result.detail)
+
+    def test_401_without_message_is_ssh_auth_failed(self, request_mock):
+        result = self._probe(request_mock, _resp(401, non_json=True))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_SSH_AUTH_FAILED))
+        self.assertEqual(result.detail, '')
+
+    def test_403_is_not_authorized(self, request_mock):
+        result = self._probe(request_mock, _resp(403, _tapis_error('FILES_NOT_AUTHORIZED. Permission denied by Tapis.')))
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_NOT_AUTHORIZED))
 
-    def test_bare_404_then_files_404_is_unknown_never_missing(self, request_mock):
-        result = self._probe(request_mock, _resp(404, _tapis_error('x')), _resp(404, _tapis_error('y')))
+    def test_404_is_unknown_never_missing(self, request_mock):
+        result = self._probe(request_mock, _resp(404, _tapis_error('FILES_SYS_NOT_FOUND System not found')))
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_UNEXPECTED_RESPONSE))
-
-    def test_401_is_token_expired(self, request_mock):
-        result = self._probe(request_mock, _resp(401, _tapis_error('JWT expired')))
-        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TOKEN_EXPIRED))
 
     def test_500_is_unreachable(self, request_mock):
         result = self._probe(request_mock, _resp(503, _tapis_error('down')))
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TAPIS_UNREACHABLE))
 
-    def test_non_json_bodies_are_unknown(self, request_mock):
-        result = self._probe(request_mock, _resp(404, non_json=True), _resp(502, non_json=True))
-        self.assertEqual(result.status, svc.STATUS_UNKNOWN)
-        self.assertEqual(result.code, svc.CODE_TAPIS_UNREACHABLE)
+    def test_non_json_5xx_is_unreachable(self, request_mock):
+        result = self._probe(request_mock, _resp(502, non_json=True))
+        self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TAPIS_UNREACHABLE))
 
     def test_timeout_is_unreachable(self, request_mock):
         request_mock.side_effect = requests.Timeout()
         result = svc.probe_credential(**PROBE_ARGS)
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TAPIS_UNREACHABLE))
 
-    def test_connection_error_on_second_stage_is_unreachable(self, request_mock):
-        request_mock.side_effect = [_resp(404, _tapis_error('x')), requests.ConnectionError()]
+    def test_connection_error_is_unreachable(self, request_mock):
+        request_mock.side_effect = requests.ConnectionError()
         result = svc.probe_credential(**PROBE_ARGS)
         self.assertEqual((result.status, result.code), (svc.STATUS_UNKNOWN, svc.CODE_TAPIS_UNREACHABLE))
 
-    def test_request_shape_and_url_quoting(self, request_mock):
+    def test_request_shape_lists_system_root_through_files(self, request_mock):
         self._probe(request_mock, _resp(200))
         method, url = request_mock.call_args[0]
         kwargs = request_mock.call_args[1]
         self.assertEqual(method, 'GET')
-        self.assertEqual(url, 'https://portals.tapis.io/v3/systems/credential/ls6/user/test%20user')
+        self.assertEqual(url, 'https://portals.tapis.io/v3/files/ops/ls6/?limit=1')
         self.assertEqual(kwargs['timeout'], svc.REQUEST_TIMEOUT_SECONDS)
         self.assertFalse(kwargs['allow_redirects'])
         self.assertEqual(kwargs['headers']['X-Tapis-Token'], 'secret-jwt-value')
         self.assertEqual(kwargs['headers']['X-Tapis-Tenant'], 'portals')
 
     def test_detail_is_capped(self, request_mock):
-        result = self._probe(request_mock, _resp(404, _tapis_error('SYSAPI_CRED_NOT_FOUND ' + 'x' * 1000)))
+        result = self._probe(request_mock, _resp(401, _tapis_error(SSH_POOL_ERROR.format('x' * 1000))))
         self.assertLessEqual(len(result.detail), svc.DETAIL_MAX_CHARS)
 
 

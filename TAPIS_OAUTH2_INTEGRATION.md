@@ -188,7 +188,7 @@ throttled):
 
 ```json
 {"system_id": "ls6", "status": "ready|missing|unknown",
- "code": "ok|credential_missing|token_expired|not_authorized|tapis_unreachable|unexpected_response|no_tapis_token|misconfigured",
+ "code": "ok|credential_missing|token_expired|ssh_auth_failed|not_authorized|tapis_unreachable|unexpected_response|no_tapis_token|misconfigured",
  "detail": "<Tapis message, at most 300 characters>", "checked_at": "2026-11-03T15:04:05Z"}
 ```
 
@@ -197,9 +197,15 @@ throttled):
 `cannot_verify`; `429` while another request for the same user is in flight; `502` with
 `create_failed`, `not_authorized`, `token_expired` or `tapis_unreachable`.
 
-Probe rules: `missing` requires an explicit Tapis signal (`SYSAPI_CRED_NOT_FOUND` from the
-credential record, or `SYSTEMS_MISSING_CREDENTIALS` from a Files listing of the system
-root). A bare 404 or 403 is `unknown`. Positive results are cached per user for
+Probe rules: the probe is one Files listing of the system root
+(`GET /v3/files/ops/<system>/?limit=1`) with the user's token, which makes Tapis SSH into
+the host as that user. Tapis Systems refuses `GET /v3/systems/credential/...` for every
+user token, so the credential record itself cannot be read. `missing` requires an explicit
+Tapis signal in the message (`SSH_POOL_MISSING_CREDENTIALS`, `SYSTEMS_MISSING_CREDENTIALS`
+or `SYSAPI_CRED_NOT_FOUND`), whatever the HTTP status. A 401 is `token_expired` only when
+the message carries a `TAPIS_SECURITY_JWT_*` code; any other 401 means Files could not log
+in to the host with the stored key and is reported as `ssh_auth_failed` (advisory, with the
+Tapis detail). A bare 404 or 403 is `unknown`. Positive results are cached per user for
 `WO_TAPIS_CREDENTIAL_CACHE_SECONDS`; the cache is cleared on logout and after a create.
 Both methods are throttled per user (`hpc_access_get` 10/min, `hpc_access_post` 3/min).
 The banner stays silent for `no_tapis_token` and `misconfigured`, so stock (non-Tapis)

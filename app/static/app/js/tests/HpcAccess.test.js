@@ -44,6 +44,8 @@ describe('HpcAccess', () => {
   it('maps codes to friendly text and falls back to detail', () => {
     expect(HpcAccess.friendlyMessage('token_expired')).toMatch(/log in again/);
     expect(HpcAccess.friendlyMessage('not_authorized')).toMatch(/allocation/);
+    expect(HpcAccess.friendlyMessage('ssh_auth_failed', 'SSH_AUTHENTICATION_FAILURE_USING_KEYPAIR')).toMatch(/could not log in to Lonestar6 .* SSH_AUTHENTICATION_FAILURE_USING_KEYPAIR/);
+    expect(HpcAccess.friendlyMessage('ssh_auth_failed', '')).toMatch(/could not log in to Lonestar6/);
     expect(HpcAccess.friendlyMessage('create_failed', 'SYSAPI_TMS_ERROR')).toMatch(/could not create the key: SYSAPI_TMS_ERROR/);
     expect(HpcAccess.friendlyMessage('create_failed', '')).toMatch(/could not create the key/);
     expect(HpcAccess.friendlyMessage('something_else', 'Tapis said no')).toBe('Tapis said no');

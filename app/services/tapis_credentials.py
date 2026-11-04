@@ -5,9 +5,17 @@ ClusterODX submits Tapis jobs with the end user's own JWT, so Tapis needs a cred
 registered for that user on the execution system (TMS-managed SSH keys on ls6). Login
 never creates one, so a new user's first job fails with SYSTEMS_MISSING_CREDENTIALS.
 
-This module answers "does this user have a credential on the system?" conservatively:
-``missing`` is reported only on an explicit Tapis signal, everything inconclusive is
-``unknown`` and must never block the user. It can also ask Tapis to create TMS keys.
+This module answers "does this user have a working credential on the system?"
+conservatively: ``missing`` is reported only on an explicit Tapis signal, everything
+inconclusive is ``unknown`` and must never block the user. It can also ask Tapis to
+create TMS keys.
+
+Tapis Systems never lets a user token read a credential record (every user gets
+``SYSLIB_UNAUTH_GETCRED``), so the probe lists the system root through the Files API
+instead. That makes Tapis open an SSH session to the host as the user, and Files reports
+SSH failures as HTTP 401: a missing TMS credential carries ``SSH_POOL_MISSING_CREDENTIALS``
+(sometimes as a 500), a key the host rejects does not. Only a JWT rejected by the Tapis
+security filter (``TAPIS_SECURITY_JWT_*``) means the sign-in itself is invalid.
 
 The request-level functions take plain strings so they are testable without a database.
 """
@@ -33,14 +41,18 @@ CODE_ALREADY_READY = 'already_ready'
 CODE_CANNOT_VERIFY = 'cannot_verify'
 CODE_TOKEN_EXPIRED = 'token_expired'
 CODE_NOT_AUTHORIZED = 'not_authorized'
+CODE_SSH_AUTH_FAILED = 'ssh_auth_failed'
 CODE_TAPIS_UNREACHABLE = 'tapis_unreachable'
 CODE_UNEXPECTED_RESPONSE = 'unexpected_response'
 CODE_NO_TAPIS_TOKEN = 'no_tapis_token'
 CODE_MISCONFIGURED = 'misconfigured'
 CODE_CREATE_FAILED = 'create_failed'
 
-# Only these explicit Tapis signals mean "no credential". A bare 404/403 does not.
-MISSING_SIGNALS = ('SYSAPI_CRED_NOT_FOUND', 'SYSTEMS_MISSING_CREDENTIALS')
+# Only these explicit Tapis signals mean "no credential". A bare 401/403/404 does not.
+# They are checked before the HTTP status because Files surfaces them as 401 or 500.
+MISSING_SIGNALS = ('SYSAPI_CRED_NOT_FOUND', 'SYSTEMS_MISSING_CREDENTIALS', 'SSH_POOL_MISSING_CREDENTIALS')
+# Prefix of every message the Tapis security filter emits when it refuses a JWT.
+JWT_REJECTED_SIGNAL = 'TAPIS_SECURITY_JWT'
 
 SYSTEM_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 REQUEST_TIMEOUT_SECONDS = 10
@@ -105,14 +117,14 @@ def _request(method, url, token, tenant_id, **kwargs):
 
 def probe_credential(token, username, system_id, base_url, tenant_id):
     """
-    Decide whether ``username`` has a credential on ``system_id``.
+    Decide whether ``username`` has a working credential on ``system_id``.
 
-    Stage 1 reads the credential record. Stage 2 (only after a 403/404 without an
-    explicit code) lists the system root through the Files API, which fails with
-    SYSTEMS_MISSING_CREDENTIALS when no credential exists.
+    Lists the system root through the Files API with the user's token, which makes Tapis
+    SSH into the host as that user. ``username`` is not part of the request (the token
+    identifies the user); it is kept so callers and the create path share one signature.
     """
     try:
-        response = _request('GET', _credential_url(base_url, system_id, username), token, tenant_id)
+        response = _request('GET', _files_probe_url(base_url, system_id), token, tenant_id)
     except requests.RequestException as e:
         return ProbeResult(STATUS_UNKNOWN, CODE_TAPIS_UNREACHABLE, type(e).__name__)
 
@@ -123,30 +135,15 @@ def probe_credential(token, username, system_id, base_url, tenant_id):
     if _has_missing_signal(message):
         return ProbeResult(STATUS_MISSING, CODE_CREDENTIAL_MISSING, _trim(message))
     if response.status_code == 401:
-        return ProbeResult(STATUS_UNKNOWN, CODE_TOKEN_EXPIRED, _trim(message))
+        if JWT_REJECTED_SIGNAL in message:
+            return ProbeResult(STATUS_UNKNOWN, CODE_TOKEN_EXPIRED, _trim(message))
+        # Files could not log in to the host with the credential Tapis holds for the user.
+        return ProbeResult(STATUS_UNKNOWN, CODE_SSH_AUTH_FAILED, _trim(message))
+    if response.status_code == 403:
+        return ProbeResult(STATUS_UNKNOWN, CODE_NOT_AUTHORIZED, _trim(message))
     if response.status_code >= 500:
         return ProbeResult(STATUS_UNKNOWN, CODE_TAPIS_UNREACHABLE, _trim(message))
-    if response.status_code not in (403, 404):
-        return ProbeResult(STATUS_UNKNOWN, CODE_UNEXPECTED_RESPONSE, _trim(message))
-
-    try:
-        files_response = _request('GET', _files_probe_url(base_url, system_id), token, tenant_id)
-    except requests.RequestException as e:
-        return ProbeResult(STATUS_UNKNOWN, CODE_TAPIS_UNREACHABLE, type(e).__name__)
-
-    if files_response.status_code == 200:
-        return ProbeResult(STATUS_READY, CODE_OK, '')
-
-    files_message = _tapis_message(files_response)
-    if _has_missing_signal(files_message):
-        return ProbeResult(STATUS_MISSING, CODE_CREDENTIAL_MISSING, _trim(files_message))
-    if files_response.status_code == 401:
-        return ProbeResult(STATUS_UNKNOWN, CODE_TOKEN_EXPIRED, _trim(files_message))
-    if files_response.status_code == 403:
-        return ProbeResult(STATUS_UNKNOWN, CODE_NOT_AUTHORIZED, _trim(files_message or message))
-    if files_response.status_code >= 500:
-        return ProbeResult(STATUS_UNKNOWN, CODE_TAPIS_UNREACHABLE, _trim(files_message))
-    return ProbeResult(STATUS_UNKNOWN, CODE_UNEXPECTED_RESPONSE, _trim(files_message or message))
+    return ProbeResult(STATUS_UNKNOWN, CODE_UNEXPECTED_RESPONSE, _trim(message))
 
 
 def create_tms_credential(token, username, system_id, base_url, tenant_id):
