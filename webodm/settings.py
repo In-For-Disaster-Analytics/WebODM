@@ -435,6 +435,9 @@ try:
     TAPIS_CREDENTIAL_CACHE_SECONDS = int(os.environ.get('WO_TAPIS_CREDENTIAL_CACHE_SECONDS', '600') or 600)
 except (TypeError, ValueError):
     TAPIS_CREDENTIAL_CACHE_SECONDS = 600
+# Guided new-task wizard (goal -> compute plan -> review) for Tapis-backed processing
+# nodes. Off by default; the legacy one-page form is used when off.
+UI_TASK_WIZARD = str(os.environ.get('WO_UI_TASK_WIZARD', 'NO')).strip().upper() in ('YES', 'TRUE', '1', 'ON')
 # Number of parallel connections for uploading/downloading to/from processing nodes
 NODE_CONNECTIONS = 6
 

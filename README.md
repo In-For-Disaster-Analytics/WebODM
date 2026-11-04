@@ -144,6 +144,8 @@ This WebODM instance is configured for distributed processing using TACC's Lones
 - `WO_TAS_DEFAULT_ALLOCATION` or `TAS_DEFAULT_ALLOCATION` (defaults to `BCS26030`; a user who does not hold it falls back to their first active allocation)
 - `WO_TAS_REQUIRED_ALLOCATIONS` or `TAS_REQUIRED_ALLOCATIONS` (comma-separated gate; must list every allocation users submit under, e.g. `PT2050-DataX,BCS26030`)
 
+**Guided task wizard**: set `WO_UI_TASK_WIZARD=YES` to replace the one-page "Review → Start" task form with three steps: pick what to produce (cards mapped to the system presets), confirm the compute plan, then review and optionally adjust any option. The compute step appears only for Tapis-backed processing nodes; it preselects `WO_TAS_DEFAULT_ALLOCATION` when the user holds it, derives queue, node count and run time from the node's per-image-count defaults, explains the choice against the Lonestar6 queue limits, warns about over-long or under-sized runs, and shows a rough SU estimate. With the flag off (default) the legacy form is unchanged.
+
 If you don't need the default "node-odm-1" node, simply pass `--default-nodes 0` flag when starting WebODM:
 
 `./webodm.sh restart --default-nodes 0`.

@@ -10,7 +10,15 @@ import PluginsAPI from '../classes/plugins/API';
 import statusCodes from '../classes/StatusCodes';
 import Gcp from '../classes/Gcp';
 import HpcAccessBanner from './HpcAccessBanner';
+import ProcessingGoalStep from './ProcessingGoalStep';
+import ComputePlanStep from './ComputePlanStep';
+import ProcessingGoals, { CUSTOM_GOAL_ID } from '../classes/ProcessingGoals';
+import ComputePlanText from '../classes/ComputePlanText';
 import { _, interpolate } from '../classes/gettext';
+
+const WIZARD_STEP_GOAL = 'goal';
+const WIZARD_STEP_COMPUTE = 'compute';
+const WIZARD_STEP_REVIEW = 'review';
 
 class NewTaskPanel extends React.Component {
   static defaultProps = {
@@ -50,9 +58,22 @@ class NewTaskPanel extends React.Component {
       showMapPreview: false,
       dismissImageCountWarning: false,
       showMalformedGcpErrors: false,
+
+      // Guided wizard (window.__uiTaskWizard)
+      wizardStep: WIZARD_STEP_GOAL,
+      goalId: null,
+      formState: null,        // emitted by EditTaskForm.onStateChange
+      allocations: null,      // [{chargeCode, title}] once loaded
+      allocationsLoading: false,
+      allocationsError: false,
+      preferredAllocation: "",
+      allocation: "",         // selected charge code
+      computeOverrides: {},   // {queue, nodes, maxMinutes}
+      openEditorOnReview: false
     };
 
     this.save = this.save.bind(this);
+    this.submit = this.submit.bind(this);
     this.handleFormTaskLoaded = this.handleFormTaskLoaded.bind(this);
     this.getTaskInfo = this.getTaskInfo.bind(this);
     this.setResizeMode = this.setResizeMode.bind(this);
@@ -78,6 +99,7 @@ class NewTaskPanel extends React.Component {
 
   componentWillUnmount(){
     if (this.alignTasksRequest) this.alignTasksRequest.abort();
+    this.componentWillUnmountWizard();
   }
 
   loadAlignTasks = (bbox) => {
@@ -99,21 +121,303 @@ class NewTaskPanel extends React.Component {
     if (!this.state.inReview){
       this.setState({inReview: true});
     }else{
-      this.setState({inReview: false, loading: true});
-      e.preventDefault();
-      this.taskForm.saveLastPresetToStorage();
-      Storage.setItem('resize_size', this.state.resizeSize);
-      Storage.setItem('resize_mode', this.state.resizeMode);
-
-      const taskInfo = this.getTaskInfo();
-      if (taskInfo.selectedNode.key != "auto"){
-        Storage.setItem('last_processing_node', taskInfo.selectedNode.id);
-      }else{
-        Storage.setItem('last_processing_node', '');
-      }
-
-      if (this.props.onSave) this.props.onSave(taskInfo);
+      this.submit(e);
     }
+  }
+
+  submit(e){
+    this.setState({inReview: false, loading: true});
+    if (e && e.preventDefault) e.preventDefault();
+    this.taskForm.saveLastPresetToStorage();
+    Storage.setItem('resize_size', this.state.resizeSize);
+    Storage.setItem('resize_mode', this.state.resizeMode);
+    if (this.wizardEnabled() && this.state.goalId) Storage.setItem('last_goal_id', this.state.goalId);
+
+    const taskInfo = this.getTaskInfo();
+    if (taskInfo.selectedNode.key != "auto"){
+      Storage.setItem('last_processing_node', taskInfo.selectedNode.id);
+    }else{
+      Storage.setItem('last_processing_node', '');
+    }
+
+    if (this.props.onSave) this.props.onSave(taskInfo);
+  }
+
+  // ---- Guided wizard -------------------------------------------------------
+
+  wizardEnabled(){
+    return typeof window !== 'undefined' && !!window.__uiTaskWizard;
+  }
+
+  componentWillUnmountWizard(){
+    if (this.allocationsRequest && this.allocationsRequest.abort) this.allocationsRequest.abort();
+  }
+
+  nodeHasComputeStep(node){
+    return !!(node && Array.isArray(node.options) && node.options.find(opt => opt.name === "tapis-allocation"));
+  }
+
+  hasComputeStep(){
+    return this.nodeHasComputeStep(this.state.formState && this.state.formState.selectedNode);
+  }
+
+  wizardSteps(){
+    const steps = [{ id: WIZARD_STEP_GOAL, label: _("Output") }];
+    if (this.hasComputeStep()) steps.push({ id: WIZARD_STEP_COMPUTE, label: _("Compute") });
+    steps.push({ id: WIZARD_STEP_REVIEW, label: _("Review") });
+    return steps;
+  }
+
+  wizardStepIndex(){
+    return this.wizardSteps().findIndex(s => s.id === this.state.wizardStep);
+  }
+
+  goalCards(){
+    return ProcessingGoals.resolve(this.state.formState ? this.state.formState.presets : []);
+  }
+
+  handleFormStateChange = formState => {
+    const previous = this.state.formState;
+    const next = { formState };
+
+    // First time presets arrive: restore the last goal when it still matches the
+    // form's own preselected preset, else infer the card from that preset.
+    if (!this.state.goalId && formState.selectedPreset && (!previous || !previous.selectedPreset)){
+      const cards = ProcessingGoals.resolve(formState.presets);
+      const lastGoalId = Storage.getItem('last_goal_id');
+      const byLast = cards.find(c => c.id === lastGoalId && c.preset && c.preset.id === formState.selectedPreset.id);
+      const byPreset = cards.find(c => c.preset && c.preset.id === formState.selectedPreset.id);
+      const match = byLast || byPreset;
+      if (match) next.goalId = match.id;
+    }
+
+    this.setState(next, () => {
+      const node = formState.selectedNode;
+      const prevNode = previous && previous.selectedNode;
+      if (this.nodeHasComputeStep(node) && (!prevNode || prevNode.key !== node.key) && this.state.allocations === null){
+        this.loadAllocations();
+      }
+    });
+  };
+
+  loadAllocations(){
+    if (this.allocationsRequest && this.allocationsRequest.abort) this.allocationsRequest.abort();
+    this.setState({allocationsLoading: true, allocationsError: false});
+    this.allocationsRequest = $.getJSON("/api/tas/allocations/")
+      .done(json => {
+        const allocations = Array.isArray(json && json.allocations) ? json.allocations : [];
+        const preferred = (json && json.preferred) || "";
+        const codes = allocations.map(a => a.chargeCode);
+        // Preselect only an unambiguous choice: the configured preferred allocation when
+        // held, or the user's single allocation. Otherwise the user must pick.
+        let allocation = "";
+        if (preferred && codes.indexOf(preferred) !== -1) allocation = preferred;
+        else if (codes.length === 1) allocation = codes[0];
+        this.setState({allocations, preferredAllocation: preferred, allocation, allocationsLoading: false}, this.handleFormChanged);
+      })
+      .fail(jqXHR => {
+        if (jqXHR && jqXHR.statusText === "abort") return;
+        // A lookup failure is not "no allocations": keep it distinct so the user can retry.
+        this.setState({allocations: [], allocationsError: true, allocationsLoading: false});
+      });
+  }
+
+  handleRetryAllocations = () => {
+    this.setState({allocations: null, allocationsError: false}, this.loadAllocations);
+  };
+
+  handleGoalSelect = card => {
+    // Only the custom card opens the option editor on the review step; picking any
+    // other card afterwards must clear that intent.
+    const next = { goalId: card.id, openEditorOnReview: card.id === CUSTOM_GOAL_ID };
+    if (card.id !== CUSTOM_GOAL_ID && card.preset && this.taskForm){
+      this.taskForm.selectPresetByName(card.preset.name);
+    }
+    this.setState(next, this.handleFormChanged);
+  };
+
+  handleComputeChange = ({allocation, overrides}) => {
+    const next = {};
+    if (allocation !== undefined) next.allocation = allocation;
+    if (overrides !== undefined) next.computeOverrides = overrides;
+    this.setState(next, this.handleFormChanged);
+  };
+
+  computePlan(){
+    if (!this.hasComputeStep()) return null;
+    const fs = this.state.formState;
+    return ComputePlanStep.plan({
+      imagesCount: this.props.filesCount,
+      nodeOptions: fs.selectedNode.options,
+      preset: fs.selectedPreset,
+      overrides: this.state.computeOverrides
+    });
+  }
+
+  // Values handed to EditTaskForm so the wizard, not the preset, owns the HPC settings.
+  wizardTapisOverrides(){
+    if (!this.wizardEnabled()) return null;
+    const plan = this.computePlan();
+    if (!plan) return null;
+    return {
+      queue: plan.queue,
+      nodes: plan.nodes,
+      maxMinutes: plan.maxMinutes,
+      allocation: this.state.allocation
+    };
+  }
+
+  canAdvance(){
+    const fs = this.state.formState;
+    if (!fs || !fs.formReady) return false;
+    if (this.state.wizardStep === WIZARD_STEP_GOAL) return !!(this.state.goalId || fs.selectedPreset);
+    if (this.state.wizardStep === WIZARD_STEP_COMPUTE){
+      if (this.state.allocationsLoading) return false;
+      if (Array.isArray(this.state.allocations) && this.state.allocations.length === 0) return false;
+      return !!this.state.allocation;
+    }
+    return true;
+  }
+
+  handleWizardNext = () => {
+    const steps = this.wizardSteps();
+    const index = this.wizardStepIndex();
+    if (index < 0 || index >= steps.length - 1) return;
+    const nextStep = steps[index + 1].id;
+    this.setState({wizardStep: nextStep}, () => {
+      if (nextStep === WIZARD_STEP_REVIEW && this.state.openEditorOnReview && this.taskForm){
+        this.setState({openEditorOnReview: false});
+        this.taskForm.handleEditPreset();
+      }
+      this.handleFormChanged();
+    });
+  };
+
+  handleWizardBack = () => {
+    const steps = this.wizardSteps();
+    const index = this.wizardStepIndex();
+    if (index <= 0) return;
+    this.setState({wizardStep: steps[index - 1].id});
+  };
+
+  handleAdjustOptions = () => {
+    if (this.taskForm) this.taskForm.handleEditPreset();
+  };
+
+  // The task form stays mounted on every step so presets/nodes/options are never
+  // re-fetched; after step 1 it is shown read-only unless the option editor is open.
+  formWrapperClass(){
+    if (!this.wizardEnabled()) return this.state.inReview ? "disabled" : "";
+    const editing = this.state.formState && this.state.formState.editingPreset;
+    return this.state.wizardStep !== WIZARD_STEP_GOAL && !editing ? "disabled" : "";
+  }
+
+  showStepOneExtras(){
+    return !this.wizardEnabled() || this.state.wizardStep === WIZARD_STEP_GOAL;
+  }
+
+  renderWizardHeader(){
+    const steps = this.wizardSteps();
+    const current = this.wizardStepIndex();
+    return (
+      <ul className="wizard-steps">
+        {steps.map((step, i) => (
+          <li key={step.id} className={(i === current ? "active theme-background-highlight" : "") + (i < current ? " done" : "")}>
+            <span className="step-number">{i < current ? <i className="fa fa-check"></i> : i + 1}</span>{step.label}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  renderGoalStep(){
+    return (
+      <ProcessingGoalStep
+        cards={this.goalCards()}
+        selectedId={this.state.goalId}
+        onSelect={this.handleGoalSelect}
+      />
+    );
+  }
+
+  renderComputeStep(){
+    const fs = this.state.formState;
+    return (
+      <ComputePlanStep
+        imagesCount={this.props.filesCount}
+        nodeOptions={fs.selectedNode.options}
+        preset={fs.selectedPreset}
+        allocations={this.state.allocations || []}
+        allocationsLoading={this.state.allocationsLoading || this.state.allocations === null}
+        allocationsError={this.state.allocationsError}
+        onRetryAllocations={this.handleRetryAllocations}
+        allocation={this.state.allocation}
+        overrides={this.state.computeOverrides}
+        onChange={this.handleComputeChange}
+      />
+    );
+  }
+
+  renderReviewStep(){
+    const fs = this.state.formState;
+    const plan = this.computePlan();
+    const goal = this.state.goalId ? ProcessingGoals.findById(this.state.goalId) : null;
+    const taskInfo = this.taskForm ? this.taskForm.getTaskInfo() : null;
+    // The plan line already shows the HPC settings; keep them out of the options line so a
+    // preset's own tapis-* values cannot contradict what will actually be submitted.
+    const presetOptions = fs.selectedPreset ? fs.selectedPreset.options : [];
+    const optionsText = this.taskForm && fs.selectedPreset && fs.selectedNode
+      ? this.taskForm.getAvailableOptionsOnlyText(plan ? presetOptions.filter(o => !/^tapis-/.test(o.name)) : presetOptions, fs.selectedNode.options)
+      : "";
+
+    return (
+      <div className="wizard-review form-group">
+        <div className="col-sm-offset-2 col-sm-10">
+          <dl>
+            <dt>{_("Task")}</dt>
+            <dd>{taskInfo ? taskInfo.name : ""}</dd>
+            <dt>{_("Output")}</dt>
+            <dd>{goal ? goal.title() : (fs.selectedPreset ? fs.selectedPreset.name : "")}{fs.selectedPreset ? <span className="text-muted"> · {fs.selectedPreset.name}</span> : ""}</dd>
+            <dt>{_("Processing node")}</dt>
+            <dd>{fs.selectedNode ? fs.selectedNode.label : ""}</dd>
+            {plan ? [
+              <dt key="plan-t">{_("Compute plan")}</dt>,
+              <dd key="plan-d">{interpolate(_("%(queue)s queue, %(nodes)s node(s), %(time)s (%(su)s) on %(allocation)s"), {
+                queue: plan.queue, nodes: plan.nodes, time: ComputePlanText.hours(plan.maxMinutes), su: ComputePlanText.su(plan), allocation: this.state.allocation || "—"
+              })}</dd>
+            ] : ""}
+            <dt>{_("Processing options")}</dt>
+            <dd className="review-options">{optionsText}</dd>
+          </dl>
+          <button type="button" className="btn btn-sm btn-default adjust-options" onClick={this.handleAdjustOptions}>
+            <i className="fa fa-sliders-h"></i> {_("Adjust processing options")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  renderWizardButtons(filesCountOk){
+    const index = this.wizardStepIndex();
+    const last = index === this.wizardSteps().length - 1;
+    return (
+      <div className="form-group wizard-buttons">
+        <div className="col-sm-offset-2 col-sm-10">
+          <HpcAccessBanner compact={true} />
+        </div>
+        <div className="col-sm-offset-2 col-sm-10 text-right">
+          {this.props.onCancel !== undefined && <button type="button" className="btn btn-danger" onClick={this.cancel}><i className="glyphicon glyphicon-remove-circle"></i> {_("Cancel")}</button>}
+          {index > 0 ? <button type="button" className="btn btn-default wizard-back" onClick={this.handleWizardBack}><i className="fa fa-arrow-left"></i> {_("Back")}</button> : ""}
+          {this.state.loading ?
+            <button type="submit" className="btn btn-primary" disabled={true}><i className="fa fa-circle-notch fa-spin fa-fw"></i>{_("Loading…")}</button>
+          : last ?
+            <button type="submit" className="btn btn-primary wizard-start" onClick={this.submit} disabled={this.props.filesCount < 1 || !filesCountOk || !this.canAdvance()}><i className="glyphicon glyphicon-saved"></i> {_("Start Processing")}</button>
+          :
+            <button type="button" className="btn btn-primary wizard-next" onClick={this.handleWizardNext} disabled={!this.canAdvance() || !filesCountOk}>{_("Next")} <i className="fa fa-arrow-right"></i></button>
+          }
+        </div>
+      </div>
+    );
   }
 
   cancel = (e) => {
@@ -241,8 +545,9 @@ class NewTaskPanel extends React.Component {
     return (
       <div className="new-task-panel theme-background-highlight">
         <div className="form-horizontal">
-          <div className={this.state.inReview ? "disabled" : ""}>
-            <p>{fileCountInfo} {_("Please check these additional options:")}</p>
+          {this.wizardEnabled() ? this.renderWizardHeader() : ""}
+          <div className={this.formWrapperClass()}>
+            <p>{fileCountInfo} {this.wizardEnabled() ? "" : _("Please check these additional options:")}</p>
             {this.props.filesCount === 999 && !this.state.dismissImageCountWarning ? 
             <div className="alert alert-warning alert-dismissible alert-images">
               <button type="button" className="close" title={_("Close")} onClick={() => this.setState({dismissImageCountWarning: true})}><span aria-hidden="true">&times;</span></button>
@@ -277,10 +582,15 @@ class NewTaskPanel extends React.Component {
               ref={(domNode) => {this.mapPreview = domNode; }}
             /> : ""}
 
+            {this.wizardEnabled() && this.state.editTaskFormLoaded && this.state.wizardStep === WIZARD_STEP_GOAL ? this.renderGoalStep() : ""}
+
             <EditTaskForm
               selectedNode={Storage.getItem("last_processing_node") || "auto"}
               onFormLoaded={this.handleFormTaskLoaded}
               onFormChanged={this.handleFormChanged}
+              onStateChange={this.wizardEnabled() ? this.handleFormStateChange : undefined}
+              tapisOverrides={this.wizardTapisOverrides()}
+              presetDialogHiddenGroups={this.wizardEnabled() && this.hasComputeStep() ? ['tapis'] : []}
               inReview={this.state.inReview}
               suggestedTaskName={this.handleSuggestedTaskName}
               getCropPolygon={this.getCropPolygon}
@@ -288,7 +598,7 @@ class NewTaskPanel extends React.Component {
               ref={(domNode) => { if (domNode) this.taskForm = domNode; }}
             />
 
-            {this.state.editTaskFormLoaded && this.props.showAlign && this.state.showMapPreview && this.state.alignTasks.length > 0 ?
+            {this.showStepOneExtras() && this.state.editTaskFormLoaded && this.props.showAlign && this.state.showMapPreview && this.state.alignTasks.length > 0 ?
               <div>
                 <div className="form-group">
                   <label className="col-sm-2 control-label">{_("Alignment")}</label>
@@ -304,7 +614,7 @@ class NewTaskPanel extends React.Component {
               </div>
             : ""}
 
-            {this.state.editTaskFormLoaded && this.props.showResize ?
+            {this.showStepOneExtras() && this.state.editTaskFormLoaded && this.props.showResize ?
               <div>
                 <div className="form-group">
                   <label className="col-sm-2 control-label">{_("Resize Images")}</label>
@@ -346,7 +656,11 @@ class NewTaskPanel extends React.Component {
 
           </div>
 
-          {this.state.editTaskFormLoaded ?
+          {this.wizardEnabled() && this.state.editTaskFormLoaded && this.state.formState && this.state.wizardStep === WIZARD_STEP_COMPUTE ? this.renderComputeStep() : ""}
+          {this.wizardEnabled() && this.state.editTaskFormLoaded && this.state.formState && this.state.wizardStep === WIZARD_STEP_REVIEW ? this.renderReviewStep() : ""}
+
+          {this.wizardEnabled() ? (this.state.editTaskFormLoaded ? this.renderWizardButtons(filesCountOk) : "") :
+           this.state.editTaskFormLoaded ?
             <div className="form-group">
               <div className="col-sm-offset-2 col-sm-10">
                 {/* Advisory only: tells the user if their TACC account still needs HPC access set up. */}

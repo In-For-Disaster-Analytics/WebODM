@@ -12,6 +12,7 @@ def tapis_oauth2_context(request):
         'tapis_tenant_id': getattr(django_settings, 'TAPIS_TENANT_ID', ''),
         'default_tapis_client_id': None,
         'tapis_configured': False,
+        'ui_task_wizard': bool(getattr(django_settings, 'UI_TASK_WIZARD', False)),
     }
     
     try:

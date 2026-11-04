@@ -124,10 +124,24 @@ const OPTS_GROUPS = [
             { id: 'merging', name: _('Merging') }
         ]
     },
+    {
+        id: 'tapis',
+        name: _('HPC Job Settings'),
+        icon: 'fa fa-server',
+        subgroups: [
+            { id: 'tapis-job', name: _('Queue, allocation, nodes and run time') }
+        ]
+    },
 ];
 
 // Map each option to its group and subgroup
 const OPTION_GROUP_MAP = {
+    // HPC job settings published by Tapis-backed processing nodes (ClusterODX)
+    'tapis-queue': { group: 'tapis', subgroup: 'tapis-job' },
+    'tapis-allocation': { group: 'tapis', subgroup: 'tapis-job' },
+    'tapis-node': { group: 'tapis', subgroup: 'tapis-job' },
+    'tapis-max-run-time': { group: 'tapis', subgroup: 'tapis-job' },
+
     // Input & Preprocessing
     'camera-lens': { group: 'input', subgroup: 'camera' },
     'cameras': { group: 'input', subgroup: 'camera' },
@@ -254,6 +268,7 @@ const OPTION_GROUP_MAP = {
 
 class EditPresetDialog extends React.Component {
     static defaultProps = {
+        hiddenGroups: []
     };
 
     static propTypes = {
@@ -262,8 +277,17 @@ class EditPresetDialog extends React.Component {
         clusterNodeUrls: PropTypes.array,
         saveAction: PropTypes.func.isRequired,
         deleteAction: PropTypes.func.isRequired,
-        onHide: PropTypes.func
+        onHide: PropTypes.func,
+        // Option group ids (see OPTS_GROUPS) whose options are owned elsewhere and must
+        // not be shown or saved from this dialog (e.g. 'tapis' when the wizard sets them).
+        hiddenGroups: PropTypes.array
     };
+
+    static hiddenOptionNames(hiddenGroups){
+        const hidden = Array.isArray(hiddenGroups) ? hiddenGroups : [];
+        if (hidden.length === 0) return [];
+        return Object.keys(OPTION_GROUP_MAP).filter(name => hidden.indexOf(OPTION_GROUP_MAP[name].group) !== -1);
+    }
 
     constructor(props){
         super(props);
@@ -499,8 +523,10 @@ class EditPresetDialog extends React.Component {
     }
 
     render(){
+        const hiddenOptions = EditPresetDialog.hiddenOptionNames(this.props.hiddenGroups);
         let options = PresetUtils.getAvailableOptions(this.props.preset.options, this.props.availableOptions, this.props.clusterNodeUrls)
-                                 .filter(option => OPTS_BLACKLIST.indexOf(option.name.toLowerCase()) === -1);
+                                 .filter(option => OPTS_BLACKLIST.indexOf(option.name.toLowerCase()) === -1)
+                                 .filter(option => hiddenOptions.indexOf(option.name) === -1);
 
         return (
             <div className="edit-preset-dialog">
