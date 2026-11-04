@@ -17,6 +17,11 @@ SSH failures as HTTP 401: a missing TMS credential carries ``SSH_POOL_MISSING_CR
 (sometimes as a 500), a key the host rejects does not. Only a JWT rejected by the Tapis
 security filter (``TAPIS_SECURITY_JWT_*``) means the sign-in itself is invalid.
 
+Requests carry the user's JWT only. The Tapis filter rejects a *user* token that comes
+with ``X-Tapis-Tenant`` or ``X-Tapis-User`` (``TAPIS_SECURITY_UNEXPECTED_HEADER``, 401);
+those headers are for service tokens. Filter rejections are plain-text bodies, so the
+message reader falls back to the raw body when there is no JSON.
+
 The request-level functions take plain strings so they are testable without a database.
 """
 import logging
@@ -53,6 +58,8 @@ CODE_CREATE_FAILED = 'create_failed'
 MISSING_SIGNALS = ('SYSAPI_CRED_NOT_FOUND', 'SYSTEMS_MISSING_CREDENTIALS', 'SSH_POOL_MISSING_CREDENTIALS')
 # Prefix of every message the Tapis security filter emits when it refuses a JWT.
 JWT_REJECTED_SIGNAL = 'TAPIS_SECURITY_JWT'
+# Prefix shared by all security-filter rejections (bad JWT, unexpected headers, ...).
+AUTH_FILTER_SIGNAL = 'TAPIS_SECURITY_'
 
 SYSTEM_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 REQUEST_TIMEOUT_SECONDS = 10
@@ -77,11 +84,18 @@ def _trim(detail):
 
 
 def _tapis_message(response):
-    """Return the Tapis ``message`` field of a JSON error body, or an empty string."""
+    """
+    Return the Tapis ``message`` of an error response, or an empty string.
+
+    Service errors are JSON with a ``message`` field. The security filter writes its
+    ``TAPIS_SECURITY_*`` message as a plain string (with a JSON content type), so a body
+    that does not parse is returned as-is.
+    """
     try:
         body = response.json()
     except ValueError:
-        return ''
+        text = getattr(response, 'text', '')
+        return text if isinstance(text, str) else ''
     if isinstance(body, dict):
         message = body.get('message')
         if isinstance(message, str):
@@ -102,10 +116,10 @@ def _files_probe_url(base_url, system_id):
     return '{}/v3/files/ops/{}/?limit=1'.format(base_url.rstrip('/'), quote(system_id, safe=''))
 
 
-def _request(method, url, token, tenant_id, **kwargs):
+def _request(method, url, token, **kwargs):
+    # User token only: Tapis rejects X-Tapis-Tenant / X-Tapis-User on non-service JWTs.
     headers = {
         'X-Tapis-Token': token,
-        'X-Tapis-Tenant': tenant_id or '',
         'Accept': 'application/json',
     }
     if 'json' in kwargs:
@@ -124,7 +138,7 @@ def probe_credential(token, username, system_id, base_url, tenant_id):
     identifies the user); it is kept so callers and the create path share one signature.
     """
     try:
-        response = _request('GET', _files_probe_url(base_url, system_id), token, tenant_id)
+        response = _request('GET', _files_probe_url(base_url, system_id), token)
     except requests.RequestException as e:
         return ProbeResult(STATUS_UNKNOWN, CODE_TAPIS_UNREACHABLE, type(e).__name__)
 
@@ -137,6 +151,10 @@ def probe_credential(token, username, system_id, base_url, tenant_id):
     if response.status_code == 401:
         if JWT_REJECTED_SIGNAL in message:
             return ProbeResult(STATUS_UNKNOWN, CODE_TOKEN_EXPIRED, _trim(message))
+        if AUTH_FILTER_SIGNAL in message:
+            # The request itself was refused before reaching Files (e.g. a header Tapis
+            # does not accept on user tokens). Not an SSH problem, not an expired token.
+            return ProbeResult(STATUS_UNKNOWN, CODE_UNEXPECTED_RESPONSE, _trim(message))
         # Files could not log in to the host with the credential Tapis holds for the user.
         return ProbeResult(STATUS_UNKNOWN, CODE_SSH_AUTH_FAILED, _trim(message))
     if response.status_code == 403:
@@ -150,7 +168,7 @@ def create_tms_credential(token, username, system_id, base_url, tenant_id):
     """Ask Tapis to generate and register TMS SSH keys for ``username`` on ``system_id``."""
     url = _credential_url(base_url, system_id, username) + '?createTmsKeys=true'
     try:
-        response = _request('POST', url, token, tenant_id, json={})
+        response = _request('POST', url, token, json={})
     except requests.RequestException as e:
         return CreateResult(False, CODE_TAPIS_UNREACHABLE, type(e).__name__)
 
@@ -158,7 +176,8 @@ def create_tms_credential(token, username, system_id, base_url, tenant_id):
     if response.status_code in (200, 201):
         return CreateResult(True, CODE_OK, _trim(message))
     if response.status_code == 401:
-        return CreateResult(False, CODE_TOKEN_EXPIRED, _trim(message))
+        code = CODE_TOKEN_EXPIRED if JWT_REJECTED_SIGNAL in message else CODE_CREATE_FAILED
+        return CreateResult(False, code, _trim(message))
     if response.status_code == 403:
         return CreateResult(False, CODE_NOT_AUTHORIZED, _trim(message))
     if response.status_code >= 500:
