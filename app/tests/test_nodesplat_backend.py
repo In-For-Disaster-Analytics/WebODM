@@ -309,6 +309,29 @@ class TestApplyClusterStatus(NodeSplatBase):
         self.assertNotIn('/secret', self.run.error)
         self.assertTrue(self.run.error)
 
+    def test_failed_shows_clusterodx_curated_reason_only(self):
+        reason = 'Tapis rejected the job (HTTP 400): JOBS_ARCHIVE_DIR_INVALID: cannot evaluate HOST_EVAL.'
+        opensplat.apply_cluster_status(self.run, self.data(state='failed', error={'code': 'submission_rejected', 'message': reason}))
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.state, SplatRun.FAILED)
+        self.assertEqual(self.run.error, reason)
+
+    def test_failed_hides_uncurated_or_oversized_remote_text(self):
+        cases = (({'code': 'something_else', 'message': '/secret/path'}, '/secret'),
+                 ({'code': 'submission_rejected', 'message': 'x' * 1000}, None),
+                 ({'code': 'submission_rejected', 'message': 12345}, None),
+                 ({'message': '/secret/path'}, '/secret'))
+        for error, hidden in cases:
+            SplatRun.objects.filter(pk=self.run.pk).update(state=SplatRun.RUNNING, error='')
+            self.run.refresh_from_db()
+            opensplat.apply_cluster_status(self.run, self.data(state='failed', error=error))
+            self.run.refresh_from_db()
+            self.assertEqual(self.run.state, SplatRun.FAILED)
+            self.assertTrue(self.run.error)
+            self.assertLessEqual(len(self.run.error), 300)
+            if hidden:
+                self.assertNotIn(hidden, self.run.error)
+
     def test_terminal_run_not_overwritten(self):
         SplatRun.objects.filter(pk=self.run.pk).update(state=SplatRun.CANCELED)
         opensplat.apply_cluster_status(self.run, self.data(state='running'))
