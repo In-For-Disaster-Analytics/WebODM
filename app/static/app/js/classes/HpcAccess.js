@@ -59,6 +59,8 @@ const HpcAccess = {
         return _("Your TACC sign-in has expired. Please log out and log in again.");
       case 'not_authorized':
         return _("Your TACC account does not appear to have access to Lonestar6. You need an active allocation (for example BCS26030) before WebODM can set this up.");
+      case 'ssh_auth_failed':
+        return _("TACC could not log in to Lonestar6 with the SSH key stored for your account, so jobs cannot be submitted. Please contact the administrator.") + (detail ? " " + detail : "");
       case 'no_tapis_token':
         return _("No TACC sign-in is stored for this account. Please log out and log in again.");
       case 'misconfigured':
