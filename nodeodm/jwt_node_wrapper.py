@@ -729,7 +729,14 @@ class JWTNodeWrapper:
                         try:
                             restart_response = requests.post(restart_endpoint, json=payload, timeout=self.timeout)
                             if restart_response.status_code == 200:
-                                return restart_response.json()
+                                result = restart_response.json()
+                                # ClusterODM answers 200 with {"error": ...} when it cannot restart,
+                                # e.g. the task is only a canceled placeholder with no node behind it.
+                                # Raise like pyodm does, so the caller falls back to resubmitting
+                                # instead of reading the stale status back as the restart result.
+                                if isinstance(result, dict) and result.get('error'):
+                                    raise NodeServerError(f"ClusterODM restart returned error: {result['error']}")
+                                return result
                             else:
                                 error_msg = f"Failed to restart task: {restart_response.status_code} - {restart_response.text}"
                                 logger.error(error_msg)
