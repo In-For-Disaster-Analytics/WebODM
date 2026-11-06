@@ -11,6 +11,7 @@ from .tapis_preferences import TapisUserPreferences
 from .redirect import Redirect
 from .basemap import Basemap
 from .splat_run import SplatRun
+from .task_run import TaskRun
 
 # deprecated
 def image_directory_path(image_upload, filename):

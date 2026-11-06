@@ -51,6 +51,7 @@ from pyodx.exceptions import NodeResponseError, NodeConnectionError, NodeServerE
 from webodm import settings
 from app.classes.gcp import GCPFile
 from .project import Project
+from .task_run import TaskRun
 from .oauth2 import TapisOAuth2Token
 from django.utils.translation import gettext_lazy as _, gettext
 
@@ -990,6 +991,8 @@ class Task(models.Model):
                                 from app.plugins import signals as plugin_signals
                                 plugin_signals.task_failed.send_robust(sender=self.__class__, task_id=self.id)
 
+                        TaskRun.record_from(self, tapis_job=self.lookup_tapis_job(jwt_token))
+
                     else:
                         # Still waiting...
                         self.save()
@@ -1722,6 +1725,20 @@ class Task(models.Model):
             self.project.owner.profile.clear_used_quota_cache()
         except Exception as e:
             logger.warn("Cannot update size for task {}: {}".format(self, str(e)))
+
+    def lookup_tapis_job(self, jwt_token=None):
+        """
+        The Tapis job behind this task, as reported by a Tapis-backed processing node
+        (one that advertises the tapis-allocation option); None for other nodes or when
+        the node cannot say. Used to keep the job id with the task's run record.
+        """
+        node = self.processing_node
+        if not node or not self.uuid:
+            return None
+        names = [opt.get('name') for opt in (node.available_options or []) if isinstance(opt, dict)]
+        if 'tapis-allocation' not in names:
+            return None
+        return node.get_task_tapis_job(self.uuid, jwt_token)
 
     def _get_tapis_jwt_token(self):
         """
