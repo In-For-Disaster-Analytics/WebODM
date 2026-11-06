@@ -488,4 +488,279 @@ describe('<TaskWizard />', () => {
     expect(wrapper.find('.slot-top').exists()).toBe(true);
     expect(wrapper.find('.slot-bottom').exists()).toBe(false);
   });
+
+  describe('edit mode', () => {
+    const STAGES = ['dataset', 'opensfm', 'openmvs', 'odm_filterpoints', 'odm_meshing', 'mvs_texturing', 'odm_georeferencing', 'odm_dem', 'odm_orthophoto', 'odm_report', 'odm_postprocess'];
+    const RESUMABLE = { resumable: true, reason: null, expires_at: '2026-12-01T00:00:00Z', stages_completed: STAGES, engine_version: '1.0.18', checkpoint_bytes: 1, split: false, resumable_classes: [] };
+    const nodeWithForeign = Object.assign({}, tapisNode, { options: tapisNode.options.concat([{ name: 'min-num-features', type: 'int', value: '' }]) });
+
+    const makeTask = (extra = {}) => Object.assign({
+      id: 'abc', project: 4, status: 40, processing_node: 1, import_url: '', compacted: false, images_count: 468,
+      available_assets: ['orthophoto.tif'], can_rerun_from: STAGES.slice(),
+      options: [
+        { name: 'dsm', value: true }, { name: 'dtm', value: true }, { name: 'pc-classify', value: true },
+        { name: 'skip-3dmodel', value: true }, { name: 'min-num-features', value: 8000 },
+        { name: 'tapis-queue', value: 'normal' }, { name: 'tapis-node', value: '2' }, { name: 'tapis-max-run-time', value: '480' },
+        { name: 'tapis-allocation', value: 'BCS26030' }, { name: 'rerun-from', value: 'odm_report' }
+      ]
+    }, extra);
+
+    let resumeDeferred;
+    let getJSONCalls;
+
+    beforeEach(() => {
+      resumeDeferred = $.Deferred();
+      getJSONCalls = [];
+      $.getJSON.mockImplementation(url => {
+        getJSONCalls.push(url);
+        if (url.indexOf('/resume/') !== -1) return resumeDeferred.promise();
+        if (url.indexOf('/api/tas/allocations/') === 0) return allocationsDeferred.promise();
+        return $.Deferred().promise();
+      });
+    });
+
+    const mountEdit = ({ task = makeTask(), resume = RESUMABLE, node = nodeWithForeign, props = {} } = {}) => {
+      const mounted = mountWizard({ node, imagesCount: task.images_count, props: Object.assign({ mode: 'edit', task }, props), state: formState(node) });
+      // shallow mounting runs componentDidMount before the form is attached, as in the app
+      if (resume) resumeDeferred.resolve(resume);
+      mounted.wrapper.update();
+      return mounted;
+    };
+
+    const lines = wrapper => wrapper.find('.restart-advice li').map(li => li.text().trim());
+    const toReview = wrapper => { wrapper.setState({ step: 'review' }); wrapper.update(); };
+
+    it('starts from the inspected task options with an empty base, stripping rerun-from and tapis-*', () => {
+      const onUnavailable = jest.fn();
+      const { wrapper } = mountEdit({ props: { onUnavailable } });
+      expect(onUnavailable).not.toHaveBeenCalled();
+      expect(wrapper.state('ready')).toBe(true);
+      expect(wrapper.state('base')).toEqual([]);
+      expect(wrapper.state('selected')).toEqual(['orthophoto', 'dsm', 'dtm', 'point-cloud', 'report']);
+      expect(wrapper.state('extras')).toEqual([{ name: 'min-num-features', value: 8000 }]);
+      expect(wrapper.find(OutputSelectStep).exists()).toBe(true);
+      expect(formProps(wrapper).task.id).toBe('abc');
+    });
+
+    it('edit mode ignores the stored last outputs and needs no Default preset', () => {
+      Storage.setItem('last_outputs', JSON.stringify({ selected: ['orthophoto'], choices: {}, imagery: '' }));
+      const withoutDefault = formState(nodeWithForeign, { presets: [], loadedPresets: true });
+      const { wrapper } = mountEdit({ node: nodeWithForeign, props: {} });
+      expect(wrapper.state('selected')).toContain('dtm');
+      const task = makeTask();
+      const bare = shallow(<TaskWizard mode="edit" task={task} imagesCount={468} onSubmit={() => {}} />);
+      bare.instance().handleFormStateChange(withoutDefault);
+      expect(bare.state('ready')).toBe(true);
+    });
+
+    it('the composed options are the task options plus extras, with no base injected', () => {
+      const { wrapper } = mountEdit();
+      const composed = wrapper.instance().composed().options;
+      expect(composed).toContainEqual({ name: 'min-num-features', value: 8000 });
+      expect(composed).toContainEqual({ name: 'dsm', value: true });
+      ['split', 'pc-filter', 'use-3dmesh', 'rerun-from'].forEach(n => expect(names(composed)).not.toContain(n));
+      expect(formProps(wrapper).optionsOverride).toEqual(composed);
+    });
+
+    it('the name, tags and node fields come from the form (task prop), still on step 1', () => {
+      const { wrapper } = mountEdit();
+      expect(wrapper.find(OutputSelectStep).exists()).toBe(true);
+      expect(wrapper.find('div.disabled').exists()).toBe(false);
+    });
+
+    it('fetches the resume lookup once on mount, only for a restartable task', () => {
+      mountEdit();
+      expect(getJSONCalls.filter(u => u === '/api/projects/4/tasks/abc/resume/').length).toBe(1);
+
+      getJSONCalls = [];
+      mountEdit({ task: makeTask({ compacted: true }), resume: null });
+      expect(getJSONCalls.filter(u => u.indexOf('/resume/') !== -1).length).toBe(0);
+    });
+
+    it('no option changes: Save only, no advice', () => {
+      const { wrapper } = mountEdit();
+      wrapper.setState({ runMode: 'replace' });
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-save').hasClass('btn-primary')).toBe(true);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(false);
+      expect(lines(wrapper)).toEqual([]);
+      expect(wrapper.instance().changes()).toEqual({ changed: [], removedOutputs: [] });
+    });
+
+    it('adding 3D model, resumable, replace: Save and restart from Meshing', () => {
+      const { wrapper } = mountEdit();
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.instance().changes().changed.map(o => o.name).sort()).toEqual(['mesh-octree-depth', 'mesh-size', 'skip-3dmodel']);
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/Save and restart from Meshing/);
+      expect(lines(wrapper)[0]).toBe('Only Meshing and later stages need to re-run.');
+      expect(lines(wrapper).join(' ')).toMatch(/checkpoint is valid until/);
+    });
+
+    it('the same change as a new version: Save and run as new version', () => {
+      const { wrapper } = mountEdit();
+      expect(wrapper.state('runMode')).toBe('version');
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/Save and run as new version/);
+      expect(wrapper.find('input.run-mode-version').prop('checked')).toBe(true);
+    });
+
+    it('run mode defaults to new version with assets, replace without', () => {
+      expect(mountEdit().wrapper.state('runMode')).toBe('version');
+      expect(mountEdit({ task: makeTask({ available_assets: [] }) }).wrapper.state('runMode')).toBe('replace');
+    });
+
+    it('is not resumable: a full restart with the reason, never "Resumable"', () => {
+      const { wrapper } = mountEdit({ resume: { resumable: false, reason: 'expired', split: false } });
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/Save and restart from the beginning/);
+      expect(lines(wrapper).join(' ')).toMatch(/Full run: its checkpoint has expired/);
+      expect(wrapper.text()).not.toMatch(/esumable/);
+    });
+
+    it('while the lookup runs there is no restart action, only a note', () => {
+      const { wrapper } = mountEdit({ resume: null });
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(false);
+      expect(lines(wrapper)[0]).toMatch(/Checking whether this task can resume/);
+    });
+
+    it('a failed lookup falls back to a full run', () => {
+      const { wrapper } = mountEdit({ resume: null });
+      resumeDeferred.reject({ status: 500 });
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(lines(wrapper).join(' ')).toMatch(/Full run: the resume check failed/);
+    });
+
+    it('removing DSM: Save only, with the assets note', () => {
+      const { wrapper } = mountEdit();
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('dsm', false);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(false);
+      expect(wrapper.find('.wizard-save').hasClass('btn-primary')).toBe(true);
+      expect(lines(wrapper)[0]).toMatch(/Existing files for Surface model .* are not deleted/);
+    });
+
+    it('a changed option with no stage: Save only and "restart from the beginning"', () => {
+      const { wrapper } = mountEdit();
+      wrapper.setState({ runMode: 'replace', extras: [{ name: 'min-num-features', value: 8000 }, { name: 'max-concurrency', value: 4 }] });
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(false);
+      expect(lines(wrapper)).toEqual(['Restart from the beginning to apply these changes.']);
+    });
+
+    it('FAILED task: the partial restart comes with the safety note', () => {
+      const { wrapper } = mountEdit({ task: makeTask({ status: 30 }) });
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(true);
+      expect(lines(wrapper).join(' ')).toMatch(/Earlier stages must have completed; restarting from the beginning is the safe choice/);
+    });
+
+    it('compacted (or otherwise not restartable): Save only, no run mode', () => {
+      const { wrapper } = mountEdit({ task: makeTask({ compacted: true }), resume: null });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-restart-action').exists()).toBe(false);
+      expect(wrapper.find('.run-mode').exists()).toBe(false);
+      expect(lines(wrapper)).toEqual(['This task cannot be restarted from here, so your changes are saved only.']);
+
+      const noPermission = mountEdit({ props: { canRestart: false }, resume: null }).wrapper;
+      toReview(noPermission);
+      expect(noPermission.find('.wizard-restart-action').exists()).toBe(false);
+    });
+
+    it('split task: advice is by class', () => {
+      const split = Object.assign({}, RESUMABLE, { split: true, resumable_classes: ['M', 'O'] });
+      const { wrapper } = mountEdit({ resume: split });
+      wrapper.setState({ runMode: 'replace' });
+
+      wrapper.instance().handleToggleOutput('tiles', true);
+      toReview(wrapper);
+      expect(lines(wrapper)[0]).toBe('Only the merge step re-runs (minutes).');
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/re-run the merge/);
+
+      wrapper.instance().handleChoice('orthophoto-resolution', '2');
+      wrapper.update();
+      expect(lines(wrapper)[0]).toMatch(/Each section rebuilds its surface and map/);
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/rebuild surfaces and maps/);
+
+      wrapper.instance().handleChoice('pc-quality', 'high');
+      wrapper.update();
+      expect(lines(wrapper)[0]).toMatch(/Full run: pc-quality changes how the point cloud is built/);
+      expect(wrapper.find('.wizard-restart-action').text()).toMatch(/restart from the beginning/);
+    });
+
+    it('resume reason codes reach the review text', () => {
+      ['no_manifest', 'legacy_manifest', 'partial', 'write_failed', 'expired', 'optimize_disk_space', 'inconsistent', 'disabled', 'not_owner', 'not_tapis'].forEach(reason => {
+        const { wrapper } = mountEdit({ resume: { resumable: false, reason, split: false } });
+        wrapper.instance().handleToggleOutput('model-3d', true);
+        wrapper.setState({ runMode: 'replace', step: 'review' });
+        wrapper.update();
+        expect(lines(wrapper)[0]).toMatch(/^Full run: .+\.$/);
+        expect(lines(wrapper)[0]).not.toMatch(/this task cannot be resumed/);
+      });
+    });
+
+    it('submit reports the action, run mode and restart target', () => {
+      const { wrapper, onSubmit } = mountEdit();
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      toReview(wrapper);
+
+      wrapper.find('.wizard-save').simulate('click');
+      expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Flight 1' }), { action: 'save', runMode: 'replace', restartFrom: null, resumeClass: null });
+
+      wrapper.find('.wizard-restart-action').simulate('click');
+      expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Flight 1' }), { action: 'restart', runMode: 'replace', restartFrom: 'odm_meshing', resumeClass: null });
+
+      wrapper.setState({ runMode: 'version' });
+      wrapper.find('.wizard-restart-action').simulate('click');
+      expect(onSubmit).toHaveBeenLastCalledWith(expect.anything(), { action: 'version', runMode: 'version', restartFrom: 'odm_meshing', resumeClass: null });
+    });
+
+    it('a busy host disables the buttons; edit mode never saves last_outputs', () => {
+      Storage.setItem('last_outputs', 'sentinel');
+      const { wrapper, onSubmit } = mountEdit({ props: { busy: true } });
+      toReview(wrapper);
+      expect(wrapper.find('.wizard-save').prop('disabled')).toBe(true);
+      wrapper.setProps({ busy: false });
+      wrapper.find('.wizard-save').simulate('click');
+      expect(onSubmit).toHaveBeenCalled();
+      expect(Storage.getItem('last_outputs')).toBe('sentinel');
+    });
+
+    it('compute step: previous run values, allocation preselected, partial restart reason', () => {
+      const { wrapper } = mountEdit();
+      allocationsDeferred.resolve({ allocations: [{ chargeCode: 'OTHER', title: 'Other' }, { chargeCode: 'BCS26030', title: 'ODM' }], preferred: 'OTHER' });
+      wrapper.update();
+      expect(wrapper.state('allocation')).toBe('BCS26030');
+
+      wrapper.setState({ runMode: 'replace' });
+      wrapper.instance().handleToggleOutput('model-3d', true);
+      wrapper.setState({ step: 'compute' });
+      wrapper.update();
+      const step = wrapper.find(ComputePlanStep);
+      expect(step.prop('previous')).toEqual({ queue: 'normal', nodes: '2', maxMinutes: '480', allocation: 'BCS26030' });
+      expect(step.prop('partialStage')).toBe('odm_meshing');
+    });
+
+    it('new mode does not pass edit-only values to the compute step', () => {
+      const { wrapper } = mountWizard();
+      wrapper.setState({ step: 'compute', allocations: [], allocation: 'BCS26030' });
+      wrapper.update();
+      expect(wrapper.find(ComputePlanStep).prop('previous')).toBeNull();
+      expect(wrapper.find(ComputePlanStep).prop('partialStage')).toBeNull();
+    });
+  });
 });

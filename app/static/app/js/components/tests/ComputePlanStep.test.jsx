@@ -109,4 +109,27 @@ describe('<ComputePlanStep />', () => {
     const plan = ComputePlanStep.plan({ imagesCount: 50, nodeOptions, preset, overrides: {} });
     expect([plan.queue, plan.nodes, plan.maxMinutes]).toEqual(['vm-small', 1, 240]);
   });
+
+  describe('edit mode', () => {
+    it('shows the previous run, and Use previous sets overrides (values equal to the recommendation are dropped)', () => {
+      const onChange = jest.fn();
+      const wrapper = render({ onChange, previous: { queue: 'normal', nodes: 3, maxMinutes: 480 } });
+      expect(wrapper.find('.plan-reasons').text()).toMatch(/Previous run: normal queue, 3 node\(s\), 8 h/);
+      wrapper.find('.use-previous').simulate('click');
+      // recommended for 468 images is normal / 2 / 360
+      expect(onChange).toHaveBeenCalledWith({ overrides: { nodes: 3, maxMinutes: 480 } });
+    });
+
+    it('hides Use previous when the plan already equals it, and in new mode', () => {
+      expect(render({ previous: { queue: 'normal', nodes: 2, maxMinutes: 360 } }).find('.use-previous').exists()).toBe(false);
+      expect(render({}).find('.use-previous').exists()).toBe(false);
+      expect(render({ overrides: { nodes: 3 }, previous: { nodes: 3 } }).find('.use-previous').exists()).toBe(false);
+    });
+
+    it('explains that a partial restart needs far less time', () => {
+      const wrapper = render({ partialStage: 'odm_dem' });
+      expect(wrapper.find('.plan-reasons').text()).toMatch(/partial restart from odm_dem usually needs far less/);
+      expect(render({ partialStage: 'opensfm' }).find('.plan-reasons').text()).not.toMatch(/partial restart/);
+    });
+  });
 });
