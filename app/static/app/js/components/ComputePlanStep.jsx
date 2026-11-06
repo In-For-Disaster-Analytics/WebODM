@@ -80,10 +80,6 @@ class ComputePlanStep extends React.Component {
   handleReset = () => { this.props.onChange({ overrides: {} }); this.setState({ adjusting: false, drafts: { nodes: null, maxMinutes: null } }); };
   toggleAdjust = () => this.setState({ adjusting: !this.state.adjusting });
 
-  applySuggestion(suggestion){
-    if (suggestion.code === 'quality_runtime') this.setOverride('maxMinutes', suggestion.maxMinutes, ComputePlanStep.plan(this.props).baseline.maxMinutes);
-  }
-
   allocationLabel(code){
     const match = (this.props.allocations || []).find(a => a.chargeCode === code);
     return match && match.title ? `${match.title} (${match.chargeCode})` : code;
@@ -142,14 +138,13 @@ class ComputePlanStep extends React.Component {
                 <ul className="plan-reasons">
                   {plan.reasons.map((item, i) => <li key={i} className="text-muted"><i className="fa fa-info-circle"></i> {ComputePlanText.reason(item)}</li>)}
                 </ul> : ""}
-              {plan.suggestions.map((item, i) =>
-                <div key={i} className="plan-suggestion">
-                  <i className="fa fa-lightbulb"></i> {ComputePlanText.suggestion(item)}{" "}
-                  <a href="javascript:void(0);" className="apply-suggestion" onClick={() => this.applySuggestion(item)}>{_("Apply")}</a>
-                </div>)}
               {plan.warnings.map((item, i) =>
                 <div key={i} className="plan-warning text-warning"><i className="fa fa-exclamation-triangle"></i> {ComputePlanText.warning(item)}</div>)}
             </div>
+
+            <p className="plan-expectation text-muted">
+              {plan.factor === 1 ? ComputePlanText.qualityNote() + " " : ""}{ComputePlanText.expectation()}
+            </p>
 
             <div className="plan-actions">
               <button type="button" className="btn btn-sm btn-default toggle-adjust" onClick={this.toggleAdjust}>

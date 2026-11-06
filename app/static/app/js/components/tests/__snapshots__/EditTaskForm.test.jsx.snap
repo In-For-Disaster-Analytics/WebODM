@@ -1,0 +1,172 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`<EditTaskForm /> legacy render is unchanged with no wizard props (snapshot): option editor open 1`] = `
+"<div className=\\"edit-task-form\\">
+  <div className=\\"form-group\\">
+    <label className=\\"col-sm-2 control-label\\">
+      Name
+    </label>
+    <div className=\\"col-sm-10 name-fields\\">
+      <input type=\\"text\\" onChange={[Function: bound handleNameChange]} className=\\"form-control\\" placeholder=\\"Task of test\\" value=\\"\\" />
+      <button type=\\"button\\" title=\\"Add tags\\" onClick={[Function (anonymous)]} className=\\"btn btn-sm btn-secondary toggle-tags\\">
+        <i className=\\"fa fa-tag\\" />
+      </button>
+    </div>
+  </div>
+  <div>
+    <div className=\\"form-group\\">
+      <label className=\\"col-sm-2 control-label\\">
+        Processing Node
+      </label>
+      <div className=\\"col-sm-10\\">
+        <select className=\\"form-control\\" value={1} onChange={[Function: bound handleSelectNode]}>
+          <option value={1} disabled={false}>
+            node-odm-1
+          </option>
+        </select>
+      </div>
+    </div>
+    <div className=\\"form-group form-inline\\">
+      <label className=\\"col-sm-2 control-label\\">
+        Options
+      </label>
+      <div className=\\"col-sm-10\\">
+        <div>
+          <select title=\\"pc-quality:low\\" className=\\"form-control\\" value={1} onChange={[Function: bound handleSelectPreset]}>
+            <option value={-1} className=\\"system-preset\\">
+              (Custom)
+            </option>
+            <option value={1} className=\\"system-preset\\">
+              Default
+            </option>
+            <option value={2} className=\\"\\">
+              Mine
+            </option>
+          </select>
+          <div className=\\"btn-group presets-dropdown\\">
+            <button type=\\"button\\" className=\\"btn btn-sm btn-default\\" title=\\"Edit Task Options\\" onClick={[Function: bound handleEditPreset]}>
+              <i className=\\"fa fa-sliders-h\\" />
+               
+              Edit
+            </button>
+            <button type=\\"button\\" className=\\"btn btn-default btn-sm dropdown-toggle\\" data-toggle=\\"dropdown\\">
+              <span className=\\"caret\\" />
+            </button>
+            <ul className=\\"dropdown-menu\\">
+              <li>
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleEditPreset]}>
+                  <i className=\\"fa fa-sliders-h\\" />
+                   
+                  Edit
+                </a>
+              </li>
+              <li className=\\"divider\\" />
+              <li>
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleDuplicateSavePreset]}>
+                  <i className=\\"fa fa-copy\\" />
+                   
+                  Duplicate
+                </a>
+              </li>
+              <li className=\\"disabled\\">
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleDeletePreset]}>
+                  <i className=\\"fa fa-trash\\" />
+                   
+                  Delete
+                </a>
+              </li>
+            </ul>
+          </div>
+          <ErrorMessage className=\\"preset-error\\" bind={{...}} closeable={true} />
+        </div>
+      </div>
+    </div>
+    <EditPresetDialog preset={{...}} availableOptions={{...}} clusterNodeUrls={{...}} hiddenGroups={{...}} onHide={[Function: bound handleCancelEditPreset]} saveAction={[Function: bound handlePresetSave]} deleteAction={[Function: bound handleDeletePreset]} />
+  </div>
+</div>"
+`;
+
+exports[`<EditTaskForm /> legacy render is unchanged with no wizard props (snapshot): presets row 1`] = `
+"<div className=\\"edit-task-form\\">
+  <div className=\\"form-group\\">
+    <label className=\\"col-sm-2 control-label\\">
+      Name
+    </label>
+    <div className=\\"col-sm-10 name-fields\\">
+      <input type=\\"text\\" onChange={[Function: bound handleNameChange]} className=\\"form-control\\" placeholder=\\"Task of test\\" value=\\"\\" />
+      <button type=\\"button\\" title=\\"Add tags\\" onClick={[Function (anonymous)]} className=\\"btn btn-sm btn-secondary toggle-tags\\">
+        <i className=\\"fa fa-tag\\" />
+      </button>
+    </div>
+  </div>
+  <div>
+    <div className=\\"form-group\\">
+      <label className=\\"col-sm-2 control-label\\">
+        Processing Node
+      </label>
+      <div className=\\"col-sm-10\\">
+        <select className=\\"form-control\\" value={1} onChange={[Function: bound handleSelectNode]}>
+          <option value={1} disabled={false}>
+            node-odm-1
+          </option>
+        </select>
+      </div>
+    </div>
+    <div className=\\"form-group form-inline\\">
+      <label className=\\"col-sm-2 control-label\\">
+        Options
+      </label>
+      <div className=\\"col-sm-10\\">
+        <div>
+          <select title=\\"pc-quality:low\\" className=\\"form-control\\" value={1} onChange={[Function: bound handleSelectPreset]}>
+            <option value={-1} className=\\"system-preset\\">
+              (Custom)
+            </option>
+            <option value={1} className=\\"system-preset\\">
+              Default
+            </option>
+            <option value={2} className=\\"\\">
+              Mine
+            </option>
+          </select>
+          <div className=\\"btn-group presets-dropdown\\">
+            <button type=\\"button\\" className=\\"btn btn-sm btn-default\\" title=\\"Edit Task Options\\" onClick={[Function: bound handleEditPreset]}>
+              <i className=\\"fa fa-sliders-h\\" />
+               
+              Edit
+            </button>
+            <button type=\\"button\\" className=\\"btn btn-default btn-sm dropdown-toggle\\" data-toggle=\\"dropdown\\">
+              <span className=\\"caret\\" />
+            </button>
+            <ul className=\\"dropdown-menu\\">
+              <li>
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleEditPreset]}>
+                  <i className=\\"fa fa-sliders-h\\" />
+                   
+                  Edit
+                </a>
+              </li>
+              <li className=\\"divider\\" />
+              <li>
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleDuplicateSavePreset]}>
+                  <i className=\\"fa fa-copy\\" />
+                   
+                  Duplicate
+                </a>
+              </li>
+              <li className=\\"disabled\\">
+                <a href=\\"javascript:void(0);\\" onClick={[Function: bound handleDeletePreset]}>
+                  <i className=\\"fa fa-trash\\" />
+                   
+                  Delete
+                </a>
+              </li>
+            </ul>
+          </div>
+          <ErrorMessage className=\\"preset-error\\" bind={{...}} closeable={true} />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>"
+`;

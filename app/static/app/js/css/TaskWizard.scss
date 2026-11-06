@@ -1,0 +1,130 @@
+// Output-driven task wizard (WO_UI_TASK_WIZARD)
+.task-wizard{
+    .wizard-steps{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 4px 0 12px 0;
+        padding: 0;
+        list-style: none;
+
+        li{
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 90%;
+            opacity: 0.7;
+            border: 1px solid transparent;
+
+            .step-number{
+                display: inline-block;
+                min-width: 1.6em;
+                text-align: center;
+                border-radius: 50%;
+                margin-right: 4px;
+                font-weight: bold;
+            }
+
+            &.active{
+                opacity: 1;
+                font-weight: bold;
+            }
+            &.done{
+                opacity: 0.9;
+            }
+        }
+    }
+
+    .output-select-step, .output-options-step{
+        p.header{ margin: 4px 0 8px 0; }
+    }
+
+    .output-list{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .output-item{
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid;
+        border-radius: 4px;
+        margin: 0;
+        font-weight: normal;
+        cursor: pointer;
+
+        input[type=checkbox]{ margin-top: 4px; }
+        .output-icon{ font-size: 18px; margin-top: 2px; opacity: 0.8; }
+        .output-text{ display: flex; flex-direction: column; }
+        .output-title{ font-weight: bold; }
+        .output-help, .output-requires{ font-size: 85%; margin-top: 2px; }
+
+        &.selected{
+            border-width: 2px;
+        }
+    }
+
+    .imagery-question{ margin-bottom: 12px; }
+    .start-from-preset{
+        margin-bottom: 10px;
+        .preset-list{ display: block; max-width: 22em; margin-top: 6px; }
+    }
+
+    .output-card{
+        border: 1px solid;
+        border-radius: 4px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+
+        .output-card-title{ font-size: 110%; font-weight: bold; margin-bottom: 6px; }
+        .output-choice{ margin-bottom: 8px; }
+        .choice-help{ font-size: 90%; margin: 2px 0 4px 0; }
+        .radio{ margin: 2px 0; }
+        .recommended{ margin-left: 6px; font-weight: normal; }
+        .value-help{ font-size: 90%; font-weight: normal; }
+    }
+    .runtime-factor{ margin: 6px 0 10px 0; }
+
+    .compute-plan-step{
+        .compute-plan-summary{
+            border: 1px solid;
+            border-radius: 4px;
+            padding: 10px 12px;
+
+            .plan-headline{ font-size: 105%; }
+            .plan-reasons{ margin: 6px 0 0 0; padding-left: 0; list-style: none; font-size: 90%; li{ margin-top: 2px; } }
+            .plan-suggestion, .plan-warning{ margin-top: 6px; font-size: 92%; }
+        }
+        .plan-expectation{ margin-top: 8px; font-size: 90%; }
+        .plan-actions{
+            margin-top: 6px;
+            .reset-plan{ margin-left: 10px; font-size: 90%; }
+        }
+        .plan-adjust{
+            margin-top: 8px;
+            .adjust-field{
+                display: inline-block;
+                margin-right: 14px;
+                margin-bottom: 6px;
+                label{ display: block; font-size: 85%; font-weight: normal; opacity: 0.8; }
+                input.plan-nodes{ width: 5em; }
+                input.plan-minutes{ width: 7em; }
+            }
+        }
+    }
+
+    .wizard-review{
+        dl{ margin-bottom: 8px; }
+        dt{ font-weight: normal; opacity: 0.7; font-size: 90%; margin-top: 6px; }
+        dd{ margin-left: 0; }
+        .review-options{ font-family: monospace; font-size: 85%; word-break: break-word; }
+        .review-outputs div{ margin-bottom: 2px; }
+    }
+
+    .wizard-buttons{
+        button{ margin-left: 4px; }
+    }
+}
