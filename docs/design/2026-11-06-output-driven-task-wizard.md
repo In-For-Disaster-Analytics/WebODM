@@ -455,6 +455,7 @@ a task (a restarted task produces another row):
 | Column | Source |
 |---|---|
 | `task` (FK, `on_delete=SET_NULL`), `task_name`, `project_id` | the task; the FK is nulled on deletion so the record survives |
+| `task_uuid`, `tapis_job_id`, `tapis_job_name` (added 2026-11-06, user decision) | the node's task id (`Task.uuid`) and the Tapis job behind it, fetched once at terminal status from ClusterODX `GET /task/<uuid>/tapis` (new route; null for non-Tapis nodes or when the node cannot say). With the Tapis job id the rest (queue wait, wall time, exit status, charges, owner) can be pulled from Tapis later |
 | `status` (`COMPLETED`/`FAILED`/`CANCELED`), `started_at`, `finished_at` | task status; `finished_at = now()`; `started_at = finished_at − processing_time` when known |
 | `images_count`, `resize_to`, `image_width`, `image_height` | task fields; dimensions from the header of the first image file (`PIL.Image.open(...).size`, no decode), null on error |
 | `processing_node`, `engine`, `engine_version` | `ProcessingNode` label and engine fields at record time |
@@ -481,9 +482,12 @@ any `log.json` still on disk, so the historical data for the calibration plan co
 this table rather than an ad-hoc production query. No API endpoint in PR 0.
 
 **Not captured in PR 0** (follow-ups): the wizard's recommendation versus the user's
-choice (needs a client→server field; deferred until PR 1 defines it), SLURM queue wait and
-actual wall time from the Tapis job record (`remoteStarted`/`ended`, ClusterODX side),
-SU charged, and `log.json` for failed tasks (NodeODM does not serve `all.zip` for them).
+choice (needs a client→server field; deferred until PR 1 defines it), SLURM queue wait,
+actual wall time, exit status and SU charged (all derivable later from Tapis via the stored
+`tapis_job_id`), the owner's username (Tapis job `owner`), the worker's ODX version and
+effective options (present in `log.json` as `engine`/`version`/`options`, not parsed yet),
+the assets produced, and `log.json` for failed tasks (NodeODM does not serve `all.zip` for
+them).
 
 ## Files likely affected
 
@@ -841,6 +845,20 @@ ODM's 4×-per-step statement cited from ODX `opendm/config.py:458`.
     props on the `EditTaskForm` element. Accepted limitation: unticking Point cloud writes
     Fast mode even when the orthophoto is also unticked (a DSM-only job gets a sparse-cloud
     DSM), consistent with the rule. Still open: manual staging item 14.
+- 2026-11-06 — **Provenance keys added to PR 0** (Will: "as long as we keep the task's
+  Tapis id we should be able to pull the rest from Tapis if needed"). Findings that shaped
+  it: WebODM never saw the Tapis job id (ClusterODX holds the task→job mapping and prunes
+  closed records after `tapis.registryRetentionDays`, default 7 days); WebODM's task-info
+  parser (pyodx `TaskInfo`) keeps only known fields, so an extra field in the info
+  response would be dropped; ClusterODX proxies the info call straight to the worker while
+  it is alive. Design: ClusterODX gains `GET /task/<uuid>/tapis` (live worker first, then
+  the registry; answered only to the token that owns the task), WebODM calls it once at
+  terminal status for nodes that advertise `tapis-allocation` and stores `task_uuid`,
+  `tapis_job_id`, `tapis_job_name` on the run record. Implemented: ClusterODX `053d9c4` on
+  `feature/task-tapis-job-lookup` (new test, docs/tapis.md section); WebODM amended into
+  the PR 0 commit `ccba0f75` (`nodeodm.models.ProcessingNode.get_task_tapis_job`,
+  `Task.lookup_tapis_job`, migration regenerated, 12/12 tests). Deliberately not stored:
+  owner username, project name, assets, ODX version (recoverable from Tapis or `log.json`).
 - 2026-11-06 — Review round 1 (parallel): design reviewer "approvable after fixes" (14
   items, all applied or moved to Open questions); architect "revise, small" (5 must-change,
   all adopted; should-change adopted except keeping `detect` in the catalog, which was
