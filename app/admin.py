@@ -23,6 +23,7 @@ from app.models import Plugin
 from app.models import Profile
 from app.models import Redirect
 from app.models import Basemap
+from app.models import TaskRun
 from app.plugins import get_plugin_by_name, enable_plugin, disable_plugin, delete_plugin, valid_plugin, \
     get_plugins_persistent_path, clear_plugins_cache, init_plugins, get_plugins
 from .models import Project, Task, Setting, Theme
@@ -217,6 +218,21 @@ class ThemeAdmin(admin.ModelAdmin):
 
 admin.site.register(Theme, ThemeAdmin)
 admin.site.register(PluginDatum, admin.ModelAdmin)
+
+
+class TaskRunAdmin(admin.ModelAdmin):
+    list_display = ('task_name', 'status', 'finished_at', 'images_count', 'pc_quality', 'queue', 'nodes',
+                    'requested_minutes', 'processing_time_ms', 'tapis_job_id')
+    list_filter = ('status', 'queue', 'pc_quality')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+admin.site.register(TaskRun, TaskRunAdmin)
 
 
 class BasemapModelForm(forms.ModelForm):

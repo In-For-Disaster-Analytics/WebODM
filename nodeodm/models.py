@@ -252,6 +252,20 @@ class ProcessingNode(models.Model):
 
         return task_info
 
+    def get_task_tapis_job(self, uuid, jwt_token=None):
+        """
+        Asks a Tapis-backed cluster node (ClusterODX) which Tapis job runs or ran this
+        task (GET /task/<uuid>/tapis). Returns the node's JSON ({tapisJobId, jobName,
+        state, queue, ...}) or None when the node does not answer the route. Never raises.
+        """
+        try:
+            api_client = self.api_client(jwt_token=jwt_token)
+            result = api_client.get('/task/{}/tapis'.format(uuid))
+            return result if isinstance(result, dict) else None
+        except Exception as e:
+            logger.info("No Tapis job information for task {}: {}".format(uuid, str(e)))
+            return None
+
     def get_task_console_output(self, uuid, line, jwt_token=None):
         """
         Retrieves the console output of the OpenDroneMap's process.
