@@ -145,7 +145,7 @@ class EditTaskPanel extends React.Component {
       let step = 'create';
       const created = this.version ?
         Promise.resolve(this.version) :
-        jsonRequest(taskUrl(parent, 'duplicate'), 'POST', {as_version: true}).then(json => json && json.task ? json.task : json);
+        jsonRequest(taskUrl(parent, 'duplicate/'), 'POST', {as_version: true}).then(json => json && json.task ? json.task : json);
 
       return created
         .then(version => {
