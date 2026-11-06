@@ -1,0 +1,22 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`<EditTaskPanel /> legacy render is unchanged with the flag off (snapshot): legacy form 1`] = `
+"<div className=\\"edit-task-panel\\">
+  <ErrorMessage bind={{...}} closeable={true} />
+  <div className=\\"form-horizontal\\">
+    <EditTaskForm onFormLoaded={[Function: bound handleFormTaskLoaded]} task={{...}} selectedNode={{...}} onFormChanged={[Function: onFormChanged]} inReview={false} onStateChange={{...}} tapisOverrides={{...}} presetDialogHiddenGroups={{...}} optionsOverride={{...}} onOptionsEdited={{...}} />
+    <div className=\\"actions\\">
+      <button type=\\"button\\" className=\\"btn btn-sm btn-default\\" onClick={[Function: bound handleCancel]} disabled={false}>
+        Cancel
+      </button>
+      <button type=\\"button\\" className=\\"btn btn-sm btn-primary save\\" onClick={[Function: bound handleSave]} disabled={true}>
+        <span>
+          <i className=\\"fa fa-edit\\" />
+           
+          Save
+        </span>
+      </button>
+    </div>
+  </div>
+</div>"
+`;

@@ -5,6 +5,7 @@ import statusCodes from '../classes/StatusCodes';
 import pendingActions from '../classes/PendingActions';
 import ErrorMessage from './ErrorMessage';
 import EditTaskPanel from './EditTaskPanel';
+import { restartTask, isRestartable } from '../classes/TaskRestart';
 import AssetDownloadButtons from './AssetDownloadButtons';
 import HistoryNav from '../classes/HistoryNav';
 import PropTypes from 'prop-types';
@@ -341,10 +342,18 @@ class TaskListItem extends React.Component {
     return window.navigator.platform === "MacIntel";
   }
 
-  handleEditTaskSave(task){
+  handleEditTaskSave(task, { restarted = false } = {}){
     this.setState({task, editing: false});
     if (this.props.onEdited) this.props.onEdited(task);
-    this.setAutoRefresh();
+    // The panel restarted the task after saving it: pick up the pending restart
+    if (restarted) this.refresh();
+    else this.setAutoRefresh();
+  }
+
+  // A new version was created from this task by the edit wizard: the list shows it.
+  handleVersionCreated = () => {
+    this.setState({editing: false});
+    if (this.props.onDuplicate) this.props.onDuplicate();
   }
 
   handleMoveTask = () => {
@@ -395,63 +404,26 @@ class TaskListItem extends React.Component {
   }
 
   genRestartAction(rerunFrom = null, options = {}){
-    const { task } = this.state;
-
-    const restartAction = this.genActionApiCall("restart", {
-        success: () => {
-            this.setState({time: -1});
-        },
-        defaultError: _("Cannot restart task.")
-      }
-    );
-
-    const setTaskRerunFrom = (value) => {
+    const doAction = () => {
+      const { task } = this.state;
       this.setState({actionButtonsDisabled: true});
 
-      // Removing rerun-from?
-      if (value === null){
-        task.options = task.options.filter(opt => opt['name'] !== 'rerun-from');
-      }else{
-        // Adding rerun-from
-        let opt = null;
-        if (opt = task.options.find(opt => opt['name'] === 'rerun-from')){
-          opt['value'] = value;
-        }else{
-          // Not in existing list of options, append
-          task.options.push({
-            name: 'rerun-from',
-            value: value
+      // One PATCH (options with rerun-from), then the restart; the task is not mutated.
+      restartTask(task, task.options, rerunFrom)
+        .then(taskJson => {
+          this.setState({task: taskJson, time: -1});
+          this.refresh();
+        })
+        .catch(err => {
+          const restartFailed = err && err.stage === 'restart';
+          this.setState({
+            task: err && err.task ? err.task : this.state.task,
+            actionError: restartFailed
+              ? (err.message && err.message !== 'restart' ? err.message : _("Cannot restart task."))
+              : interpolate(_("Cannot restart task from %(stage)s."), { stage: rerunFrom || _("the start") }),
+            actionButtonsDisabled: false
           });
-        }
-      }
-
-      let data = {
-        options: task.options
-      };
-
-      // Force reprocess
-      if (value === null) data.uuid = '';
-
-      return $.ajax({
-          url: `/api/projects/${task.project}/tasks/${task.id}/`,
-          contentType: 'application/json',
-          data: JSON.stringify(data),
-          dataType: 'json',
-          type: 'PATCH'
-        }).done((taskJson) => {
-            this.setState({task: taskJson});
-          })
-          .fail(() => {
-            this.setState({
-              actionError: interpolate(_("Cannot restart task from (stage)s."), { stage: value || "the start"}),
-              actionButtonsDisabled: false
-            });
-          });
-    };
-
-    let doAction = () => {
-      setTaskRerunFrom(rerunFrom)
-        .then(restartAction);
+        });
     };
 
     return () => {
@@ -533,7 +505,8 @@ class TaskListItem extends React.Component {
                     ([pendingActions.CANCEL,
                       pendingActions.REMOVE,
                       pendingActions.COMPACT,
-                      pendingActions.RESTART].indexOf(task.pending_action) !== -1);
+                      pendingActions.RESTART,
+                      pendingActions.RESUME].indexOf(task.pending_action) !== -1);
     const editable = this.props.hasPermission("change") && [statusCodes.FAILED, statusCodes.COMPLETED, statusCodes.CANCELED].indexOf(task.status) !== -1;
     const actionLoading = this.state.actionLoading;
     const showAssetButtons = task.status === statusCodes.COMPLETED;
@@ -597,11 +570,7 @@ class TaskListItem extends React.Component {
           });
       }
 
-      if ([statusCodes.FAILED, statusCodes.COMPLETED, statusCodes.CANCELED].indexOf(task.status) !== -1 &&
-            task.processing_node &&
-            this.props.hasPermission("change") &&
-            !imported &&
-            !task.compacted){
+      if (isRestartable(task, this.props.hasPermission("change"))){
           // By default restart reruns every pipeline
           // step from the beginning
           const rerunFrom = null;
@@ -804,6 +773,8 @@ class TaskListItem extends React.Component {
             <EditTaskPanel
               task={this.state.task}
               onSave={this.handleEditTaskSave}
+              onVersion={this.handleVersionCreated}
+              canRestart={!!this.props.hasPermission("change")}
               onCancel={this.stopEditing}
             />
           </div>
@@ -943,7 +914,7 @@ class TaskListItem extends React.Component {
         : ""}
         <div className="row">
           <div className="col-xs-7 col-sm-6 col-md-5 col-lg-6 name">
-            <i onClick={this.toggleExpanded} className={"clickable far " + (this.state.expanded ? "fa-minus-square" : " fa-plus-square")}></i> <a href="javascript:void(0);" onClick={this.toggleExpanded} className="name-link">{name}</a>
+            <i onClick={this.toggleExpanded} className={"clickable far " + (this.state.expanded ? "fa-minus-square" : " fa-plus-square")}></i> <a href="javascript:void(0);" onClick={this.toggleExpanded} className="name-link">{name}</a>{task.version > 1 ? <span className="task-version-badge label label-default" title={task.parent_task_name || ""}> {interpolate(_("v%(version)s of %(name)s"), { version: task.version, name: task.parent_task_name || "" })}</span> : ""}
             {userTags.length > 0 ? 
               userTags.map((t, i) => <div key={i} className="tag-badge small-badge" onClick={this.handleTagClick(t)}>{t}</div>)
               : ""}

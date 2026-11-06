@@ -5,7 +5,8 @@ const CANCEL = 1,
       RESTART = 3,
       RESIZE = 4,
       IMPORT = 5,
-      COMPACT = 6;
+      COMPACT = 6,
+      RESUME = 7;
 
 let pendingActions = {
     [CANCEL]: {
@@ -25,6 +26,9 @@ let pendingActions = {
     },
     [COMPACT]: {
       descr: _("Compacting...")
+    },
+    [RESUME]: {
+      descr: _("Resuming...")
     }
 };
 
@@ -35,6 +39,7 @@ export default {
     RESIZE: RESIZE,
     IMPORT: IMPORT,
     COMPACT: COMPACT,
+    RESUME: RESUME,
 
     description: function(pendingAction) {
       if (pendingActions[pendingAction]) return pendingActions[pendingAction].descr;

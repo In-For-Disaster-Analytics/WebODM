@@ -77,6 +77,19 @@ const presetDisablesGpu = preset => {
   return value === true || String(value).toLowerCase() === 'true';
 };
 
+// Partial restarts from these stages skip the dense point cloud and need far less time.
+const PARTIAL_STAGES = ['odm_meshing', 'mvs_texturing', 'odm_georeferencing', 'odm_dem', 'odm_orthophoto', 'odm_report', 'odm_postprocess'];
+
+// The previous run's compute values, or null when it recorded none.
+const previousValues = previous => {
+  if (!previous) return null;
+  const queue = previous.queue ? String(previous.queue) : '';
+  const nodes = toInt(previous.nodes);
+  const maxMinutes = toInt(previous.maxMinutes);
+  if (!queue && nodes === null && maxMinutes === null) return null;
+  return { queue, nodes, maxMinutes };
+};
+
 const roundUpTo = (minutes, step) => Math.ceil(minutes / step) * step;
 
 const ComputeRecommender = {
@@ -87,7 +100,9 @@ const ComputeRecommender = {
   // preset: { name, options: [{name, value}] } — supplies pc-quality / fast-orthophoto / no-gpu
   // overrides: { queue?, nodes?, maxMinutes? } — user choices from the Adjust panel
   // factors: RUNTIME_FACTORS-shaped table (tests inject their own)
-  recommend({ imagesCount = 0, options = {}, preset = null, overrides = {}, catalog = HpcQueueCatalog.LS6_QUEUES, factors = RUNTIME_FACTORS } = {}) {
+  // previous: { queue?, nodes?, maxMinutes? } — the saved task's own tapis-* values (edit mode)
+  // partialStage: stage id when a partial restart is being offered (edit mode), else null
+  recommend({ imagesCount = 0, options = {}, preset = null, overrides = {}, catalog = HpcQueueCatalog.LS6_QUEUES, factors = RUNTIME_FACTORS, previous = null, partialStage = null } = {}) {
     const images = Math.max(0, toInt(imagesCount, 0));
     const queueOpt = options.queue || {};
     const nodesOpt = options.nodes || {};
@@ -144,6 +159,13 @@ const ComputeRecommender = {
       }
     }
     const baseline = { queue, nodes, maxMinutes };
+
+    // Edit mode (rule 5): remember the previous run's values so the UI can offer them, and say
+    // that a partial restart usually needs far less than the full run time. Nothing is changed
+    // automatically.
+    const previousPlan = previousValues(previous);
+    if (previousPlan) reasons.push(Object.assign({ code: 'previous_run' }, previousPlan));
+    if (partialStage && PARTIAL_STAGES.indexOf(partialStage) !== -1) reasons.push({ code: 'rerun_partial', stage: partialStage });
 
     // 3. Overrides (queue must be one the node offers).
     if (overrides.queue !== undefined && overrides.queue !== null && overrides.queue !== '') {
@@ -210,6 +232,7 @@ const ComputeRecommender = {
       maxMinutes,
       tierMaxImages,
       baseline,
+      previous: previousPlan,
       queueChoices: queueDomain,
       nodesMax: nodeCaps.length > 0 ? Math.min.apply(null, nodeCaps) : null,
       maxMinutesMax: [queueInfo && queueInfo.maxMinutes, timeDomainMax].filter(n => Number.isFinite(n) && n > 0).reduce((a, b) => Math.min(a, b), Infinity) === Infinity

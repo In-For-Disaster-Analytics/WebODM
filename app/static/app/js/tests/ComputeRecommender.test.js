@@ -199,4 +199,44 @@ describe('ComputeRecommender', () => {
       expect(ComputeRecommender.runtimeFactor(quality('ultra'))).toBe(1.0);
     });
   });
+
+  describe('rule 5: edit mode', () => {
+    const recommend = extra => ComputeRecommender.recommend(Object.assign({
+      imagesCount: 468, options: ComputeRecommender.tapisOptionsFromNode(nodeOptions()), preset: DEFAULT_LOW
+    }, extra));
+
+    it('reports the previous run values and a previous_run reason, changing nothing', () => {
+      const plain = recommend({});
+      const plan = recommend({ previous: { queue: 'normal', nodes: '2', maxMinutes: '480' } });
+      expect(plan.previous).toEqual({ queue: 'normal', nodes: 2, maxMinutes: 480 });
+      expect(plan.reasons.find(r => r.code === 'previous_run')).toEqual({ code: 'previous_run', queue: 'normal', nodes: 2, maxMinutes: 480 });
+      expect([plan.queue, plan.nodes, plan.maxMinutes]).toEqual([plain.queue, plain.nodes, plain.maxMinutes]);
+    });
+
+    it('has no previous plan when none (or nothing usable) is given', () => {
+      expect(recommend({}).previous).toBeNull();
+      expect(recommend({ previous: null }).previous).toBeNull();
+      expect(recommend({ previous: { queue: '', nodes: null, maxMinutes: 'x' } }).previous).toBeNull();
+      expect(codes(recommend({}).reasons)).not.toContain('previous_run');
+    });
+
+    it('keeps a partial previous run (only the run time known)', () => {
+      expect(recommend({ previous: { maxMinutes: 90 } }).previous).toEqual({ queue: '', nodes: null, maxMinutes: 90 });
+    });
+
+    it('rerun_partial is added for a partial restart from odm_meshing or later, with no automatic reduction', () => {
+      const full = recommend({});
+      ['odm_meshing', 'odm_dem', 'odm_postprocess'].forEach(stage => {
+        const plan = recommend({ partialStage: stage });
+        expect(plan.reasons.find(r => r.code === 'rerun_partial')).toEqual({ code: 'rerun_partial', stage });
+        expect(plan.maxMinutes).toBe(full.maxMinutes);
+      });
+    });
+
+    it('rerun_partial is not added for opensfm or earlier, or without a partial restart', () => {
+      ['opensfm', 'dataset', 'odm_filterpoints', null].forEach(stage => {
+        expect(codes(recommend({ partialStage: stage }).reasons)).not.toContain('rerun_partial');
+      });
+    });
+  });
 });

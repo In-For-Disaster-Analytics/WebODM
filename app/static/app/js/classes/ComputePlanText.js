@@ -36,6 +36,12 @@ const ComputePlanText = {
           return interpolate(_("Ultra quality needs a full node (128 cores, 256 GB); vm-small has 16 cores and 30 GB. development has a 2-hour limit and short queue waits: a good first attempt. If the run is killed for time, edit the task and move it to %(fallback)s."), { fallback: item.fallbackQueue });
         }
         return interpolate(_("Ultra quality needs a full node (128 cores, 256 GB); vm-small has 16 cores and 30 GB, so %(queue)s is used."), { queue: item.queue });
+      case 'previous_run':
+        return interpolate(_("Previous run: %(queue)s queue, %(nodes)s node(s), %(time)s."), {
+          queue: item.queue || "—", nodes: item.nodes === null ? "—" : item.nodes, time: item.maxMinutes === null ? "—" : hours(item.maxMinutes)
+        });
+      case 'rerun_partial':
+        return interpolate(_("A partial restart from %(stage)s usually needs far less than the full run time. The plan is not reduced automatically."), { stage: item.stage });
       case 'gpu_available':
         return interpolate(_("A GPU queue (%(queues)s) is available on this node. Feature extraction can be faster there, at 1.5–6× the SU rate."), { queues: (item.queues || []).join(', ') });
       default:

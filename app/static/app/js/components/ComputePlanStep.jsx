@@ -18,7 +18,9 @@ class ComputePlanStep extends React.Component {
     allocationsError: false,
     onRetryAllocations: null,
     allocation: "",
-    overrides: {}
+    overrides: {},
+    previous: null,
+    partialStage: null
   };
 
   static propTypes = {
@@ -31,6 +33,8 @@ class ComputePlanStep extends React.Component {
     onRetryAllocations: PropTypes.func,
     allocation: PropTypes.string,      // selected charge code
     overrides: PropTypes.object,       // {queue, nodes, maxMinutes}
+    previous: PropTypes.object,        // edit mode: the saved task's {queue, nodes, maxMinutes}
+    partialStage: PropTypes.string,    // edit mode: stage of the partial restart on offer
     onChange: PropTypes.func.isRequired // ({allocation?, overrides?}) => void
   };
 
@@ -39,7 +43,9 @@ class ComputePlanStep extends React.Component {
       imagesCount: props.imagesCount,
       options: ComputeRecommender.tapisOptionsFromNode(props.nodeOptions),
       preset: props.preset,
-      overrides: props.overrides || {}
+      overrides: props.overrides || {},
+      previous: props.previous,
+      partialStage: props.partialStage
     });
   }
 
@@ -75,6 +81,18 @@ class ComputePlanStep extends React.Component {
     const parsed = parseInt(draft, 10);
     this.setOverride(key, Number.isFinite(parsed) && parsed > 0 ? parsed : "", baseline[key]);
     this.setState({ drafts: Object.assign({}, this.state.drafts, { [key]: null }) });
+  };
+
+  // Overrides that reproduce the previous run; values equal to the recommendation are no override.
+  handleUsePrevious = () => {
+    const plan = ComputePlanStep.plan(this.props);
+    const overrides = {};
+    ['queue', 'nodes', 'maxMinutes'].forEach(key => {
+      const value = plan.previous[key];
+      if (value !== null && value !== '' && String(value) !== String(plan.baseline[key])) overrides[key] = value;
+    });
+    this.props.onChange({ overrides });
+    this.setState({ adjusting: Object.keys(overrides).length > 0 });
   };
 
   handleReset = () => { this.props.onChange({ overrides: {} }); this.setState({ adjusting: false, drafts: { nodes: null, maxMinutes: null } }); };
@@ -113,6 +131,8 @@ class ComputePlanStep extends React.Component {
     const plan = ComputePlanStep.plan(this.props);
     const hasOverrides = !!(this.props.overrides && Object.keys(this.props.overrides).length);
     const { drafts } = this.state;
+    const previous = plan.previous;
+    const usePrevious = !!previous && ['queue', 'nodes', 'maxMinutes'].some(key => previous[key] !== null && previous[key] !== '' && String(previous[key]) !== String(plan[key]));
 
     return (
       <div className="compute-plan-step">
@@ -150,6 +170,8 @@ class ComputePlanStep extends React.Component {
               <button type="button" className="btn btn-sm btn-default toggle-adjust" onClick={this.toggleAdjust}>
                 <i className={"fa fa-fw " + (this.state.adjusting ? "fa-chevron-up" : "fa-sliders-h")}></i> {_("Adjust")}
               </button>
+              {usePrevious ?
+                <a href="javascript:void(0);" className="use-previous" onClick={this.handleUsePrevious}><i className="fa fa-history"></i> {_("Use previous")}</a> : ""}
               {hasOverrides ?
                 <a href="javascript:void(0);" className="reset-plan" onClick={this.handleReset}><i className="fa fa-undo"></i> {_("Reset to recommended")}</a> : ""}
             </div>
