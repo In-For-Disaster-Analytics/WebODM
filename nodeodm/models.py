@@ -9,11 +9,13 @@ from guardian.models import GroupObjectPermissionBase
 from guardian.models import UserObjectPermissionBase
 from guardian.shortcuts import get_objects_for_user, assign_perm
 from django.utils.translation import gettext_lazy as _
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 from webodm import settings
 
 import json
+import re
+import requests
 from pyodx import Node
 from pyodx import exceptions
 from django.db.models import signals
@@ -265,6 +267,76 @@ class ProcessingNode(models.Model):
         except Exception as e:
             logger.info("No Tapis job information for task {}: {}".format(uuid, str(e)))
             return None
+
+    def _node_request_target(self, path, jwt_token=None):
+        """
+        (url, params) for an owner-scoped node route. The user's JWT (or else the node
+        token) travels as the "token" query parameter, like JWTNodeWrapper does, but is
+        passed to requests as params so it is never part of a string we build or log.
+        The pyodx client's raw get/post helpers send the node token only.
+        """
+        protocol = "https" if self.port == 443 else "http"
+        url = "{}://{}:{}/{}".format(protocol, self.hostname, self.port, path.lstrip('/'))
+        token = jwt_token or self.token
+        return url, ({'token': token} if token else {})
+
+    @staticmethod
+    def _redact(message, *secrets):
+        """requests errors embed the full URL, query string included: strip credentials."""
+        message = re.sub(r'(token|access_token)=[^&\s\')"]+', r'\1=[REDACTED]', str(message))
+        for secret in secrets:
+            if secret:
+                message = message.replace(secret, '[REDACTED]')
+        return message
+
+    def get_task_resume_info(self, uuid, jwt_token=None):
+        """
+        Asks a Tapis-backed cluster node (ClusterODX) whether the task's checkpoint can be
+        resumed (GET /task/<uuid>/resume). Returns the node's JSON ({resumable, reason,
+        expiresAt, stagesCompleted, engineVersion, checkpointBytes, split, ...}) or None
+        when the node does not answer the route. Never raises.
+        """
+        try:
+            url, params = self._node_request_target('/task/{}/resume'.format(uuid), jwt_token)
+            res = requests.get(url, params=params, timeout=10)
+            result = res.json() if res.status_code == 200 else None
+            return result if isinstance(result, dict) else None
+        except Exception as e:
+            logger.info("No resume information for task {}: {}".format(
+                uuid, self._redact(e, jwt_token, self.token)))
+            return None
+
+    def resume_task(self, uuid, options=None, new_version=False, jwt_token=None):
+        """
+        Starts a new run seeded with the checkpoint of task `uuid` (POST /task/resume).
+        With new_version the node mints and returns a new task uuid and leaves `uuid`
+        untouched. Returns the node's parsed JSON ({uuid, ...}). Raises
+        NodeResponseError with the node's own message when it refuses or fails to resume,
+        and NodeConnectionError when it cannot be reached.
+        """
+        payload = {
+            'uuid': uuid,
+            'options': json.dumps([{'name': k, 'value': v} for k, v in self.options_list_to_dict(options).items()]),
+            'newVersion': bool(new_version),
+        }
+        url, params = self._node_request_target('/task/resume', jwt_token)
+        try:
+            res = requests.post(url, params=params, json=payload, timeout=30)
+        except requests.exceptions.RequestException as e:
+            raise exceptions.NodeConnectionError(self._redact(e, jwt_token, self.token))
+
+        try:
+            result = res.json()
+        except ValueError:
+            result = None
+
+        if res.status_code != 200 or not isinstance(result, dict) or result.get('error') or result.get('errorMessage'):
+            message = None
+            if isinstance(result, dict):
+                message = result.get('errorMessage') or result.get('error')
+            raise exceptions.NodeResponseError(message or "Resume failed: node answered HTTP {}".format(res.status_code))
+
+        return result
 
     def get_task_console_output(self, uuid, line, jwt_token=None):
         """

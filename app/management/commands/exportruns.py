@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from app.models import TaskRun
 
-JSON_COLUMNS = ('options', 'stage_seconds')
+JSON_COLUMNS = ('options', 'parent_options', 'stage_seconds')
 
 
 class Command(BaseCommand):
