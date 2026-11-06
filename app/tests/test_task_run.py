@@ -141,6 +141,26 @@ class TestTaskRun(BootTestCase):
         with patch.object(ProcessingNode, 'api_client', side_effect=Exception("boom")):
             self.assertIsNone(node.get_task_tapis_job(t.uuid))
 
+    def test_lineage_and_resume_columns_copied(self):
+        parent = self.make_task(status_codes.COMPLETED, name="Base")
+        t = parent.duplicate(as_version=True)
+        t.status = status_codes.COMPLETED
+        t.resume_info = {"checkpoint_uuid": "parent-uuid", "resumed_from_stage": "odm_dem",
+                         "checkpoint_engine_version": "3.5.6", "resume_mode": "resume"}
+        t.save()
+        run = TaskRun.record_from(t)
+        self.assertEqual((run.version, run.parent_task_ref, run.parent_task_name), (2, parent.id, "Base"))
+        self.assertEqual(run.parent_options, OPTIONS)
+        self.assertTrue(run.images_from_parent)
+        self.assertEqual((run.checkpoint_uuid, run.resumed_from_stage, run.resume_mode, run.checkpoint_engine_version),
+                         ("parent-uuid", "odm_dem", "resume", "3.5.6"))
+
+        # A task that is not a version has neutral defaults
+        plain = TaskRun.record_from(parent)
+        self.assertEqual((plain.version, plain.parent_task_ref, plain.parent_task_name, plain.resume_mode),
+                         (1, None, "", None))
+        self.assertFalse(plain.images_from_parent)
+
     def test_unknown_processing_time_is_null(self):
         t = self.make_task(status_codes.FAILED)
         t.processing_time = -1

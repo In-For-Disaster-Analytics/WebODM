@@ -222,8 +222,9 @@ admin.site.register(PluginDatum, admin.ModelAdmin)
 
 class TaskRunAdmin(admin.ModelAdmin):
     list_display = ('task_name', 'status', 'finished_at', 'images_count', 'pc_quality', 'queue', 'nodes',
-                    'requested_minutes', 'processing_time_ms', 'tapis_job_id')
-    list_filter = ('status', 'queue', 'pc_quality')
+                    'requested_minutes', 'processing_time_ms', 'tapis_job_id', 'version', 'parent_task_name',
+                    'resume_mode', 'resumed_from_stage')
+    list_filter = ('status', 'queue', 'pc_quality', 'resume_mode')
 
     def has_add_permission(self, request):
         return False

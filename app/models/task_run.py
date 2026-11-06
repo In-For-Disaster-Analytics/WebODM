@@ -80,6 +80,19 @@ class TaskRun(models.Model):
     allocation = models.CharField(max_length=100, null=True, blank=True)
     rerun_from = models.CharField(max_length=64, null=True, blank=True)
 
+    # Lineage and resume provenance, copied from the task so that a run stays traceable
+    # after its parent task (or the task itself) is deleted.
+    parent_task_ref = models.UUIDField(null=True, blank=True, db_index=True)
+    parent_task_uuid = models.CharField(max_length=255, blank=True, default="")
+    parent_task_name = models.CharField(max_length=255, blank=True, default="")
+    parent_options = fields.JSONField(default=list, blank=True)
+    version = models.IntegerField(default=1)
+    images_from_parent = models.BooleanField(default=False)
+    checkpoint_uuid = models.CharField(max_length=255, blank=True, default="")
+    resumed_from_stage = models.CharField(max_length=64, null=True, blank=True)
+    checkpoint_engine_version = models.CharField(max_length=32, null=True, blank=True)
+    resume_mode = models.CharField(max_length=32, null=True, blank=True)
+
     processing_time_ms = models.BigIntegerField(null=True, blank=True)
     odm_total_seconds = models.FloatField(null=True, blank=True)
     stage_seconds = fields.JSONField(null=True, blank=True)
@@ -131,6 +144,7 @@ class TaskRun(models.Model):
                 opts[o['name']] = o.get('value')
 
         node = task.processing_node
+        resume = task.resume_info if isinstance(task.resume_info, dict) else {}
         job = tapis_job if isinstance(tapis_job, dict) else {}
         row = cls(
             task=task,
@@ -157,6 +171,16 @@ class TaskRun(models.Model):
             requested_minutes=_as_int(opts.get('tapis-max-run-time')),
             allocation=_as_str(opts.get('tapis-allocation')),
             rerun_from=_as_str(opts.get('rerun-from')),
+            parent_task_ref=task.parent_task_ref,
+            parent_task_uuid=task.parent_task_uuid or "",
+            parent_task_name=task.parent_task_name or "",
+            parent_options=task.parent_options or [],
+            version=task.version,
+            images_from_parent=task.images_from_parent,
+            checkpoint_uuid=_as_str(resume.get('checkpoint_uuid')) or "",
+            resumed_from_stage=_as_str(resume.get('resumed_from_stage')),
+            checkpoint_engine_version=_as_str(resume.get('checkpoint_engine_version')),
+            resume_mode=_as_str(resume.get('resume_mode')),
             processing_time_ms=processing_time,
             last_error=(task.last_error or "")[:300],
         )

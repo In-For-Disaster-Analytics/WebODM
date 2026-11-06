@@ -239,6 +239,7 @@ class Task(models.Model):
         (pending_actions.RESIZE, 'RESIZE'),
         (pending_actions.IMPORT, 'IMPORT'),
         (pending_actions.COMPACT, 'COMPACT'),
+        (pending_actions.RESUME, 'RESUME'),
     )
 
     TASK_PROGRESS_LAST_VALUE = 0.85
@@ -295,6 +296,17 @@ class Task(models.Model):
     ckan_url = models.URLField(null=True, blank=True, help_text=_("CKAN dataset URL if this task has been published"), verbose_name=_("CKAN URL"))
 
     media = fields.JSONField(default=list, blank=True, help_text=_("List of media files associated with this task"), verbose_name=_("Media"))
+
+    # Version lineage. The *_ref/_uuid/_name/_options copies are written at duplication and
+    # never nulled, so a version stays traceable after its parent is deleted.
+    parent_task = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='versions', help_text=_("Task this version was derived from (null once that task is deleted)"), verbose_name=_("Parent Task"))
+    parent_task_ref = models.UUIDField(null=True, blank=True, db_index=True, help_text=_("Id of the task this version was derived from (kept after deletion)"), verbose_name=_("Parent Task Reference"))
+    parent_task_uuid = models.CharField(max_length=255, blank=True, default='', help_text=_("Processing node id of the parent task"), verbose_name=_("Parent Task UUID"))
+    parent_task_name = models.CharField(max_length=255, null=True, blank=True, help_text=_("Name of the parent task at duplication time"), verbose_name=_("Parent Task Name"))
+    parent_options = fields.JSONField(default=list, blank=True, help_text=_("Options of the parent task at duplication time"), verbose_name=_("Parent Options"))
+    version = models.IntegerField(default=1, help_text=_("Version number within the task lineage"), verbose_name=_("Version"))
+    images_from_parent = models.BooleanField(default=False, help_text=_("A flag indicating whether the images were hard-linked or copied from the parent task"), verbose_name=_("Images From Parent"))
+    resume_info = fields.JSONField(default=dict, blank=True, help_text=_("What the processing node reported when this version was resumed from its parent's checkpoint"), verbose_name=_("Resume Info"))
 
     class Meta:
         verbose_name = _("Task")
@@ -480,37 +492,99 @@ class Task(models.Model):
         else:
             return {}
 
-    def duplicate(self, set_new_name=True):
+    LINEAGE_FIELDS = ('parent_task', 'parent_task_ref', 'parent_task_uuid', 'parent_task_name',
+                      'parent_options', 'images_from_parent')
+
+    def _root_name(self):
+        return re.sub(r'\s+v\d+$', '', self.name or '')
+
+    def _next_version_number(self):
+        """
+        One more than the highest version in this task's lineage: walk up to the oldest
+        surviving ancestor, then down through every task derived from it.
+        """
+        root = self
+        seen = {root.pk}
+        while root.parent_task_ref and root.parent_task_ref not in seen:
+            parent = Task.objects.filter(pk=root.parent_task_ref).first()
+            if parent is None:
+                break
+            seen.add(parent.pk)
+            root = parent
+
+        highest = root.version
+        frontier = [root.pk]
+        visited = {root.pk}
+        while frontier:
+            children = Task.objects.filter(parent_task_ref__in=frontier).exclude(pk__in=visited)
+            frontier = []
+            for child in children:
+                visited.add(child.pk)
+                frontier.append(child.pk)
+                highest = max(highest, child.version)
+        return highest + 1
+
+    def duplicate(self, set_new_name=True, as_version=False):
+        """
+        Duplicates this task and its files. With as_version the copy is named
+        "<root name> v<N>", records where it came from, and starts without a node uuid
+        so that it can be resumed from this task's checkpoint.
+
+        The row is committed before the (possibly multi-GB) directory copy so that the
+        copy never holds a transaction open; the row is deleted again if the copy fails.
+        """
+        task = None
         try:
             with transaction.atomic():
                 task = Task.objects.get(pk=self.pk)
                 task.pk = None
-                if set_new_name:
+                for f in self.LINEAGE_FIELDS:
+                    setattr(task, f, Task._meta.get_field(f).get_default())
+                task.version = 1
+                if as_version:
+                    task.version = self._next_version_number()
+                    task.name = "{} v{}".format(self._root_name(), task.version)
+                    task.parent_task = self
+                    task.parent_task_ref = self.pk
+                    task.parent_task_uuid = self.uuid
+                    task.parent_task_name = self.name
+                    task.parent_options = self.options
+                    task.images_from_parent = True
+                    # The node task is created when the version is resumed or run
+                    task.uuid = ''
+                    task.resume_info = {}
+                    task.pending_action = None
+                    task.last_error = None
+                elif set_new_name:
                     task.name = gettext('Copy of %(task)s') % {'task': self.name}
                 task.created_at = timezone.now()
                 task.save()
                 task.refresh_from_db()
 
-                logger.info("Duplicating {} to {}".format(self, task))
+            logger.info("Duplicating {} to {}".format(self, task))
 
-                if os.path.isdir(self.task_path()):
-                    try:
-                        # Try to use hard links first
-                        shutil.copytree(self.task_path(), task.task_path(), copy_function=os.link)
-                    except Exception as e:
-                        logger.warning("Cannot duplicate task using hard links, will use normal copy instead: {}".format(str(e)))
-                        shutil.copytree(self.task_path(), task.task_path())
-                else:
-                    logger.warning("Task {} doesn't have folder, will skip copying".format(self))
+            if os.path.isdir(self.task_path()):
+                try:
+                    # Try to use hard links first
+                    shutil.copytree(self.task_path(), task.task_path(), copy_function=os.link)
+                except Exception as e:
+                    logger.warning("Cannot duplicate task using hard links, will use normal copy instead: {}".format(str(e)))
+                    shutil.rmtree(task.task_path(), ignore_errors=True)
+                    shutil.copytree(self.task_path(), task.task_path())
+            else:
+                logger.warning("Task {} doesn't have folder, will skip copying".format(self))
 
-                self.project.owner.profile.clear_used_quota_cache()
+            self.project.owner.profile.clear_used_quota_cache()
 
-                from app.plugins import signals as plugin_signals
-                plugin_signals.task_duplicated.send_robust(sender=self.__class__, task_id=task.id)
+            from app.plugins import signals as plugin_signals
+            plugin_signals.task_duplicated.send_robust(sender=self.__class__, task_id=task.id)
 
             return task
         except Exception as e:
             logger.warning("Cannot duplicate task: {}".format(str(e)))
+            if task is not None and task.pk is not None:
+                Task.objects.filter(pk=task.pk).delete()
+                shutil.rmtree(task.task_path(), ignore_errors=True)
 
         return False
 
@@ -873,6 +947,43 @@ class Task(models.Model):
                         self.save()
                     else:
                         raise NodeServerError(gettext("Cannot restart a task that has no processing node"))
+
+                elif self.pending_action == pending_actions.RESUME:
+                    logger.info("Resuming {} from {}".format(self, self.parent_task_uuid))
+                    if not (self.processing_node and self.parent_task_uuid):
+                        raise NodeServerError(gettext("Cannot resume a task that has no processing node or parent checkpoint"))
+
+                    jwt_token = self._get_tapis_jwt_token()
+                    try:
+                        # The node mints the uuid of the new version; the parent is untouched.
+                        # A refusal is shown as is: there is no silent fallback to a full run.
+                        result = self.processing_node.resume_task(self.parent_task_uuid, self.options,
+                                                                  new_version=True, jwt_token=jwt_token)
+                        new_uuid = result.get('uuid')
+                        if not new_uuid:
+                            raise NodeResponseError(gettext("Resume failed: the processing node did not return a task id"))
+                    except NodeResponseError as e:
+                        if 'JWTTokenExpiredError' in str(type(e).__name__) or 'session has expired' in str(e).lower():
+                            self.set_failure(gettext('Authentication expired: Your Tapis session has expired. Please refresh the page to re-authenticate.'))
+                        else:
+                            self.set_failure(str(e))
+                        return
+
+                    info = dict(self.resume_info or {})
+                    info['checkpoint_uuid'] = self.parent_task_uuid
+                    info['resumed_from_stage'] = result.get('resumedFromStage') or info.get('requested_stage')
+                    info['resume_mode'] = result.get('resumeMode') or 'resume'
+                    info['checkpoint_engine_version'] = result.get('checkpointEngineVersion')
+
+                    self.uuid = new_uuid
+                    self.resume_info = info
+                    self.console.reset()
+                    self.processing_time = -1
+                    self.status = status_codes.QUEUED
+                    self.last_error = None
+                    self.pending_action = None
+                    self.running_progress = 0
+                    self.save()
 
                 elif self.pending_action == pending_actions.REMOVE:
                     logger.info("Removing {}".format(self))
@@ -1732,13 +1843,17 @@ class Task(models.Model):
         (one that advertises the tapis-allocation option); None for other nodes or when
         the node cannot say. Used to keep the job id with the task's run record.
         """
+        if not self.uuid or not self.has_tapis_node():
+            return None
+        return self.processing_node.get_task_tapis_job(self.uuid, jwt_token)
+
+    def has_tapis_node(self):
+        """True when the assigned processing node is Tapis-backed (advertises tapis-allocation)."""
         node = self.processing_node
-        if not node or not self.uuid:
-            return None
+        if not node:
+            return False
         names = [opt.get('name') for opt in (node.available_options or []) if isinstance(opt, dict)]
-        if 'tapis-allocation' not in names:
-            return None
-        return node.get_task_tapis_job(self.uuid, jwt_token)
+        return 'tapis-allocation' in names
 
     def _get_tapis_jwt_token(self):
         """

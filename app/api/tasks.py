@@ -18,6 +18,7 @@ import numpy as np
 from shutil import copyfileobj, move
 from django.core.exceptions import ObjectDoesNotExist, SuspiciousFileOperation, ValidationError
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.cache import cache
 from django.db import transaction
 from django.http import FileResponse
 from django.http import HttpResponse
@@ -110,7 +111,9 @@ class TaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Task
         exclude = ('orthophoto_extent', 'dsm_extent', 'dtm_extent', )
-        read_only_fields = ('processing_time', 'status', 'last_error', 'created_at', 'pending_action', 'available_assets', 'size', 'ckan_url', )
+        read_only_fields = ('processing_time', 'status', 'last_error', 'created_at', 'pending_action', 'available_assets', 'size', 'ckan_url',
+                            'parent_task', 'parent_task_ref', 'parent_task_uuid', 'parent_task_name', 'parent_options',
+                            'version', 'images_from_parent', 'resume_info', )
 
 
 def check_processing_node_perms(request):
@@ -383,11 +386,97 @@ class TaskViewSet(viewsets.ViewSet):
         except (ObjectDoesNotExist, ValidationError):
             raise exceptions.NotFound()
 
-        new_task = task.duplicate()
+        as_version = request.data.get('as_version') in (True, 'true', 'True', '1', 1)
+        new_task = task.duplicate(as_version=as_version)
         if new_task:
             return Response({'success': True, 'task': TaskSerializer(new_task).data}, status=status.HTTP_200_OK)
         else:
             return Response({'error': _("Cannot duplicate task")}, status=status.HTTP_200_OK)
+
+    RESUME_CACHE_SECONDS = 60
+
+    @action(detail=True, methods=['get', 'post'])
+    def resume(self, request, pk=None, project_pk=None):
+        """
+        GET: whether this task's checkpoint can be resumed (as reported by the node).
+        POST: queue a resume, either replacing this task's run (task has a node task id)
+        or running a new version from its parent's checkpoint (version without a node task id).
+        """
+        if request.method == 'POST':
+            return self.post_resume(request, pk, project_pk)
+
+        try:
+            task = self.queryset.get(pk=pk, project=project_pk)
+            check_project_perms(request, task.project)
+        except (ObjectDoesNotExist, ValidationError):
+            raise exceptions.NotFound()
+
+        if not task.has_tapis_node():
+            return Response({'resumable': False, 'reason': 'not_tapis'})
+        if not task.uuid:
+            return Response({'resumable': False, 'reason': 'no_node_task'})
+
+        cache_key = 'task-resume:{}:{}'.format(task.id, task.uuid)
+        data = cache.get(cache_key)
+        if data is None:
+            info = task.processing_node.get_task_resume_info(task.uuid, task._get_tapis_jwt_token())
+            if info is None:
+                return Response({'resumable': False, 'reason': 'unavailable'})
+
+            data = {
+                'resumable': bool(info.get('resumable')),
+                'reason': info.get('reason'),
+                'expires_at': info.get('expiresAt'),
+                'stages_completed': info.get('stagesCompleted') or [],
+                'engine_version': info.get('engineVersion'),
+                'checkpoint_bytes': info.get('checkpointBytes'),
+                'split': info.get('split'),
+                'resumable_classes': info.get('resumableClasses') or [],
+            }
+            cache.set(cache_key, data, self.RESUME_CACHE_SECONDS)
+
+        return Response(data)
+
+    def post_resume(self, request, pk, project_pk):
+        try:
+            task = self.queryset.get(pk=pk, project=project_pk)
+            check_project_perms(request, task.project, ('change_project', ))
+        except (ObjectDoesNotExist, ValidationError):
+            raise exceptions.NotFound()
+
+        rerun_from = request.data.get('rerun_from')
+        resume_class = request.data.get('resume_class')
+        parent_task = request.data.get('parent_task')
+        for value in (rerun_from, resume_class):
+            if value is not None and not isinstance(value, str):
+                raise exceptions.ValidationError(detail=_("Invalid resume parameters"))
+        if parent_task is not None and str(parent_task) != str(task.parent_task_ref):
+            raise exceptions.ValidationError(detail=_("parent_task does not match this task's parent"))
+        if not task.processing_node:
+            raise exceptions.ValidationError(detail=_("Cannot resume a task that has no processing node"))
+
+        # Replace mode keeps the existing RESTART path. A version without a node task
+        # id has nothing to restart, so it resumes from its parent's checkpoint instead.
+        changed = []
+        if task.uuid:
+            pending_action = pending_actions.RESTART
+        elif task.parent_task_uuid:
+            pending_action = pending_actions.RESUME
+            task.resume_info = {'requested_stage': rerun_from, 'resume_class': resume_class}
+            changed.append('resume_info')
+        else:
+            raise exceptions.ValidationError(detail=_("This task has no checkpoint to resume from"))
+
+        if rerun_from:
+            task.options = [o for o in task.options if o.get('name') != 'rerun-from'] + \
+                           [{'name': 'rerun-from', 'value': rerun_from}]
+            changed.append('options')
+        if changed:
+            task.save(update_fields=changed)
+
+        cache.delete('task-resume:{}:{}'.format(task.id, task.uuid))
+
+        return self.set_pending_action(pending_action, request, pk=pk, project_pk=project_pk)
 
     def create(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project', ))
