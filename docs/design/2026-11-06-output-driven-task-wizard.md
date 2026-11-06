@@ -868,6 +868,11 @@ ODM's 4×-per-step statement cited from ODX `opendm/config.py:458`.
   the PR 0 commit `ccba0f75` (`nodeodm.models.ProcessingNode.get_task_tapis_job`,
   `Task.lookup_tapis_job`, migration regenerated, 12/12 tests). Deliberately not stored:
   owner username, project name, assets, ODX version (recoverable from Tapis or `log.json`).
+- 2026-11-06 — **PR 2 implementation started** on `feature/wizard-edit-mode` (worktree
+  `.worktrees/webodm-wizard-edit`, stacked on `feature/output-driven-wizard`), against the
+  resume/versions spec revision 4 (approved: "lets implement it"). Backend counterpart on
+  `feature/task-versions-resume`; ClusterODX resume + Tapis failure forwarding on
+  `feature/checkpoint-resume`; worker and ODX engine branches per that spec.
 - 2026-11-06 — Review round 1 (parallel): design reviewer "approvable after fixes" (14
   items, all applied or moved to Open questions); architect "revise, small" (5 must-change,
   all adopted; should-change adopted except keeping `detect` in the catalog, which was
