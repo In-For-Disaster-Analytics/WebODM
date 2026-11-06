@@ -112,6 +112,22 @@
       ],
       "occurrences": 2,
       "last_seen": "2026-08-07"
+    },
+    {
+      "id": "bug-006",
+      "timestamp": "2026-11-06T08:28:19",
+      "error_message": "TypeError: manager_method() got multiple values for keyword argument 'processing_time' (app.tests.test_task_run)",
+      "file": "app/tests/test_task_run.py",
+      "root_cause": "Test helper make_task() hard-codes processing_time=60000 and also forwards **kwargs; a new test passed processing_time again.",
+      "fix": "Create the task with the helper, then set processing_time=-1 and save before recording.",
+      "tags": [
+        "tests",
+        "task_run",
+        "run-records"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-11-06T08:28:19"
     }
   ]
 }

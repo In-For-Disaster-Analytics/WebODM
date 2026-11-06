@@ -18,7 +18,9 @@ class EditTaskForm extends React.Component {
     inReview: false,
     onStateChange: null,
     tapisOverrides: null,
-    presetDialogHiddenGroups: []
+    presetDialogHiddenGroups: [],
+    optionsOverride: null,
+    onOptionsEdited: null
   };
 
   static propTypes = {
@@ -37,7 +39,13 @@ class EditTaskForm extends React.Component {
       // group in the option editor.
       onStateChange: PropTypes.func,
       tapisOverrides: PropTypes.object,
-      presetDialogHiddenGroups: PropTypes.array
+      presetDialogHiddenGroups: PropTypes.array,
+      // Controlled options (the task wizard owns them): a flat [{name, value}] list used in
+      // place of the selected preset's options. While set, the preset row is not rendered
+      // and the option editor works on a synthetic preset; its Save is reported through
+      // onOptionsEdited(options). Both null keeps the preset-driven form.
+      optionsOverride: PropTypes.array,
+      onOptionsEdited: PropTypes.func
   };
 
   constructor(props){
@@ -95,6 +103,7 @@ class EditTaskForm extends React.Component {
     this.nodeHasTASAllocationOption = this.nodeHasTASAllocationOption.bind(this);
     this.loadTASAllocationsForNode = this.loadTASAllocationsForNode.bind(this);
     this.withDefaultTapisOptions = this.withDefaultTapisOptions.bind(this);
+    this.handleOverrideSave = this.handleOverrideSave.bind(this);
   }
 
   formReady(){
@@ -375,8 +384,9 @@ class EditTaskForm extends React.Component {
 
   emitStateChange(){
     if (!this.props.onStateChange) return;
-    const { selectedNode, selectedPreset, presets, processingNodes, editingPreset } = this.state;
+    const { selectedNode, selectedPreset, presets, processingNodes, editingPreset, loadedPresets } = this.state;
     this.props.onStateChange({
+      loadedPresets,
       selectedNode,
       selectedPreset,
       presets,
@@ -582,7 +592,7 @@ class EditTaskForm extends React.Component {
 
   getTaskInfo(){
     const { name, selectedNode, selectedPreset, tags } = this.state;
-    const presetOptions = this.getAvailableOptionsOnly(selectedPreset.options, selectedNode.options);
+    const presetOptions = this.getAvailableOptionsOnly(this.props.optionsOverride || selectedPreset.options, selectedNode.options);
 
     return {
       name: name !== "" ? name : this.state.namePlaceholder,
@@ -595,6 +605,12 @@ class EditTaskForm extends React.Component {
   }
 
   handleEditPreset(){
+    // Controlled options: the editor works on a synthetic preset, presets stay untouched
+    if (this.props.optionsOverride){
+      this.setState({editingPreset: true});
+      return;
+    }
+
     // If the user tries to edit a system preset
     // set the "Custom..." options to it
     const { selectedPreset, presets } = this.state;
@@ -651,7 +667,38 @@ class EditTaskForm extends React.Component {
     }
   }
 
-  handleDuplicateSavePreset(){
+  // Save from the option editor while the options are controlled: hand them to the owner,
+  // who inspects them once. The dialog closes itself when the returned promise resolves.
+  handleOverrideSave(preset){
+    if (this.props.onOptionsEdited) this.props.onOptionsEdited(preset.options);
+    return $.Deferred().resolve();
+  }
+
+  // Save the controlled options as a new user preset (presets list and selection untouched).
+  saveOverrideAsPreset(name = _("My Preset")){
+    this.setState({presetActionPerforming: true});
+    return $.ajax({
+      url: `/api/presets/`,
+      contentType: 'application/json',
+      data: JSON.stringify({
+        name: name,
+        options: this.props.optionsOverride
+      }),
+      dataType: 'json',
+      type: 'POST'
+    }).done(preset => {
+      this.setState({presets: this.state.presets.concat([preset])});
+    }).fail(() => {
+      this.setState({presetError: _("Could not save the preset. Please try to refresh the page.")});
+    }).always(() => {
+      this.setState({presetActionPerforming: false});
+    });
+  }
+
+  // `presetName` is only used with controlled options (the legacy menu passes the click event).
+  handleDuplicateSavePreset(presetName){
+    if (this.props.optionsOverride) return this.saveOverrideAsPreset(typeof presetName === 'string' ? presetName : undefined);
+
     // Create a new preset with the same settings as the
     // currently selected preset
     const { selectedPreset, presets } = this.state;
@@ -738,6 +785,7 @@ class EditTaskForm extends React.Component {
     }
 
     let taskOptions = "";
+    const controlled = !!this.props.optionsOverride;
     if (this.formReady()){
 
       const optionsSelector = (<div>
@@ -806,6 +854,13 @@ class EditTaskForm extends React.Component {
                 </select>
               </div>
           </div>
+          {controlled ?
+            <div className="form-group">
+              <div className="col-sm-offset-2 col-sm-10">
+                <ErrorMessage className="preset-error" bind={[this, 'presetError']} />
+              </div>
+            </div>
+          :
           <div className="form-group form-inline">
             <label className="col-sm-2 control-label">{_("Options")}</label>
             <div className="col-sm-10">
@@ -814,16 +869,16 @@ class EditTaskForm extends React.Component {
                 {this.getAvailableOptionsOnlyText(this.state.selectedPreset.options, this.state.selectedNode.options)}
                </div>}
             </div>
-          </div>
+          </div>}
 
           {this.state.editingPreset ? 
             <EditPresetDialog
-              preset={this.state.selectedPreset}
+              preset={controlled ? {id: -1, name: "(" + _("Custom") + ")", options: this.props.optionsOverride, system: true} : this.state.selectedPreset}
               availableOptions={this.state.selectedNode.options}
               clusterNodeUrls={this.state.clusterNodeUrls}
               hiddenGroups={this.props.presetDialogHiddenGroups || []}
               onHide={this.handleCancelEditPreset}
-              saveAction={this.handlePresetSave}
+              saveAction={controlled ? this.handleOverrideSave : this.handlePresetSave}
               deleteAction={this.handleDeletePreset}
               ref={(domNode) => { if (domNode) this.editPresetDialog = domNode; }}
             />

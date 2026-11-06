@@ -5,11 +5,29 @@ import HpcQueueCatalog from './HpcQueueCatalog';
 // Inputs come from the processing node's own Tapis options (`tapis-queue`, `tapis-node`,
 // `tapis-max-run-time`, each with `value`, `domain` and `defaultByImages`), the chosen
 // preset, and optional user overrides. Output is a plan plus structured reasons,
-// warnings and suggestions (codes + params; the UI turns them into text). No I/O, and
+// and warnings (codes + params; the UI turns them into text). No I/O, and
 // inputs are never mutated.
+//
+// The chosen quality arrives as part of `preset.options` (the wizard passes its composed
+// option list as `{name, options}`): `pc-quality` and `fast-orthophoto` are read from it.
 
-const QUALITY_UPLIFT = 1.5;
 const QUALITY_ROUND_MINUTES = 30;
+
+// Whole-run time multipliers per point cloud quality, applied to the node's size-tier run
+// time. INITIAL ESTIMATES: no measured values exist yet, so every factor is 1.0 and the
+// recommendation does not account for quality until the calibration runs replace them.
+const RUNTIME_FACTORS = {
+  lowest: 1.0,
+  low: 1.0,
+  medium: 1.0,
+  high: 1.0,
+  ultra: 1.0,
+  fastOrthophoto: 1.0
+};
+
+// Queue a small (vm-small tier) job moves to at ultra quality, and where it falls back to.
+const ESCALATION_QUEUE = 'development';
+const ESCALATION_FALLBACK_QUEUE = 'normal';
 
 const toInt = (value, fallback = null) => {
   const n = parseInt(value, 10);
@@ -41,11 +59,17 @@ const presetOption = (preset, name) => {
   return option ? option.value : undefined;
 };
 
-const isHighQuality = preset => {
-  const pc = String(presetOption(preset, 'pc-quality') || '').toLowerCase();
-  const feature = String(presetOption(preset, 'feature-quality') || '').toLowerCase();
-  if (['high', 'ultra'].indexOf(pc) !== -1 || ['high', 'ultra'].indexOf(feature) !== -1) return true;
-  return !!(preset && preset.name === 'High Resolution' && !pc && !feature);
+const pointCloudQuality = preset => String(presetOption(preset, 'pc-quality') || '').toLowerCase();
+
+const isFastOrthophoto = preset => {
+  const value = presetOption(preset, 'fast-orthophoto');
+  return value === true || String(value).toLowerCase() === 'true';
+};
+
+// Run-time multiplier for the quality choice carried by `preset`.
+const runtimeFactor = (preset, factors = RUNTIME_FACTORS) => {
+  const factor = isFastOrthophoto(preset) ? factors.fastOrthophoto : factors[pointCloudQuality(preset)];
+  return Number.isFinite(factor) && factor > 0 ? factor : 1.0;
 };
 
 const presetDisablesGpu = preset => {
@@ -56,19 +80,20 @@ const presetDisablesGpu = preset => {
 const roundUpTo = (minutes, step) => Math.ceil(minutes / step) * step;
 
 const ComputeRecommender = {
-  QUALITY_UPLIFT,
+  RUNTIME_FACTORS,
+  runtimeFactor,
 
   // options: { queue, nodes, maxMinutes } — the node's tapis-* option objects (may be undefined)
-  // preset: { name, options: [{name, value}] }
+  // preset: { name, options: [{name, value}] } — supplies pc-quality / fast-orthophoto / no-gpu
   // overrides: { queue?, nodes?, maxMinutes? } — user choices from the Adjust panel
-  recommend({ imagesCount = 0, options = {}, preset = null, overrides = {}, catalog = HpcQueueCatalog.LS6_QUEUES } = {}) {
+  // factors: RUNTIME_FACTORS-shaped table (tests inject their own)
+  recommend({ imagesCount = 0, options = {}, preset = null, overrides = {}, catalog = HpcQueueCatalog.LS6_QUEUES, factors = RUNTIME_FACTORS } = {}) {
     const images = Math.max(0, toInt(imagesCount, 0));
     const queueOpt = options.queue || {};
     const nodesOpt = options.nodes || {};
     const timeOpt = options.maxMinutes || {};
     const reasons = [];
     const warnings = [];
-    const suggestions = [];
 
     // 1. Baseline from the node's per-image-count defaults.
     const queueTier = pickTier(queueOpt.defaultByImages, images);
@@ -93,15 +118,32 @@ const ComputeRecommender = {
     const queueDomain = Array.isArray(queueOpt.domain) ? queueOpt.domain.map(String) : (queue ? [queue] : []);
     const nodesDomainMax = domainMax(nodesOpt.domain);
     const timeDomainMax = domainMax(timeOpt.domain);
-    const baseline = { queue, nodes, maxMinutes };
 
-    // 2. Quality suggestion (never applied automatically).
-    if (isHighQuality(preset)) {
-      let suggested = roundUpTo(maxMinutes * QUALITY_UPLIFT, QUALITY_ROUND_MINUTES);
-      const caps = [];
-      if (timeDomainMax !== null && suggested > timeDomainMax) { suggested = timeDomainMax; caps.push('domain'); }
-      suggestions.push({ code: 'quality_runtime', maxMinutes: suggested, baseMinutes: maxMinutes, capped: caps.length > 0 });
+    // 2. Quality is part of the baseline: tier run time x factor, rounded up to 30 minutes.
+    // Nothing changes (and nothing is reported) while the factor is 1.0.
+    const factor = runtimeFactor(preset, factors);
+    if (factor !== 1.0) {
+      const scaled = roundUpTo(maxMinutes * factor, QUALITY_ROUND_MINUTES);
+      reasons.push({ code: 'quality_factor', factor, baseMinutes: maxMinutes, maxMinutes: scaled });
+      maxMinutes = scaled;
     }
+
+    // Ultra on the small (vm-small) tier needs a full node: start on development, which has
+    // short waits, and name normal as the fallback. When the node does not offer
+    // development the plan uses normal and warns that the shape is unknown.
+    if (queue === 'vm-small' && pointCloudQuality(preset) === 'ultra' && !isFastOrthophoto(preset)) {
+      if (queueDomain.indexOf(ESCALATION_QUEUE) !== -1) {
+        queue = ESCALATION_QUEUE;
+        reasons.push({ code: 'ultra_escalation', queue, fallbackQueue: ESCALATION_FALLBACK_QUEUE });
+      } else {
+        warnings.push({ code: 'development_small_shape', queue: ESCALATION_QUEUE });
+        if (queueDomain.indexOf(ESCALATION_FALLBACK_QUEUE) !== -1) {
+          queue = ESCALATION_FALLBACK_QUEUE;
+          reasons.push({ code: 'ultra_escalation', queue, fallbackQueue: ESCALATION_FALLBACK_QUEUE });
+        }
+      }
+    }
+    const baseline = { queue, nodes, maxMinutes };
 
     // 3. Overrides (queue must be one the node offers).
     if (overrides.queue !== undefined && overrides.queue !== null && overrides.queue !== '') {
@@ -125,6 +167,9 @@ const ComputeRecommender = {
     }
 
     // 5. vm-small fit.
+    if (queue === 'vm-small' && pointCloudQuality(preset) === 'high') {
+      warnings.push({ code: 'vm_small_slow_quality', quality: 'high' });
+    }
     if (queue === 'vm-small' && queueInfo && queueInfo.shared) {
       const vmTier = (Array.isArray(queueOpt.defaultByImages) ? queueOpt.defaultByImages : [])
         .map(entry => ({ maxImages: toInt(entry && entry.maxImages), value: String(entry ? entry.value : '') }))
@@ -174,7 +219,7 @@ const ComputeRecommender = {
       estimatedSU,
       reasons,
       warnings,
-      suggestions,
+      factor,
       queueInfo
     };
   },

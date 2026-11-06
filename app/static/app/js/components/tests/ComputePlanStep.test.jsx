@@ -90,12 +90,19 @@ describe('<ComputePlanStep />', () => {
     expect(onChange).toHaveBeenCalledWith({ overrides: {} });
   });
 
-  it('applies the quality suggestion as a run-time override', () => {
-    const onChange = jest.fn();
-    const wrapper = render({ onChange, preset: { name: 'High Resolution', options: [{ name: 'pc-quality', value: 'high' }] } });
-    expect(wrapper.find('.plan-suggestion').exists()).toBe(true);
-    wrapper.find('.apply-suggestion').simulate('click');
-    expect(onChange).toHaveBeenCalledWith({ overrides: { maxMinutes: 540 } });
+  it('no longer suggests a quality run time, and shows the expectation text above Adjust', () => {
+    const wrapper = render({ preset: { name: 'High Resolution', options: [{ name: 'pc-quality', value: 'high' }] } });
+    expect(wrapper.find('.plan-suggestion').exists()).toBe(false);
+    expect(wrapper.find('.apply-suggestion').exists()).toBe(false);
+    expect(wrapper.find('.plan-expectation').text()).toMatch(/two or three runs/);
+    expect(wrapper.find('.plan-expectation').text()).toMatch(/does not yet account for the quality/);
+  });
+
+  it('explains the ultra escalation to development', () => {
+    const wrapper = render({ imagesCount: 150, preset: { name: 'x', options: [{ name: 'pc-quality', value: 'ultra' }] } });
+    expect(wrapper.find('.plan-headline').text()).toMatch(/development queue, 1 node/);
+    expect(wrapper.find('.plan-reasons').text()).toMatch(/Ultra quality needs a full node/);
+    expect(wrapper.find('.plan-warning').text()).toMatch(/development queue allows at most/);
   });
 
   it('exposes the same plan the parent uses via the static helper', () => {

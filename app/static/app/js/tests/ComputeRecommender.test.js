@@ -32,13 +32,13 @@ describe('ComputeRecommender', () => {
     expect(codes(plan.reasons)).toEqual(['baseline_tier']);
     expect(plan.reasons[0].maxImages).toBe(1000);
     expect(plan.warnings).toEqual([]);
-    expect(plan.suggestions).toEqual([]);
   });
 
-  it('row 2: High Resolution suggests 540 min but does not apply it', () => {
+  it('row 2: High Resolution no longer produces a run-time suggestion (every factor is 1.0)', () => {
     const plan = run(468, HIGH_RES);
     expect(plan.maxMinutes).toBe(360);
-    expect(plan.suggestions).toEqual([{ code: 'quality_runtime', maxMinutes: 540, baseMinutes: 360, capped: false }]);
+    expect(plan.suggestions).toBeUndefined();
+    expect(codes(plan.reasons)).not.toContain('quality_factor');
     const applied = run(468, HIGH_RES, { maxMinutes: 540 });
     expect([applied.maxMinutes, applied.estimatedSU]).toEqual([540, 18.0]);
   });
@@ -47,11 +47,6 @@ describe('ComputeRecommender', () => {
     const plan = run(50);
     expect([plan.queue, plan.nodes, plan.maxMinutes]).toEqual(['vm-small', 1, 240]);
     expect(plan.estimatedSU).toBe(Math.ceil(1 * 4 * 0.143 * 10) / 10);
-  });
-
-  it('row 4: 50 images, High Resolution → suggestion 360 (240 × 1.5 rounded to 30)', () => {
-    const plan = run(50, HIGH_RES);
-    expect(plan.suggestions[0].maxMinutes).toBe(360);
   });
 
   it('row 5: no defaultByImages → node values with a node_defaults reason', () => {
@@ -127,5 +122,81 @@ describe('ComputeRecommender', () => {
     const plan = ComputeRecommender.recommend({ imagesCount: 50, options: opts, preset: DEFAULT_LOW, overrides: { maxMinutes: 100 } });
     expect(plan.estimatedSU).toBe(Math.ceil((100 / 60) * 0.143 * 10) / 10);
     expect(JSON.stringify(opts)).toBe(frozen);
+  });
+
+  describe('quality-aware queue rules (every factor 1.0)', () => {
+    const quality = (pcQuality, extra = []) => ({ name: 'wizard', options: [{ name: 'pc-quality', value: pcQuality }].concat(extra) });
+    const DOMAIN_DEV = ['vm-small', 'normal', 'development'];
+    const summary = plan => [plan.queue, plan.nodes, plan.maxMinutes];
+
+    it('150 low -> vm-small / 1 / 240, no warnings', () => {
+      const plan = run(150, quality('low'));
+      expect(summary(plan)).toEqual(['vm-small', 1, 240]);
+      expect(plan.warnings).toEqual([]);
+    });
+
+    it('150 high -> vm-small / 1 / 240 with vm_small_slow_quality only', () => {
+      const plan = run(150, quality('high'));
+      expect(summary(plan)).toEqual(['vm-small', 1, 240]);
+      expect(codes(plan.warnings)).toEqual(['vm_small_slow_quality']);
+    });
+
+    it('150 ultra with development offered -> development / 1 / 120, ultra_escalation then the queue clamp', () => {
+      const plan = run(150, quality('ultra'), {}, DOMAIN_DEV);
+      expect(summary(plan)).toEqual(['development', 1, 120]);
+      expect(codes(plan.reasons)).toContain('ultra_escalation');
+      expect(codes(plan.warnings)).toEqual(['runtime_clamped_queue']);
+      expect(plan.baseline.queue).toBe('development');
+      expect(plan.estimatedSU).toBe(2.0); // 1 node x 2 h x 1 SU
+    });
+
+    it('150 ultra without development in the domain -> development_small_shape warning, plan falls back to normal / 1 / 240', () => {
+      const plan = run(150, quality('ultra'));
+      expect(summary(plan)).toEqual(['normal', 1, 240]);
+      const warning = plan.warnings.find(w => w.code === 'development_small_shape');
+      expect(warning).toEqual({ code: 'development_small_shape', queue: 'development' });
+    });
+
+    it('150 ultra with a normal override -> normal / 1 / 240', () => {
+      const plan = run(150, quality('ultra'), { queue: 'normal' }, DOMAIN_DEV);
+      expect(summary(plan)).toEqual(['normal', 1, 240]);
+    });
+
+    it('468 low and 468 ultra -> normal / 2 / 360 (no escalation above the vm-small tier)', () => {
+      expect(summary(run(468, quality('low')))).toEqual(['normal', 2, 360]);
+      const ultra = run(468, quality('ultra'), {}, DOMAIN_DEV);
+      expect(summary(ultra)).toEqual(['normal', 2, 360]);
+      expect(codes(ultra.reasons)).not.toContain('ultra_escalation');
+    });
+
+    it('1200 low -> overflow warning as before', () => {
+      const plan = run(1200, quality('low'));
+      expect(codes(plan.warnings)).toContain('too_many_images_for_node');
+      expect(summary(plan)).toEqual(['normal', 2, 360]);
+    });
+
+    it('Fast mode is never escalated even with ultra left in the options', () => {
+      const plan = run(150, quality('ultra', [{ name: 'fast-orthophoto', value: true }]), {}, DOMAIN_DEV);
+      expect(plan.queue).toBe('vm-small');
+    });
+
+    it('a non-1.0 factor table scales the run time and emits quality_factor', () => {
+      const factors = Object.assign({}, ComputeRecommender.RUNTIME_FACTORS, { high: 1.5 });
+      const plan = ComputeRecommender.recommend({
+        imagesCount: 468,
+        options: ComputeRecommender.tapisOptionsFromNode(nodeOptions()),
+        preset: quality('high'),
+        factors
+      });
+      expect(plan.maxMinutes).toBe(540);
+      expect(plan.baseline.maxMinutes).toBe(540);
+      const reason = plan.reasons.find(r => r.code === 'quality_factor');
+      expect(reason).toEqual({ code: 'quality_factor', factor: 1.5, baseMinutes: 360, maxMinutes: 540 });
+    });
+
+    it('ships with every factor at 1.0', () => {
+      Object.keys(ComputeRecommender.RUNTIME_FACTORS).forEach(key => expect(ComputeRecommender.RUNTIME_FACTORS[key]).toBe(1.0));
+      expect(ComputeRecommender.runtimeFactor(quality('ultra'))).toBe(1.0);
+    });
   });
 });
