@@ -131,7 +131,7 @@ describe('<EditTaskPanel />', () => {
     it('new version: duplicate as version, PATCH the new task, resume with the stage; the version name is kept', () => {
       const { wrapper, onSave, onVersion } = mount();
       return submit(wrapper, { action: 'version', restartFrom: 'odm_dem', resumeClass: null }).then(() => {
-        expect(summary()).toEqual(['POST /api/projects/4/tasks/abc/duplicate', 'PATCH /api/projects/4/tasks/v2/', 'POST /api/projects/4/tasks/v2/resume/']);
+        expect(summary()).toEqual(['POST /api/projects/4/tasks/abc/duplicate/', 'PATCH /api/projects/4/tasks/v2/', 'POST /api/projects/4/tasks/v2/resume/']);
         expect(JSON.parse(calls[0].data)).toEqual({ as_version: true });
         expect(JSON.parse(calls[1].data)).toEqual({ tags: ['a'], options: taskInfo().options, processing_node: 7, auto_processing_node: false });
         expect(JSON.parse(calls[2].data)).toEqual({ rerun_from: 'odm_dem' });
@@ -147,7 +147,7 @@ describe('<EditTaskPanel />', () => {
         calls.length = 0;
         return submit(wrapper, { action: 'version', restartFrom: null, resumeClass: null });
       }).then(() => {
-        expect(summary()).toEqual(['POST /api/projects/4/tasks/abc/duplicate', 'PATCH /api/projects/4/tasks/v2/', 'POST /api/projects/4/tasks/v2/restart/']);
+        expect(summary()).toEqual(['POST /api/projects/4/tasks/abc/duplicate/', 'PATCH /api/projects/4/tasks/v2/', 'POST /api/projects/4/tasks/v2/restart/']);
         const plain = mount({ onVersion: null });
         return submit(plain.wrapper, { action: 'version', restartFrom: null, resumeClass: null }).then(() => expect(plain.onSave).toHaveBeenCalled());
       });
@@ -169,7 +169,7 @@ describe('<EditTaskPanel />', () => {
     });
 
     it('a failed duplicate shows its message', () => {
-      fail['POST /api/projects/4/tasks/abc/duplicate'] = true;
+      fail['POST /api/projects/4/tasks/abc/duplicate/'] = true;
       const { wrapper } = mount();
       return submit(wrapper, { action: 'version', restartFrom: null, resumeClass: null }).then(() => {
         expect(wrapper.state('error')).toMatch(/Could not create a new version/);
