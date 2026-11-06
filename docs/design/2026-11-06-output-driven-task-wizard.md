@@ -318,6 +318,15 @@ Split/merge tasks (every `Default`-based LS6 task has `split 75`) re-run submode
 ClusterODM; how `rerun-from` behaves there is unverified and is a manual test (item 14)
 and a PR 2 release gate.
 
+**Finding 2026-11-06 (changes PR 2):** on Lonestar6 a partial restart is impossible today.
+ClusterODX destroys the worker 10 s after the task commits (`asrProvider.onCommit`), the
+later `POST /task/restart` is refused, and WebODM silently falls back to a full new run. The
+stage advice above would be correct text with no effect. Will chose to make partial restarts
+real rather than drop the advice, and asked for run versions. Both are specified in
+[`odm-suite/docs/design/2026-11-06-task-versions-and-resumable-reruns.md`](../../../../docs/design/2026-11-06-task-versions-and-resumable-reruns.md):
+PR 2 now adds a **Run mode** choice (replace vs. new version), conditions the stage advice on
+a resumability lookup, and depends on that spec's worker (W1) and ClusterODX (C1) phases.
+
 ### 4. Compute step changes — `classes/ComputeRecommender.js` (PR 1)
 
 1. Baseline from `defaultByImages` (unchanged).
