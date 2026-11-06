@@ -208,10 +208,10 @@ is not an ODM constraint):
 
 | Output | Enable / disable | Curated choices | Shown to the user |
 |---|---|---|---|
-| **Orthophoto** | off → `skip-orthophoto: true`; on → nothing written | **Resolution** (`orthophoto-resolution`): Standard 5 cm/px (the `Default` preset value, recommended; ODM never exceeds what the images support), Fine 2, Finest 1. **Fast mode** (`fast-orthophoto`): shown only when Point cloud, DTM and 3D model are all unticked; values: Standard quality (recommended) or Fast, lower quality. On → `fast-orthophoto: true` **and** `skip-3dmodel: true` written explicitly | "Fast mode skips the dense point cloud and the 3D model and builds the map from a coarser surface (about 8× coarser); use it for a quick look, not a deliverable." |
+| **Orthophoto** | off → `skip-orthophoto: true`; on → nothing written | **Resolution** (`orthophoto-resolution`): Standard 5 cm/px (the `Default` preset value, recommended; ODM never exceeds what the images support), Fine 2, Finest 1. *(Revised on review, see Decisions: Fast mode is not a separate choice; it is the state "Point cloud unticked" and the card shows a read-only "Fast mode: on" line.)* | "Fast mode skips the dense point cloud and the 3D model and builds the map from a coarser surface (about 8× coarser); use it for a quick look, not a deliverable." |
 | **Surface model (DSM)** | `dsm: true` | **Resolution** (`dem-resolution`): same scale; defaults to the orthophoto choice | "With Fast mode on, the DSM comes from the sparse reconstruction and is coarse." No dependency on Point cloud (ODM allows it) |
 | **Terrain model (DTM)** | `dtm: true` plus `pc-classify: true` written explicitly | none in v1 | requires Point cloud (policy: ground classification of a sparse cloud is not useful); "ground points are classified first, which adds time" |
-| **Point cloud (dense)** | ticked → nothing written (dense reconstruction is ODM's default); unticked → nothing written unless Fast mode is chosen | **Quality** (`pc-quality`): lowest, low (recommended for a first run), medium, high, ultra; each shows its runtime factor and, for ultra, the queue consequence | the main driver of run time |
+| **Point cloud (dense)** | ticked ⇔ `fast-orthophoto` absent (ODM truth; revised on review). Unticking, allowed only when DTM, 3D model and 3D tiles are unticked, writes `fast-orthophoto: true` + `skip-3dmodel: true`; ticking removes both | **Quality** (`pc-quality`): lowest, low (recommended for a first run), medium (ODM's default, assumed when absent), high, ultra; each shows its runtime factor and, for ultra, the queue consequence | the main driver of run time; "unticking switches the map to Fast mode (lower quality)" |
 | **3D textured model** | off → `skip-3dmodel: true`; on → nothing written | **Detail**: Standard (`mesh-size 200000`, `mesh-octree-depth 11`, from `Default`) or Detailed (`300000`/`12`, from `3D Model`) | requires Point cloud (policy); "unticking saves texturing time; the surface mesh is still built for the map" |
 | **PDF report** | off → `skip-report: true` | none | — |
 | **Web map tiles** | `tiles: true` | none | "Tiles for the orthophoto and for each elevation model you selected." Shown only when the node advertises `tiles` |
@@ -614,14 +614,16 @@ PR 1:
    `COUPLING` entries reference catalog-managed names; no duplicate option across outputs
    except where documented (`skip-3dmodel` in Orthophoto Fast mode and 3D model).
 2. `TaskOptionsComposer.inspect`: on `Default` → orthophoto, DSM, DTM, point cloud (low), 3D
-   model (Standard), report ticked; extras = the ten pipeline settings. On `Fast Orthophoto`
+   model (Standard), report ticked; extras = the eleven pipeline settings (including
+   `pc-filter 5`, which the composed Default must carry). On `Fast Orthophoto`
    → orthophoto with Fast mode, point cloud and 3D model unticked, DSM/DTM unticked. On
    `3D Model` → 3D model Detailed, point cloud high, `use-3dmesh` in extras. On
    `Multispectral` → imagery yes. On `Forest`/`Field`/`High Resolution` → expected ticks
    and extras (`min-num-features 18000`; `sfm-algorithm planar`, `matcher-neighbors 4` with
    Fast mode; resolution Finest for both).
-3. Round trip for these 12 states: (a) defaults; (b) orthophoto only, Standard; (c)
-   orthophoto only, Fast; (d) orthophoto + DSM, Fast; (e) orthophoto + DTM (point cloud
+3. Round trip for these 12 states: (a) defaults; (b) orthophoto only, Point cloud unticked
+   (Fast mode); (c) orthophoto + point cloud, no 3D model; (d) orthophoto + DSM, Point cloud
+   unticked; (e) orthophoto + DTM (point cloud
    auto-ticked); (f) point cloud ultra + 3D Detailed; (g) everything ticked incl. tiles and
    3D tiles; (h) report only unticked; (i) 3D model unticked; (j) imagery yes; (k) a custom
    `orthophoto-resolution 3` (Custom kept); (l) extras overriding base (`min-num-features`).
@@ -778,6 +780,67 @@ ODM's 4×-per-step statement cited from ODX `opendm/config.py:458`.
   `.worktrees/webodm-run-records`), PR 1 on `feature/output-driven-wizard` (worktree
   `.worktrees/webodm-master`), ClusterODX `shapeOnly` on `feature/tapis-shape-only-queues`
   (worktree `.worktrees/clusterodx-main`). Open question 0 closed: records kept forever.
+- 2026-11-06 — **ClusterODX `shapeOnly` implemented** on `feature/tapis-shape-only-queues`
+  (one commit; provider, options and config-contract tests pass under Node 22 with the
+  main checkout's `node_modules`). No deviation from §4: `getJobPropertiesFor`,
+  `canHandle`, `getImageSizeDefaultMappings` skip `shapeOnly === true` entries;
+  `getJobShapeForQueue` returns them; `initialize()` rejects a shapeOnly entry without
+  `logicalQueue`. Submit path confirmed to read only `coresPerNode`/`memoryMB` from the
+  shape, so node count and run time still follow the task options and image tier. Ops
+  step still required: add the `development` entry and list the queue in
+  `system.queueFilter`. Not pushed.
+- 2026-11-06 — **PR 0 run records implemented** on `feature/task-run-records` (one commit;
+  `app.tests.test_task_run` 8/8 in the local 3.1.2-era image with the worktree mounted).
+  Implementer decisions accepted: `status` is an IntegerField of nodeodm status codes with
+  choices (`exportruns` writes labels, `--status` accepts labels); `processing_node` is the
+  node label (fallback `host:port`) as a CharField, not an FK; image size comes from the
+  first `.jpg/.jpeg/.png/.tif/.tiff` in `scan_images()` only; `started_at` null when
+  processing time is unknown; stage seconds rounded to 3 decimals, log timestamps parsed
+  with `fromisoformat`; `backfillruns` takes `finished_at` from the mtime of `log.json`,
+  else the assets dir, else the task dir, and skips tasks that already have any row;
+  `--since` is interpreted in the server timezone. Deviation from §7: none. Known gaps:
+  imports completed via `handle_import` are not recorded (not runs); the swallow guarantee
+  is tested on `record_from`, not on `Task.process()` (needs a live node).
+- 2026-11-06 — **PR 0 QA pass** ("ship with fixes", no blockers). Applied: the duplicate
+  guard now also requires the previous identical row to be under 60 s old, so a restart
+  that fails again with no processing time is a new row; `processing_time` ≤ 0 is stored
+  as null instead of the −1 sentinel; `exportruns` raises `CommandError` for a bad
+  `--since` or `--status`; tests added for the window, the null time and a single-stage
+  log without `endTime` (10/10 green in the local image). Not applied: a `Task.process()`
+  call-site test (needs a live node; manual check in staging), skipping backfill rows that
+  have no file mtime (kept the spec's `now()` fallback). Commit amended in place (unpushed).
+- 2026-11-06 — **PR 1 implemented** (`b36c4582` on `feature/output-driven-wizard`; full Jest
+  suite 224/224). QA: "ship with fixes", five majors, all in composer semantics. Decisions
+  taken on review, superseding the wording in §1/§2 where they differ:
+  - **Point cloud ⇔ not Fast mode.** The checklist's Point cloud tick follows ODM truth:
+    ticked iff `fast-orthophoto` is absent. Unticking it (allowed only when DTM, 3D model
+    and 3D tiles are unticked) *is* Fast mode and writes `fast-orthophoto` +
+    `skip-3dmodel`; the separate "Fast mode" radio under Orthophoto is removed and replaced
+    by a read-only "Fast mode: on" line. Still never recommended. Rationale: the §1 state
+    "Point cloud unticked, Fast mode off" wrote nothing, so ODM built the dense cloud at its
+    own default while the UI said otherwise, and presets without `pc-quality` showed a
+    cloud-less checklist that broke the dependency rules.
+  - **`pc-quality` absent ⇒ `medium`** (ODM's default), so inspecting a preset without it
+    does not add `pc-quality: low` on round trip; the Recommended badge stays on low.
+  - **`pc-filter` is not managed**; it stays in the pipeline base (the Default preset's
+    `pc-filter 5` was being dropped, a behaviour change).
+  - **Unticking the 3D model drops `use-3dmesh`** from the composed list (ODM would
+    otherwise un-skip the model).
+  - **The advanced dialog may remove base options:** a `baseRemovals` set in wizard state,
+    listed on review as "Pipeline settings removed". Options the node lacks are merged back
+    after a dialog save so switching node later keeps the tick.
+  - Empty preset list is treated like a missing `Default` (wizard unavailable).
+  - "Save as preset" prompts for a name (the legacy flow renamed through the editor).
+  - Implementer deviations accepted: extras equal to base are not shown as extras; a lone
+    managed option (e.g. `pc-classify` alone) is kept as an extra; `stepOneExtras` is a
+    slot function (`top`/`bottom`); wizard submit writes `last_outputs` and leaves
+    `last_preset_id` alone; recommender tests stay at `tests/ComputeRecommender.test.js`.
+  - Fix round applied the same day and amended into the PR 1 commit: full Jest suite
+    242/242. Snapshot baseline generated at the parent commit a3da83d7: `EditTaskForm`
+    identical; the legacy `NewTaskPanel` render differs only by the two new null default
+    props on the `EditTaskForm` element. Accepted limitation: unticking Point cloud writes
+    Fast mode even when the orthophoto is also unticked (a DSM-only job gets a sparse-cloud
+    DSM), consistent with the rule. Still open: manual staging item 14.
 - 2026-11-06 — Review round 1 (parallel): design reviewer "approvable after fixes" (14
   items, all applied or moved to Open questions); architect "revise, small" (5 must-change,
   all adopted; should-change adopted except keeping `detect` in the catalog, which was
