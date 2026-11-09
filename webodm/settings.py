@@ -430,6 +430,18 @@ TAPIS_EXEC_SYSTEM_ID = (os.environ.get('WO_TAPIS_EXEC_SYSTEM_ID', 'ls6') or 'ls6
 if not re.match(r'^[A-Za-z0-9._-]+$', TAPIS_EXEC_SYSTEM_ID):
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured("WO_TAPIS_EXEC_SYSTEM_ID must match ^[A-Za-z0-9._-]+$ (got %r)" % TAPIS_EXEC_SYSTEM_ID)
+# Every Tapis system the user needs a TMS credential on for a job to run. Tapis acts as the
+# user on each: ls6 runs the job, cloud.data holds the NodeODX app zip it stages from. A
+# user with a credential on ls6 only passes a single-system check and then fails at
+# STAGING_JOB with JOBS_TRANSFER_INCOMPLETE. The execution system is always included.
+TAPIS_REQUIRED_SYSTEMS = []
+for _system_id in [TAPIS_EXEC_SYSTEM_ID] + [s.strip() for s in os.environ.get('WO_TAPIS_REQUIRED_SYSTEMS', 'cloud.data').split(',')]:
+    if not _system_id or _system_id in TAPIS_REQUIRED_SYSTEMS:
+        continue
+    if not re.match(r'^[A-Za-z0-9._-]+$', _system_id):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured("WO_TAPIS_REQUIRED_SYSTEMS entries must match ^[A-Za-z0-9._-]+$ (got %r)" % _system_id)
+    TAPIS_REQUIRED_SYSTEMS.append(_system_id)
 # Seconds to cache a positive ("ready") credential check per user and system.
 try:
     TAPIS_CREDENTIAL_CACHE_SECONDS = int(os.environ.get('WO_TAPIS_CREDENTIAL_CACHE_SECONDS', '600') or 600)

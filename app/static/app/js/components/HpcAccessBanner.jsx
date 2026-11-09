@@ -175,8 +175,11 @@ class HpcAccessBanner extends React.Component {
           <p>
             <i className="fa fa-exclamation-triangle"></i> <strong>{_("Your TACC account is not yet set up to run jobs on Lonestar6 from WebODM.")}</strong>
           </p>
+          {HpcAccess.missingSystemsText(status) ?
+            <p className="hpc-access-systems">{_("Missing access on:")} <code>{HpcAccess.missingSystemsText(status)}</code></p>
+          : ""}
           <p>
-            {_("WebODM will ask TACC (Tapis) to create an SSH key for your account on the processing system. This takes a few seconds and only needs to happen once.")}
+            {_("WebODM will ask TACC (Tapis) to create an SSH key for your account on each system listed. This takes a few seconds and only needs to happen once.")}
           </p>
           <p>
             {this.renderSetupButton()}

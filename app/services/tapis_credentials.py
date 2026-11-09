@@ -78,6 +78,12 @@ def default_system_id():
     return getattr(settings, 'TAPIS_EXEC_SYSTEM_ID', 'ls6')
 
 
+def required_system_ids():
+    """Every system the user needs a credential on (execution system first)."""
+    systems = list(getattr(settings, 'TAPIS_REQUIRED_SYSTEMS', None) or [])
+    return systems or [default_system_id()]
+
+
 def _trim(detail):
     detail = (detail or '').strip()
     return detail[:DETAIL_MAX_CHARS]
@@ -298,3 +304,93 @@ def create_credential_for_user(user, system_id=None):
 
     clear_cached_status(user, system_id)
     return 200, get_credential_status(user, system_id, refresh=True)
+
+
+# --- all required systems ------------------------------------------------------------
+
+def _overall(payloads):
+    """Collapse per-system payloads to one top-level payload the single-system UI understands."""
+    missing = [p['system_id'] for p in payloads if p['status'] == STATUS_MISSING]
+    unknown = [p for p in payloads if p['status'] == STATUS_UNKNOWN]
+    if missing:
+        lead = next(p for p in payloads if p['status'] == STATUS_MISSING)
+    elif unknown:
+        lead = unknown[0]
+    else:
+        lead = payloads[0]
+    overall = dict(lead)
+    overall['systems'] = payloads
+    overall['missing_systems'] = missing
+    return overall
+
+
+def get_all_credential_status(user, refresh=False):
+    """Status of the user's credential on every required system, plus an overall verdict."""
+    return _overall([get_credential_status(user, system_id, refresh=refresh)
+                     for system_id in required_system_ids()])
+
+
+def create_missing_credentials_for_user(user):
+    """
+    Create TMS credentials on every required system whose fresh probe says ``missing``.
+
+    Returns ``(http_status, payload)`` with the same meaning as create_credential_for_user:
+    409 when nothing is missing or the state cannot be verified, 502 when Tapis refuses a
+    create, 200 with the refreshed per-system status otherwise.
+    """
+    context, error = resolve_tapis_context(user)
+    if error:
+        return 409, _payload(default_system_id(), STATUS_UNKNOWN, error[0], error[1])
+
+    missing, unverified = [], []
+    for system_id in required_system_ids():
+        probe = probe_credential(context.token, context.username, system_id, context.base_url, context.tenant_id)
+        logger.info("HPC access check user=%s system=%s status=%s code=%s (before create)",
+                    context.username, system_id, probe.status, probe.code)
+        if probe.status == STATUS_MISSING:
+            missing.append(system_id)
+        elif probe.status != STATUS_READY:
+            unverified.append((system_id, probe))
+
+    if not missing:
+        if unverified:
+            system_id, probe = unverified[0]
+            return 409, _payload(system_id, STATUS_UNKNOWN, CODE_CANNOT_VERIFY, probe.detail)
+        return 409, _payload(default_system_id(), STATUS_READY, CODE_ALREADY_READY, 'A credential already exists.')
+
+    for system_id in missing:
+        created = create_tms_credential(context.token, context.username, system_id, context.base_url, context.tenant_id)
+        logger.info("HPC credential create user=%s system=%s ok=%s code=%s",
+                    context.username, system_id, created.ok, created.code)
+        clear_cached_status(user, system_id)
+        if not created.ok:
+            return 502, _payload(system_id, STATUS_MISSING, created.code, created.detail)
+
+    return 200, get_all_credential_status(user, refresh=True)
+
+
+def diagnose_failed_task_error(user, error_text):
+    """
+    Explain a Tapis staging/credential failure after the fact.
+
+    Tapis reports a missing credential on a staging source as a bare JOBS_TRANSFER_INCOMPLETE
+    whose message names no system. When ``error_text`` is one of those failures, re-run the
+    credential check and return ``(systems_missing, hint)``; otherwise ``([], '')``. Never
+    raises: this is advisory text for the task page and the log.
+    """
+    text = error_text or ''
+    if not any(signal in text for signal in ('JOBS_TRANSFER_INCOMPLETE', 'SYSTEMS_MISSING_CREDENTIALS')):
+        return [], ''
+    try:
+        status = get_all_credential_status(user, refresh=True)
+    except Exception:
+        logger.warning("Could not re-check HPC access after a Tapis staging failure", exc_info=True)
+        return [], ''
+    missing = status.get('missing_systems') or []
+    if missing:
+        hint = ("Your TACC account has no credential on {}. Use \"Set up HPC access\" on the dashboard, "
+                "then process the task again.").format(', '.join(missing))
+    else:
+        hint = ("Credentials look fine on {}; Tapis reports intermittent transfer problems, "
+                "so processing the task again may succeed.").format(', '.join(required_system_ids()))
+    return missing, hint
