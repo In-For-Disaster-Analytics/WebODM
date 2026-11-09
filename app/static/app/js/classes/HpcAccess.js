@@ -11,6 +11,9 @@ const STATUS = {
 };
 
 const MISSING_CREDENTIALS_SIGNAL = 'SYSTEMS_MISSING_CREDENTIALS';
+// Tapis reports a missing credential on a staging source (e.g. cloud.data) as a bare
+// transfer failure that names no system, so it is treated as a credential problem too.
+const STAGING_FAILED_SIGNAL = 'JOBS_TRANSFER_INCOMPLETE';
 
 // "unknown" codes that mean the check does not apply to this account or deployment
 // (stock WebODM login, Tapis not configured). The UI stays silent for these.
@@ -26,6 +29,7 @@ const buildUrl = ({ refresh = false, systemId = null } = {}) => {
 const HpcAccess = {
   STATUS,
   MISSING_CREDENTIALS_SIGNAL,
+  STAGING_FAILED_SIGNAL,
   HIDDEN_CODES,
   buildUrl,
 
@@ -47,9 +51,16 @@ const HpcAccess = {
     return $.getJSON('/api/tas/allocations/');
   },
 
-  // True when a task's last_error is the Tapis "no credential on this system" failure.
+  // True when a task's last_error is a Tapis "no credential on this system" failure, or a
+  // staging transfer failure that usually means the same thing.
   errorLooksLikeMissingCredential(text) {
-    return typeof text === 'string' && text.indexOf(MISSING_CREDENTIALS_SIGNAL) !== -1;
+    return typeof text === 'string' &&
+      (text.indexOf(MISSING_CREDENTIALS_SIGNAL) !== -1 || text.indexOf(STAGING_FAILED_SIGNAL) !== -1);
+  },
+
+  // Comma list of systems the payload reports as missing ('' when none or not reported).
+  missingSystemsText(status) {
+    return status && Array.isArray(status.missing_systems) ? status.missing_systems.join(', ') : '';
   },
 
   // Human text for a payload code. Keyed on `code`, never on substring matching of `detail`.

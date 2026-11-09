@@ -14,7 +14,7 @@ import requests
 from pyodx import Node
 from pyodx.exceptions import NodeServerError, NodeConnectionError
 from pyodx.types import TaskStatus
-from .url_security import redact_query_params, redact_url
+from .url_security import redact_query_params, redact_text, redact_url
 
 logger = logging.getLogger('app.logger')
 
@@ -174,7 +174,7 @@ class JWTNodeWrapper:
             logger.info(f"Method: POST")
             logger.info(f"URL: {redact_url(endpoint)}")
             logger.info(f"Query Parameters: {redact_query_params(params)}")
-            logger.info(f"Form Data: {data}")
+            logger.info(f"Form Data: {redact_text(data)}")
             logger.info(f"Files: {[f[0] for f in files]} ({len(files)} files)")
             logger.info(f"Timeout: {self.timeout}s")
             logger.info(f"==============================")
@@ -195,16 +195,16 @@ class JWTNodeWrapper:
             # Log detailed response information
             logger.info(f"=== HTTP RESPONSE DETAILS ===")
             logger.info(f"Status Code: {response.status_code}")
-            logger.info(f"Response Headers: {dict(response.headers)}")
+            logger.debug(f"Response Headers: {redact_text(dict(response.headers))}")
             logger.info(f"Response Content Length: {len(response.content)} bytes")
             if response.headers.get('content-type', '').startswith('application/json'):
                 try:
                     response_json = response.json()
-                    logger.info(f"Response JSON: {response_json}")
+                    logger.info(f"Response JSON: {redact_text(response_json)}")
                 except:
-                    logger.info(f"Response Text: {response.text[:1000]}...")
+                    logger.info(f"Response Text: {redact_text(response.text[:1000])}...")
             else:
-                logger.info(f"Response Text: {response.text[:1000]}...")
+                logger.info(f"Response Text: {redact_text(response.text[:1000])}...")
             logger.info(f"===============================")
             
             # Close file handles
@@ -231,7 +231,7 @@ class JWTNodeWrapper:
                 try:
                     result = response.json()
                 except ValueError as e:
-                    logger.error(f"Invalid JSON response: {response.text}")
+                    logger.error(f"Invalid JSON response: {redact_text(response.text)}")
                     raise Exception(f"Invalid JSON response from ClusterODM: {str(e)}")
 
                 if 'uuid' in result:
@@ -298,7 +298,7 @@ class JWTNodeWrapper:
                 try:
                     result = response.json()
                 except ValueError as e:
-                    logger.error(f"Invalid JSON response: {response.text}")
+                    logger.error(f"Invalid JSON response: {redact_text(response.text)}")
                     raise Exception(f"Invalid JSON response from ClusterODM: {str(e)}")
 
                 if 'uuid' in result:
@@ -355,16 +355,16 @@ class JWTNodeWrapper:
 
         logger.info(f"=== HTTP RESPONSE DETAILS (Task Info) ===")
         logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Headers: {redact_text(dict(response.headers))}")
         logger.info(f"Response Content Length: {len(response.content)} bytes")
         if response.headers.get('content-type', '').startswith('application/json'):
             try:
                 response_json = response.json()
-                logger.info(f"Response JSON: {response_json}")
+                logger.info(f"Response JSON: {redact_text(response_json)}")
             except Exception:
-                logger.info(f"Response Text: {response.text[:1000]}...")
+                logger.info(f"Response Text: {redact_text(response.text[:1000])}...")
         else:
-            logger.info(f"Response Text: {response.text[:1000]}...")
+            logger.info(f"Response Text: {redact_text(response.text[:1000])}...")
         logger.info(f"==========================================")
 
         if response.status_code != 200:
@@ -377,7 +377,7 @@ class JWTNodeWrapper:
         data = response.json()
 
         if 'error' in data:
-            logger.error(f"ClusterODM returned error: {data['error']}")
+            logger.error(f"ClusterODM returned error: {redact_text(data['error'])}")
             raise NodeServerError(f"ClusterODM error: {data['error']}")
 
         if 'uuid' not in data:
@@ -415,7 +415,7 @@ class JWTNodeWrapper:
 
         logger.info(f"=== HTTP RESPONSE DETAILS (Task Output) ===")
         logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Headers: {redact_text(dict(response.headers))}")
         logger.info(f"Response Content Length: {len(response.content)} bytes")
 
         if response.status_code == 200:
@@ -578,7 +578,7 @@ class JWTNodeWrapper:
 
                             logger.info(f"=== HTTP RESPONSE DETAILS (Task Output) ===")
                             logger.info(f"Status Code: {output_response.status_code}")
-                            logger.info(f"Response Headers: {dict(output_response.headers)}")
+                            logger.debug(f"Response Headers: {redact_text(dict(output_response.headers))}")
                             logger.info(f"Response Content Length: {len(output_response.content)} bytes")
 
                             if output_response.status_code == 200:
@@ -767,7 +767,7 @@ class JWTNodeWrapper:
 
                             logger.info(f"=== HTTP RESPONSE DETAILS (Task Remove) ===")
                             logger.info(f"Status Code: {remove_response.status_code}")
-                            logger.info(f"Response Headers: {dict(remove_response.headers)}")
+                            logger.debug(f"Response Headers: {redact_text(dict(remove_response.headers))}")
                             logger.info(f"Response Content Length: {len(remove_response.content)} bytes")
 
                             if remove_response.status_code == 200:
@@ -778,7 +778,7 @@ class JWTNodeWrapper:
                                     return result
                                 except ValueError:
                                     # Some removal endpoints may return plain text instead of JSON
-                                    logger.info(f"Task removal response (text): {remove_response.text}")
+                                    logger.info(f"Task removal response (text): {redact_text(remove_response.text)}")
                                     logger.info(f"============================================")
                                     return {"success": True, "message": remove_response.text}
                             else:
@@ -836,7 +836,7 @@ class JWTNodeWrapper:
 
                             logger.info(f"=== HTTP RESPONSE DETAILS (Task Cancel) ===")
                             logger.info(f"Status Code: {cancel_response.status_code}")
-                            logger.info(f"Response Headers: {dict(cancel_response.headers)}")
+                            logger.debug(f"Response Headers: {redact_text(dict(cancel_response.headers))}")
                             logger.info(f"Response Content Length: {len(cancel_response.content)} bytes")
 
                             if cancel_response.status_code == 200:
@@ -846,7 +846,7 @@ class JWTNodeWrapper:
                                     logger.info(f"============================================")
                                     return result
                                 except ValueError:
-                                    logger.info(f"Task cancel response (text): {cancel_response.text}")
+                                    logger.info(f"Task cancel response (text): {redact_text(cancel_response.text)}")
                                     logger.info(f"============================================")
                                     return {"success": True, "message": cancel_response.text}
                             else:
@@ -906,7 +906,7 @@ class JWTNodeWrapper:
 
             logger.info(f"=== HTTP RESPONSE DETAILS (Task Cancel - Direct) ===")
             logger.info(f"Status Code: {cancel_response.status_code}")
-            logger.info(f"Response Headers: {dict(cancel_response.headers)}")
+            logger.debug(f"Response Headers: {redact_text(dict(cancel_response.headers))}")
             logger.info(f"Response Content Length: {len(cancel_response.content)} bytes")
 
             if cancel_response.status_code == 200:
@@ -916,7 +916,7 @@ class JWTNodeWrapper:
                     logger.info(f"============================================")
                     return result
                 except ValueError:
-                    logger.info(f"Task cancel response (text): {cancel_response.text}")
+                    logger.info(f"Task cancel response (text): {redact_text(cancel_response.text)}")
                     logger.info(f"============================================")
                     return {"success": True, "message": cancel_response.text}
             else:

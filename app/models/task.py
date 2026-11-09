@@ -46,6 +46,7 @@ from app.geoutils import geom_transform, epsg_from_wkt, get_raster_bounds_wkt, g
 from app.imageutils import extract_gps_from_image, is_panorama
 from app.video import extract_subtitles, srt_file_for_video, extract_gps_from_srt, VIDEO_EXTENSIONS as VIDEO_MOD_EXTENSIONS
 from nodeodm import status_codes
+from nodeodm.url_security import redact_text
 from nodeodm.models import ProcessingNode
 from pyodx.exceptions import NodeResponseError, NodeConnectionError, NodeServerError, GenericError
 from webodm import settings
@@ -1102,7 +1103,9 @@ class Task(models.Model):
                                 from app.plugins import signals as plugin_signals
                                 plugin_signals.task_failed.send_robust(sender=self.__class__, task_id=self.id)
 
-                        TaskRun.record_from(self, tapis_job=self.lookup_tapis_job(jwt_token))
+                        tapis_job = self.lookup_tapis_job(jwt_token)
+                        TaskRun.record_from(self, tapis_job=tapis_job)
+                        self.log_terminal_state(tapis_job)
 
                     else:
                         # Still waiting...
@@ -1836,6 +1839,33 @@ class Task(models.Model):
             self.project.owner.profile.clear_used_quota_cache()
         except Exception as e:
             logger.warn("Cannot update size for task {}: {}".format(self, str(e)))
+
+    def log_terminal_state(self, tapis_job=None):
+        """
+        One grep-able log line tying this task to its Tapis job when it ends, and, for a
+        failed task, an explanation of Tapis staging/credential failures.
+
+        Tapis truncates its error message, so the job id is what lets an operator (or the
+        user's own token) fetch the full failure from Tapis. Never raises.
+        """
+        try:
+            job = tapis_job if isinstance(tapis_job, dict) else {}
+            logger.info("Task ended task=%s project=%s owner=%s node=%s status=%s tapis_job=%s error=%s",
+                        self.id, self.project_id, self.project.owner.username,
+                        getattr(self.processing_node, 'hostname', None), self.status,
+                        job.get('tapisJobId'), redact_text((self.last_error or '')[:300]).replace('\n', ' '))
+
+            if self.status != status_codes.FAILED or not self.last_error:
+                return
+            from app.services.tapis_credentials import diagnose_failed_task_error
+            missing, hint = diagnose_failed_task_error(self.project.owner, self.last_error)
+            if hint and hint not in self.last_error:
+                logger.info("Task %s failed during Tapis staging; credentials missing on: %s",
+                            self.id, ', '.join(missing) or 'none')
+                self.last_error = "{}\n\n{}".format(self.last_error, hint)
+                self.save()
+        except Exception as e:
+            logger.warning("Cannot summarize ended task {}: {}".format(getattr(self, 'id', None), str(e)))
 
     def lookup_tapis_job(self, jwt_token=None):
         """

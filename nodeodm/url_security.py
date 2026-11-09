@@ -1,3 +1,4 @@
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -20,3 +21,20 @@ def redact_url(endpoint):
         for key, value in parse_qsl(parts.query, keep_blank_values=True)
     ]
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+# A JWT is three base64url segments, the first two starting with the encoded '{"'.
+_JWT_PATTERN = re.compile(r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*')
+_TOKEN_PARAM_PATTERN = re.compile(r"((?:access_)?token['\"]?\s*[=:]\s*['\"]?)[^&'\"\s,}]+", re.IGNORECASE)
+
+
+def redact_text(value):
+    """
+    Mask bearer credentials in free text before logging it.
+
+    Task options and ClusterODM responses carry the user's Tapis JWT, both as a bare
+    token and inside ``?token=`` query strings (the ``sm-cluster`` option URL), so dumps
+    of response bodies must pass through here.
+    """
+    text = _JWT_PATTERN.sub('[REDACTED]', str(value))
+    return _TOKEN_PARAM_PATTERN.sub(r'\1[REDACTED]', text)

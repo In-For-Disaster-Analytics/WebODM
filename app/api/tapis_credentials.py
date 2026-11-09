@@ -10,7 +10,8 @@ from app.services.tapis_credentials import (
     CODE_MISCONFIGURED,
     STATUS_UNKNOWN,
     create_credential_for_user,
-    default_system_id,
+    create_missing_credentials_for_user,
+    get_all_credential_status,
     get_credential_status,
     is_valid_system_id,
 )
@@ -41,11 +42,15 @@ class HpcAccessPostThrottle(UserRateThrottle):
 
 class HpcAccessView(APIView):
     """
-    GET  /api/tapis/hpc-access/  -> does the signed-in user have a Tapis credential on the
-                                    execution system? Always HTTP 200; ``status`` is
-                                    ready | missing | unknown and ``unknown`` never blocks.
-    POST /api/tapis/hpc-access/  -> ask Tapis to create TMS keys for the user. Only runs
-                                    after a fresh probe reports ``missing``.
+    GET  /api/tapis/hpc-access/  -> does the signed-in user have a Tapis credential on every
+                                    system a job needs (WO_TAPIS_REQUIRED_SYSTEMS)? Always
+                                    HTTP 200; ``status`` is ready | missing | unknown and
+                                    ``unknown`` never blocks. ``systems`` has one entry per
+                                    system and ``missing_systems`` names the missing ones.
+    POST /api/tapis/hpc-access/  -> ask Tapis to create TMS keys on each missing system. Only
+                                    runs after a fresh probe reports ``missing``.
+
+    ``?system_id=<id>`` narrows either call to that single system.
     """
     permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [HpcAccessGetThrottle, HpcAccessPostThrottle]
@@ -53,7 +58,7 @@ class HpcAccessView(APIView):
     def _system_id(self, request):
         requested = (request.query_params.get('system_id') or '').strip()
         if not requested:
-            return default_system_id(), None
+            return None, None
         if not is_valid_system_id(requested):
             return None, Response({
                 'system_id': requested[:64],
@@ -73,6 +78,8 @@ class HpcAccessView(APIView):
             # Honour a forced re-check at most once per interval per user.
             refresh = cache.add('hpc:refresh:{}'.format(request.user.pk), 1, REFRESH_MIN_INTERVAL_SECONDS)
 
+        if system_id is None:
+            return Response(get_all_credential_status(request.user, refresh=refresh))
         return Response(get_credential_status(request.user, system_id, refresh=refresh))
 
     def post(self, request):
@@ -83,14 +90,17 @@ class HpcAccessView(APIView):
         lock_key = 'hpc:lock:{}'.format(request.user.pk)
         if not cache.add(lock_key, 1, CREATE_LOCK_SECONDS):
             return Response({
-                'system_id': system_id,
+                'system_id': system_id or '',
                 'status': STATUS_UNKNOWN,
                 'code': 'in_progress',
                 'detail': 'A credential request is already in progress.',
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         try:
-            http_status, payload = create_credential_for_user(request.user, system_id)
+            if system_id is None:
+                http_status, payload = create_missing_credentials_for_user(request.user)
+            else:
+                http_status, payload = create_credential_for_user(request.user, system_id)
         finally:
             cache.delete(lock_key)
 

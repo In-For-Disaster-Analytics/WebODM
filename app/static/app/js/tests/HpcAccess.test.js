@@ -41,6 +41,17 @@ describe('HpcAccess', () => {
     expect(HpcAccess.errorLooksLikeMissingCredential(null)).toBe(false);
   });
 
+  it('treats a Tapis staging failure as a likely credential problem', () => {
+    expect(HpcAccess.errorLooksLikeMissingCredential('JOBS_WORKER_PROCESSING_ERROR ... JOBS_TRANSFER_INCOMPLETE Transfer 4980d18b')).toBe(true);
+  });
+
+  it('lists the systems a status payload reports as missing', () => {
+    expect(HpcAccess.missingSystemsText({missing_systems: ['cloud.data', 'ls6']})).toBe('cloud.data, ls6');
+    expect(HpcAccess.missingSystemsText({missing_systems: []})).toBe('');
+    expect(HpcAccess.missingSystemsText({})).toBe('');
+    expect(HpcAccess.missingSystemsText(null)).toBe('');
+  });
+
   it('maps codes to friendly text and falls back to detail', () => {
     expect(HpcAccess.friendlyMessage('token_expired')).toMatch(/log in again/);
     expect(HpcAccess.friendlyMessage('not_authorized')).toMatch(/allocation/);

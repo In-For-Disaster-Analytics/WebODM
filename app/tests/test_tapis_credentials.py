@@ -24,6 +24,7 @@ TAPIS_SETTINGS = dict(
     TAPIS_TENANT_ID='portals',
     TAPIS_BASE_URL='https://portals.tapis.io',
     TAPIS_EXEC_SYSTEM_ID='ls6',
+    TAPIS_REQUIRED_SYSTEMS=['ls6', 'cloud.data'],
     TAPIS_CREDENTIAL_CACHE_SECONDS=600,
 )
 PROBE_ARGS = dict(token='secret-jwt-value', username='test user', system_id='ls6',
@@ -328,6 +329,95 @@ class CredentialStatusTests(TestCase):
         create.assert_called_once_with(self.jwt, 'testuser', 'ls6', 'https://portals.tapis.io', 'portals')
 
 
+    # --- all required systems ---------------------------------------------------------
+
+    def _probe_by_system(self, results):
+        def fake(token, username, system_id, base_url, tenant_id):
+            return results[system_id]
+        return fake
+
+    def test_required_systems_include_exec_system_first(self):
+        self.assertEqual(svc.required_system_ids(), ['ls6', 'cloud.data'])
+
+    def test_all_status_names_the_system_that_is_missing(self):
+        results = {'ls6': self._ready(), 'cloud.data': self._missing()}
+        with patch('app.services.tapis_credentials.probe_credential', side_effect=self._probe_by_system(results)):
+            payload = svc.get_all_credential_status(self.user)
+        self.assertEqual(payload['status'], svc.STATUS_MISSING)
+        self.assertEqual(payload['system_id'], 'cloud.data')
+        self.assertEqual(payload['missing_systems'], ['cloud.data'])
+        self.assertEqual([p['system_id'] for p in payload['systems']], ['ls6', 'cloud.data'])
+
+    def test_all_status_ready_only_when_every_system_is_ready(self):
+        results = {'ls6': self._ready(), 'cloud.data': self._ready()}
+        with patch('app.services.tapis_credentials.probe_credential', side_effect=self._probe_by_system(results)):
+            payload = svc.get_all_credential_status(self.user)
+        self.assertEqual((payload['status'], payload['missing_systems']), (svc.STATUS_READY, []))
+
+    def test_all_status_unknown_when_one_system_cannot_be_verified(self):
+        results = {'ls6': self._ready(), 'cloud.data': self._unknown()}
+        with patch('app.services.tapis_credentials.probe_credential', side_effect=self._probe_by_system(results)):
+            payload = svc.get_all_credential_status(self.user)
+        self.assertEqual(payload['status'], svc.STATUS_UNKNOWN)
+
+    def test_create_missing_creates_only_missing_systems(self):
+        results = {'ls6': self._ready(), 'cloud.data': self._missing()}
+        with patch('app.services.tapis_credentials.probe_credential', side_effect=self._probe_by_system(results)), \
+             patch('app.services.tapis_credentials.create_tms_credential',
+                   return_value=svc.CreateResult(True, svc.CODE_OK, '')) as create:
+            http_status, payload = svc.create_missing_credentials_for_user(self.user)
+        self.assertEqual(http_status, 200)
+        create.assert_called_once_with(self.jwt, 'testuser', 'cloud.data', 'https://portals.tapis.io', 'portals')
+        self.assertIn('systems', payload)
+
+    def test_create_missing_refuses_when_all_ready(self):
+        with patch('app.services.tapis_credentials.probe_credential', return_value=self._ready()), \
+             patch('app.services.tapis_credentials.create_tms_credential') as create:
+            http_status, payload = svc.create_missing_credentials_for_user(self.user)
+        self.assertEqual((http_status, payload['code']), (409, svc.CODE_ALREADY_READY))
+        create.assert_not_called()
+
+    def test_create_missing_refuses_when_unverified_and_nothing_missing(self):
+        results = {'ls6': self._ready(), 'cloud.data': self._unknown()}
+        with patch('app.services.tapis_credentials.probe_credential', side_effect=self._probe_by_system(results)), \
+             patch('app.services.tapis_credentials.create_tms_credential') as create:
+            http_status, payload = svc.create_missing_credentials_for_user(self.user)
+        self.assertEqual((http_status, payload['code'], payload['system_id']), (409, svc.CODE_CANNOT_VERIFY, 'cloud.data'))
+        create.assert_not_called()
+
+    def test_create_missing_stops_and_reports_the_failing_system(self):
+        with patch('app.services.tapis_credentials.probe_credential', return_value=self._missing()), \
+             patch('app.services.tapis_credentials.create_tms_credential',
+                   return_value=svc.CreateResult(False, svc.CODE_CREATE_FAILED, 'boom')) as create:
+            http_status, payload = svc.create_missing_credentials_for_user(self.user)
+        self.assertEqual((http_status, payload['code'], payload['system_id']), (502, svc.CODE_CREATE_FAILED, 'ls6'))
+        self.assertEqual(create.call_count, 1)
+
+    def test_diagnose_ignores_unrelated_errors(self):
+        with patch('app.services.tapis_credentials.get_all_credential_status') as status:
+            self.assertEqual(svc.diagnose_failed_task_error(self.user, 'Process exited with code 1'), ([], ''))
+        status.assert_not_called()
+
+    def test_diagnose_names_the_missing_system_for_a_staging_failure(self):
+        fake = {'missing_systems': ['cloud.data'], 'status': svc.STATUS_MISSING}
+        with patch('app.services.tapis_credentials.get_all_credential_status', return_value=fake):
+            missing, hint = svc.diagnose_failed_task_error(self.user, 'JOBS_TRANSFER_INCOMPLETE Transfer 4980d18b')
+        self.assertEqual(missing, ['cloud.data'])
+        self.assertIn('cloud.data', hint)
+        self.assertIn('Set up HPC access', hint)
+
+    def test_diagnose_suggests_retry_when_credentials_are_fine(self):
+        fake = {'missing_systems': [], 'status': svc.STATUS_READY}
+        with patch('app.services.tapis_credentials.get_all_credential_status', return_value=fake):
+            missing, hint = svc.diagnose_failed_task_error(self.user, 'JOBS_TRANSFER_INCOMPLETE Transfer 4980d18b')
+        self.assertEqual(missing, [])
+        self.assertIn('again', hint)
+
+    def test_diagnose_never_raises(self):
+        with patch('app.services.tapis_credentials.get_all_credential_status', side_effect=RuntimeError('boom')):
+            self.assertEqual(svc.diagnose_failed_task_error(self.user, 'JOBS_TRANSFER_INCOMPLETE'), ([], ''))
+
+
 @override_settings(**TAPIS_SETTINGS)
 class HpcAccessApiTests(BootTestCase):
     def setUp(self):
@@ -346,11 +436,11 @@ class HpcAccessApiTests(BootTestCase):
         self.assertIn(anonymous.post('/api/tapis/hpc-access/').status_code, (401, 403))
 
     def test_get_returns_status_payload(self):
-        with patch('app.api.tapis_credentials.get_credential_status', return_value=self._payload('missing', 'credential_missing')) as status_fn:
+        with patch('app.api.tapis_credentials.get_all_credential_status', return_value=self._payload('missing', 'credential_missing')) as status_fn:
             res = self.client.get('/api/tapis/hpc-access/')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['status'], 'missing')
-        status_fn.assert_called_once_with(self.user, 'ls6', refresh=False)
+        status_fn.assert_called_once_with(self.user, refresh=False)
 
     def test_get_rejects_invalid_system_id(self):
         res = self.client.get('/api/tapis/hpc-access/?system_id=ls6;drop')
@@ -363,32 +453,96 @@ class HpcAccessApiTests(BootTestCase):
         status_fn.assert_called_once_with(self.user, 'stampede3', refresh=False)
 
     def test_refresh_is_honoured_once_per_interval(self):
-        with patch('app.api.tapis_credentials.get_credential_status', return_value=self._payload('ready', 'ok')) as status_fn:
+        with patch('app.api.tapis_credentials.get_all_credential_status', return_value=self._payload('ready', 'ok')) as status_fn:
             self.client.get('/api/tapis/hpc-access/?refresh=1')
             self.client.get('/api/tapis/hpc-access/?refresh=1')
         refresh_flags = [call[1]['refresh'] for call in status_fn.call_args_list]
         self.assertEqual(refresh_flags, [True, False])
 
     def test_post_passes_through_service_status(self):
-        with patch('app.api.tapis_credentials.create_credential_for_user', return_value=(409, self._payload('ready', 'already_ready'))):
+        with patch('app.api.tapis_credentials.create_missing_credentials_for_user', return_value=(409, self._payload('ready', 'already_ready'))):
             res = self.client.post('/api/tapis/hpc-access/')
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.data['code'], 'already_ready')
 
-        with patch('app.api.tapis_credentials.create_credential_for_user', return_value=(502, self._payload('missing', 'create_failed'))):
+        with patch('app.api.tapis_credentials.create_missing_credentials_for_user', return_value=(502, self._payload('missing', 'create_failed'))):
             res = self.client.post('/api/tapis/hpc-access/')
         self.assertEqual(res.status_code, 502)
         self.assertEqual(res.data['code'], 'create_failed')
 
     def test_post_is_rejected_while_locked_and_lock_is_released(self):
         cache.add('hpc:lock:{}'.format(self.user.pk), 1, 30)
-        with patch('app.api.tapis_credentials.create_credential_for_user') as create:
+        with patch('app.api.tapis_credentials.create_missing_credentials_for_user') as create:
             res = self.client.post('/api/tapis/hpc-access/')
         self.assertEqual(res.status_code, 429)
         create.assert_not_called()
 
         cache.delete('hpc:lock:{}'.format(self.user.pk))
-        with patch('app.api.tapis_credentials.create_credential_for_user', return_value=(200, self._payload('ready', 'ok'))):
+        with patch('app.api.tapis_credentials.create_missing_credentials_for_user', return_value=(200, self._payload('ready', 'ok'))):
             res = self.client.post('/api/tapis/hpc-access/')
         self.assertEqual(res.status_code, 200)
         self.assertIsNone(cache.get('hpc:lock:{}'.format(self.user.pk)))
+
+    def test_post_with_system_id_creates_only_that_system(self):
+        with patch('app.api.tapis_credentials.create_credential_for_user', return_value=(200, self._payload('ready', 'ok', 'cloud.data'))) as create_one, \
+             patch('app.api.tapis_credentials.create_missing_credentials_for_user') as create_all:
+            res = self.client.post('/api/tapis/hpc-access/?system_id=cloud.data')
+        self.assertEqual(res.status_code, 200)
+        create_one.assert_called_once_with(self.user, 'cloud.data')
+        create_all.assert_not_called()
+
+
+class TaskTerminalStateLoggingTests(SimpleTestCase):
+    """Task.log_terminal_state: correlation log line and the staging-failure hint."""
+
+    def _task(self, status, last_error):
+        from types import SimpleNamespace
+        from nodeodm import status_codes
+        owner = SimpleNamespace(username='newuser')
+        return SimpleNamespace(
+            id='task-1', project_id=40, project=SimpleNamespace(owner=owner),
+            processing_node=SimpleNamespace(hostname='clusterodm'),
+            status=getattr(status_codes, status), last_error=last_error, save=MagicMock())
+
+    def _run(self, task, job=None):
+        from app.models import Task
+        Task.log_terminal_state(task, job)
+
+    def test_logs_task_and_tapis_job_ids(self):
+        task = self._task('FAILED', 'Process exited with code 1')
+        with self.assertLogs('app.logger', level='INFO') as logs:
+            self._run(task, {'tapisJobId': '916d14f2-c838-401f-8eaa-4cf5815949bc-007'})
+        line = [l for l in logs.output if 'Task ended' in l][0]
+        self.assertIn('task=task-1', line)
+        self.assertIn('owner=newuser', line)
+        self.assertIn('tapis_job=916d14f2-c838-401f-8eaa-4cf5815949bc-007', line)
+        task.save.assert_not_called()
+
+    def test_log_line_never_contains_a_token(self):
+        jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnLXBhcnRfMQ'
+        task = self._task('FAILED', 'failed with ?token=' + jwt)
+        with self.assertLogs('app.logger', level='INFO') as logs:
+            self._run(task)
+        self.assertNotIn(jwt, '\n'.join(logs.output))
+
+    def test_staging_failure_gets_a_hint_naming_the_missing_system(self):
+        task = self._task('FAILED', 'JOBS_TRANSFER_INCOMPLETE Transfer 4980d18b')
+        with patch('app.services.tapis_credentials.diagnose_failed_task_error',
+                   return_value=(['cloud.data'], 'Your TACC account has no credential on cloud.data.')):
+            self._run(task)
+        self.assertIn('no credential on cloud.data', task.last_error)
+        self.assertTrue(task.last_error.startswith('JOBS_TRANSFER_INCOMPLETE'))
+        task.save.assert_called_once()
+
+    def test_hint_is_not_appended_twice(self):
+        task = self._task('FAILED', 'JOBS_TRANSFER_INCOMPLETE x\n\nHint text.')
+        with patch('app.services.tapis_credentials.diagnose_failed_task_error', return_value=([], 'Hint text.')):
+            self._run(task)
+        self.assertEqual(task.last_error.count('Hint text.'), 1)
+        task.save.assert_not_called()
+
+    def test_completed_task_is_logged_but_not_diagnosed(self):
+        task = self._task('COMPLETED', None)
+        with patch('app.services.tapis_credentials.diagnose_failed_task_error') as diagnose:
+            self._run(task)
+        diagnose.assert_not_called()
