@@ -90,12 +90,20 @@ class Paginator extends React.Component {
     }
 
     getQueryForPage = (num, overridePageSize) => {
-        return Utils.toSearchQuery({
+        const params = {
             page: num,
             page_size: overridePageSize !== undefined ? overridePageSize : this.getPageSize(),
             ordering: this.state.sortKey,
             search: this.state.searchText.replace(/#/g, ":")
+        };
+
+        // Keep the project list activity filters when changing page, sort or search
+        const q = Utils.queryParams(this.props.location);
+        ["hide_empty", "has_active_work"].forEach(k => {
+            if (q[k] !== undefined) params[k] = q[k];
         });
+
+        return Utils.toSearchQuery(params);
     }
 
     pageSizeChanged = size => {
@@ -156,7 +164,7 @@ class Paginator extends React.Component {
             <li className="btn-group">
                 <a href="javascript:void(0);" className="dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title={_("Items per page")}><i className="fa fa-list-ol"></i></a>
                 <ul className="dropdown-menu dropdown-menu-right">
-                    {[10, 25, 50, 100].map(size => (
+                    {[10, 20, 25, 50, 100].map(size => (
                         <li key={size}>
                             <a className="page-size" href="javascript:void(0);" onClick={() => this.pageSizeChanged(size)}>
                                 {size} {pageSize === size ? <i className="fa fa-check"></i> : ""}

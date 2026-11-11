@@ -1,6 +1,19 @@
 .project-list{
+    .project-list-filters{
+        margin-bottom: 8px;
+        font-size: 90%;
+    }
     ul.project-list.refreshing{
         opacity: 0.5;
         pointer-events: none;
+    }
+}
+
+.project-list-empty{
+    margin-top: 4px;
+    margin-bottom: 12px;
+    color: #4d555b;
+    p{
+        margin: 0 0 2px 0;
     }
 }

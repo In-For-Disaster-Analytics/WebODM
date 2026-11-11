@@ -367,6 +367,10 @@ REST_FRAMEWORK = {
   'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
 }
 
+# Project list: "failed" task counts and the "active work" filter only include
+# failed tasks created within this many days (Task has no failure timestamp)
+PROJECT_LIST_FAILED_WINDOW_DAYS = 7
+
 JWT_AUTH = {
     'JWT_EXPIRATION_DELTA': datetime.timedelta(hours=6),
     'JWT_ALLOW_REFRESH': True,

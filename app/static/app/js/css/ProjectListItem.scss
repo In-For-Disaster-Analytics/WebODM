@@ -60,6 +60,26 @@
         a{
             margin-right: 12px;
         }
+        .task-counts{
+            display: inline-block;
+            margin-left: 4px;
+            margin-right: 12px;
+            .task-count-running{ color: #31708f; }
+            .task-count-queued{ color: #5f6b73; }
+            .task-count-failed{ color: #a94442; }
+            .task-count-separator{ color: #999; margin: 0 2px; }
+        }
+
+        // Let the count summary take its own line instead of pushing
+        // "View Map" onto two lines
+        @media (max-width: 576px){
+            .task-counts{
+                display: block;
+                margin-left: 0;
+                margin-top: 4px;
+                margin-bottom: 4px;
+            }
+        }
     }
 
     .btn-danger .fa-trash{

@@ -60,7 +60,10 @@ export default {
     },
 
     buildUrlReplaceParams: function(url, params){
-      let q = this.queryParams({search: url});
+      // queryParams expects only the query string, not the whole URL (otherwise the path
+      // is glued onto the first parameter name)
+      const queryStart = url.indexOf("?");
+      let q = this.queryParams({search: queryStart !== -1 ? url.slice(queryStart) : ""});
       for (let k in params){
         q[k] = params[k];
       }
