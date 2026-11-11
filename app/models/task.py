@@ -23,6 +23,7 @@ from shutil import copyfile
 import requests
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = 4096000000
+from django.contrib.auth.models import User
 from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.postgres import fields
 from django.core.files.uploadedfile import InMemoryUploadedFile
@@ -47,7 +48,7 @@ from app.imageutils import extract_gps_from_image, is_panorama
 from app.video import extract_subtitles, srt_file_for_video, extract_gps_from_srt, VIDEO_EXTENSIONS as VIDEO_MOD_EXTENSIONS
 from nodeodm import status_codes
 from nodeodm.url_security import redact_text
-from nodeodm.models import ProcessingNode
+from nodeodm.models import ProcessingNode, is_primary_clusterodm_node
 from pyodx.exceptions import NodeResponseError, NodeConnectionError, NodeServerError, GenericError
 from webodm import settings
 from app.classes.gcp import GCPFile
@@ -285,6 +286,7 @@ class Task(models.Model):
                                         blank=True)
     import_url = models.TextField(null=False, default="", blank=True, help_text=_("URL this task is imported from (only for imported tasks)"), verbose_name=_("Import URL"))
     images_count = models.IntegerField(null=False, blank=True, default=0, help_text=_("Number of images associated with this task"), verbose_name=_("Images Count"))
+    submitted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_tasks', help_text=_("User who last started or restarted this task. Their Tapis identity is used for all processing node calls. Falls back to the project owner when empty."), verbose_name=_("Submitted by"))
     partial = models.BooleanField(default=False, help_text=_("A flag indicating whether this task is currently waiting for information or files to be uploaded before being considered for processing."), verbose_name=_("Partial"))
     potree_scene = fields.JSONField(default=dict, blank=True, help_text=_("Serialized potree scene information used to save/load measurements and camera view angle"), verbose_name=_("Potree Scene"))
     epsg = models.IntegerField(null=True, default=None, blank=True, help_text=_("EPSG code of the dataset (if georeferenced)"), verbose_name="EPSG")
@@ -855,8 +857,12 @@ class Task(models.Model):
                             Task.objects.filter(pk=self.id).update(upload_progress=float(progress) / 100.0)
                             last_update = time.time()
 
-                    # Get JWT token for the task owner if available
+                    # Get JWT token for the user this task runs under, if available
                     jwt_token = self._get_tapis_jwt_token()
+                    if jwt_token is None and is_primary_clusterodm_node(self.processing_node):
+                        # ClusterODM routes tasks per Tapis token; submitting without one
+                        # yields a 502 or an orphaned task, so fail clearly instead.
+                        raise NodeServerError(gettext('Authentication required: the Tapis session for %(user)s is missing or expired. %(user)s must log in to WebODM, then restart the task.') % {'user': self._tapis_token_user().username})
 
                     # This takes a while
                     try:
@@ -1858,7 +1864,7 @@ class Task(models.Model):
             if self.status != status_codes.FAILED or not self.last_error:
                 return
             from app.services.tapis_credentials import diagnose_failed_task_error
-            missing, hint = diagnose_failed_task_error(self.project.owner, self.last_error)
+            missing, hint = diagnose_failed_task_error(self._tapis_token_user(), self.last_error)
             if hint and hint not in self.last_error:
                 logger.info("Task %s failed during Tapis staging; credentials missing on: %s",
                             self.id, ', '.join(missing) or 'none')
@@ -1885,34 +1891,42 @@ class Task(models.Model):
         names = [opt.get('name') for opt in (node.available_options or []) if isinstance(opt, dict)]
         return 'tapis-allocation' in names
 
+    def _tapis_token_user(self):
+        """
+        The user whose Tapis identity this task runs under: whoever last
+        submitted it, falling back to the project owner.
+        """
+        return self.submitted_by or self.project.owner
+
     def _get_tapis_jwt_token(self):
         """
-        Get the JWT token for the task owner from Tapis OAuth2 tokens.
+        Get the JWT token for the user this task runs under from Tapis OAuth2 tokens.
 
         :returns: JWT token string if available, None otherwise
         """
+        user = self._tapis_token_user()
         try:
-            # Get the most recent valid Tapis OAuth2 token for the task owner
+            # Get the most recent valid Tapis OAuth2 token for that user
             token = TapisOAuth2Token.objects.filter(
-                user=self.project.owner,
+                user=user,
                 access_token__isnull=False
             ).exclude(
                 access_token__exact=''
             ).order_by('-created_at').first()
 
             if not token:
-                logger.info(f"No Tapis OAuth2 token found for user {self.project.owner.username}")
+                logger.info(f"No Tapis OAuth2 token found for user {user.username}")
                 return None
 
             access_token = token.get_valid_access_token()
             if access_token:
                 return access_token
 
-            logger.warning(f"Could not obtain a valid JWT token for user {self.project.owner.username}")
+            logger.warning(f"Could not obtain a valid JWT token for user {user.username}")
             return None
 
         except Exception as e:
-            logger.error(f"Error getting Tapis JWT token for user {self.project.owner.username}: {str(e)}")
+            logger.error(f"Error getting Tapis JWT token for user {user.username}: {str(e)}")
             return None
 
     def get_task_assets_cache(self):

@@ -25,7 +25,7 @@ import os
 
 logger = logging.getLogger('app.logger')
 
-def _is_primary_clusterodm_node(node):
+def is_primary_clusterodm_node(node):
     clusterodm_url = (getattr(settings, 'CLUSTERODM_URL', '') or "").strip()
     if not clusterodm_url:
         return False
@@ -408,7 +408,7 @@ def auto_update_node_info(sender, instance, created, **kwargs):
             logger.warning("auto_update_node_info: " + str(e))
 
         # Ensure all default users can use the primary ClusterODM node.
-        if _is_primary_clusterodm_node(instance):
+        if is_primary_clusterodm_node(instance):
             try:
                 default_group = Group.objects.get(name="Default")
                 assign_perm('view_processingnode', default_group, instance)
