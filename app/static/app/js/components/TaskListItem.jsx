@@ -8,6 +8,7 @@ import EditTaskPanel from './EditTaskPanel';
 import { restartTask, isRestartable } from '../classes/TaskRestart';
 import AssetDownloadButtons from './AssetDownloadButtons';
 import HistoryNav from '../classes/HistoryNav';
+import { isTaskActive } from '../classes/TaskVersions';
 import PropTypes from 'prop-types';
 import TaskPluginActionButtons from './TaskPluginActionButtons';
 import MoveTaskDialog from './MoveTaskDialog';
@@ -80,13 +81,7 @@ class TaskListItem extends React.Component {
   }
 
   shouldRefresh(){
-    if (this.state.task.pending_action !== null) return true;
-
-    // If a task is completed, or failed, etc. we don't expect it to change
-    if ([statusCodes.COMPLETED, statusCodes.FAILED, statusCodes.CANCELED].indexOf(this.state.task.status) !== -1) return false;
-
-    return (([statusCodes.QUEUED, statusCodes.RUNNING, null].indexOf(this.state.task.status) !== -1 && this.state.task.processing_node) ||
-            (!this.state.task.uuid && this.state.task.processing_node && !this.state.task.last_error));
+    return isTaskActive(this.state.task);
   }
 
   loadTimer(startTime){

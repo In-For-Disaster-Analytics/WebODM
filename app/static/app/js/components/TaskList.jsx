@@ -1,10 +1,14 @@
 import React from 'react';
 import '../css/TaskList.scss';
 import TaskListItem from './TaskListItem';
+import TaskVersionGroup from './TaskVersionGroup';
+import { groupTaskVersions, isTaskActive } from '../classes/TaskVersions';
 import PropTypes from 'prop-types';
 import $ from 'jquery';
 import HistoryNav from '../classes/HistoryNav';
 import { _, interpolate } from '../classes/gettext';
+
+const HIDDEN_VERSION_POLL_INTERVAL = 7000;
 
 class TaskList extends React.Component {
   static propTypes = {
@@ -52,8 +56,24 @@ class TaskList extends React.Component {
     this.setState({filterText: text, filterTags: tags});
   }
 
-  loadTaskList(){
-    this.setState({loading: true});
+  // Hidden (non-head) versions are not mounted as TaskListItems, so nothing else keeps them
+  // up to date. Open compact rows poll themselves, but re-listing is cheap and TaskListItem
+  // ignores later changes to its data prop, so overlap is harmless.
+  hasActiveHiddenVersion(){
+    return groupTaskVersions(this.state.tasks).some(g => g.tasks.slice(1).some(isTaskActive));
+  }
+
+  scheduleHiddenPoll(){
+    if (this.hiddenPollTimeout || this.unmounted || !this.hasActiveHiddenVersion()) return;
+    this.hiddenPollTimeout = setTimeout(() => {
+      this.hiddenPollTimeout = null;
+      this.loadTaskList(true);
+    }, HIDDEN_VERSION_POLL_INTERVAL);
+  }
+
+  // quiet: background re-fetch, no loading indicator or error message
+  loadTaskList(quiet = false){
+    if (!quiet) this.setState({loading: true});
 
     this.taskListRequest = 
       $.getJSON(this.props.source, json => {
@@ -63,22 +83,28 @@ class TaskList extends React.Component {
 
           this.setState({
               tasks: json
-          });
+          }, () => this.scheduleHiddenPoll());
           setTimeout(() => this.notifyTagsChanged(), 0);
         })
         .fail((jqXHR, textStatus, errorThrown) => {
+          if (quiet){
+            this.scheduleHiddenPoll(); // transient failure, keep trying
+            return;
+          }
           this.setState({ 
               error: interpolate(_("Could not load task list: %(error)s"), { error: textStatus} ),
           });
         })
         .always(() => {
-          this.setState({
+          if (!quiet) this.setState({
             loading: false
           });
         });
   }
 
   componentWillUnmount(){
+    this.unmounted = true;
+    if (this.hiddenPollTimeout) clearTimeout(this.hiddenPollTimeout);
     this.taskListRequest.abort();
   }
 
@@ -137,6 +163,41 @@ class TaskList extends React.Component {
     return !miss;
   }
 
+  matchesFilter = (t) => {
+    const name = t.name !== null ? t.name : interpolate(_("Task #%(number)s"), { number: t.id });
+    return name.toLocaleLowerCase().indexOf(this.state.filterText.toLocaleLowerCase()) !== -1 &&
+            this.arrayContainsAll(t.tags, this.state.filterTags);
+  }
+
+  renderTasks = () => {
+    const itemProps = {
+      refreshInterval: 3000,
+      onDelete: this.deleteTask,
+      onMove: this.moveTask,
+      onDuplicate: this.refresh,
+      onEdited: this.taskEdited,
+      onTagClicked: this.props.onTagClicked,
+      hasPermission: this.props.hasPermission,
+      history: this.props.history
+    };
+
+    // Versions of the same task are folded under their newest version
+    return groupTaskVersions(this.state.tasks).map(group => {
+      const matches = group.tasks.map(this.matchesFilter);
+      if (matches.indexOf(true) === -1) return null;
+
+      if (group.tasks.length === 1){
+        return <TaskListItem key={group.head.id} data={group.head} {...itemProps} />;
+      }
+
+      return <TaskVersionGroup key={group.rootId}
+                tasks={group.tasks}
+                autoExpand={!matches[0]}
+                history={this.props.history}
+                itemProps={itemProps} />;
+    });
+  }
+
   render() {
     let message = "";
     if (this.state.loading){
@@ -149,23 +210,7 @@ class TaskList extends React.Component {
 
     return (
       <div className="task-list">
-        {this.state.tasks.filter(t => {
-          const name = t.name !== null ? t.name : interpolate(_("Task #%(number)s"), { number: t.id });
-          return name.toLocaleLowerCase().indexOf(this.state.filterText.toLocaleLowerCase()) !== -1 &&
-                  this.arrayContainsAll(t.tags, this.state.filterTags);
-        }).map(task => (
-          <TaskListItem 
-            data={task} 
-            key={task.id} 
-            refreshInterval={3000} 
-            onDelete={this.deleteTask}
-            onMove={this.moveTask}
-            onDuplicate={this.refresh}
-            onEdited={this.taskEdited}
-            onTagClicked={this.props.onTagClicked}
-            hasPermission={this.props.hasPermission}
-            history={this.props.history} />
-        ))}
+        {this.renderTasks()}
 
         {message}
       </div>
