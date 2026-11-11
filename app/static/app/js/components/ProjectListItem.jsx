@@ -20,6 +20,8 @@ import exifr from '../vendor/exifr';
 import { _, interpolate } from '../classes/gettext';
 import $ from 'jquery';
 
+const TASK_COUNTS_DEBOUNCE_MS = 300;
+
 const supportsDirectoryUpload = (() => {
   const input = document.createElement('input');
   return 'webkitdirectory' in input || 'directory' in input;
@@ -81,6 +83,7 @@ class ProjectListItem extends React.Component {
     this.updateProject = this.updateProject.bind(this);
     this.taskDeleted = this.taskDeleted.bind(this);
     this.taskMoved = this.taskMoved.bind(this);
+    this.refreshTaskCounts = this.refreshTaskCounts.bind(this);
     this.hasPermission = this.hasPermission.bind(this);
   }
 
@@ -91,7 +94,11 @@ class ProjectListItem extends React.Component {
     this.refreshRequest =
       $.getJSON(`/api/projects/${this.state.data.id}/`)
         .done((json) => {
-          this.setState({data: json});
+          // The detail endpoint has no task_counts: keep the ones from the list
+          this.setState(prevState => ({
+            data: prevState.data.task_counts ? Object.assign({}, json, {task_counts: prevState.data.task_counts}) : json
+          }));
+          this.refreshTaskCounts();
         })
         .fail((_, __, e) => {
           this.setState({error: e.message});
@@ -101,7 +108,28 @@ class ProjectListItem extends React.Component {
         });
   }
 
+  // The detail endpoint has no task_counts, so re-read them from the list
+  // endpoint (filtered by id, unpaginated). Calls are debounced and a newer
+  // request supersedes an older one; failures are ignored (stale counts only).
+  refreshTaskCounts(){
+    if (this.taskCountsTimeout) clearTimeout(this.taskCountsTimeout);
+    this.taskCountsTimeout = setTimeout(() => {
+      this.taskCountsTimeout = null;
+      if (this.taskCountsRequest) this.taskCountsRequest.abort();
+
+      const id = this.state.data.id;
+      this.taskCountsRequest = $.getJSON(`/api/projects/?id=${id}`)
+        .done(json => {
+          const counts = Array.isArray(json) && json[0] && json[0].task_counts;
+          if (counts) this.setState(prevState => ({data: Object.assign({}, prevState.data, {task_counts: counts})}));
+        })
+        .fail(() => {});
+    }, TASK_COUNTS_DEBOUNCE_MS);
+  }
+
   componentWillUnmount(){
+    if (this.taskCountsTimeout) clearTimeout(this.taskCountsTimeout);
+    if (this.taskCountsRequest) this.taskCountsRequest.abort();
     if (this.deleteProjectRequest) this.deleteProjectRequest.abort();
     if (this.refreshRequest) this.refreshRequest.abort();
     if (this.checkQueueCompletedOnTabActivation) document.removeEventListener("visibilitychange", this.checkQueueCompletedOnTabActivation);
@@ -759,6 +787,29 @@ class ProjectListItem extends React.Component {
     location.reload(true);
   }
 
+  // "2 running · 1 queued · 1 failed", zero buckets omitted
+  renderTaskCounts(){
+    const counts = this.state.data.task_counts;
+    if (!counts || !counts.total) return null;
+
+    const buckets = [
+      {key: "running", text: interpolate(_("%(count)s running"), {count: counts.running})},
+      {key: "queued", text: interpolate(_("%(count)s queued"), {count: counts.queued})},
+      {key: "failed", text: interpolate(_("%(count)s failed"), {count: counts.failed}),
+       title: _("Only failed tasks created in the last 7 days are counted")}
+    ].filter(b => counts[b.key] > 0);
+    if (buckets.length === 0) return null;
+
+    return (<span className="task-counts">
+      {buckets.map((b, i) => (
+        <React.Fragment key={b.key}>
+          {i > 0 ? <span className="task-count-separator" aria-hidden="true"> · </span> : ""}
+          <span className={"task-count task-count-" + b.key} title={b.title}>{b.text}</span>
+        </React.Fragment>
+      ))}
+    </span>);
+  }
+
   render() {
     const { refreshing, data, filterTags } = this.state;
     const numTasks = data.tasks.length;
@@ -865,6 +916,8 @@ class ProjectListItem extends React.Component {
                 </a>
               </span>
               : ""}
+
+            {this.renderTaskCounts()}
 
             {this.state.showTaskList && numTasks > 1 ?
               <div className="task-filters">
@@ -985,6 +1038,7 @@ class ProjectListItem extends React.Component {
                 source={`/api/projects/${data.id}/tasks/?ordering=${this.state.sortKey}`}
                 onDelete={this.taskDeleted}
                 onTaskMoved={this.taskMoved}
+                onTaskStatusChanged={this.refreshTaskCounts}
                 hasPermission={this.hasPermission}
                 onTagsChanged={this.tagsChanged}
                 onTagClicked={this.selectTag}

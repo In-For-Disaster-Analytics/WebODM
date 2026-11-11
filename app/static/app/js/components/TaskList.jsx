@@ -16,6 +16,7 @@ class TaskList extends React.Component {
       source: PropTypes.string.isRequired, // URL where to load task list
       onDelete: PropTypes.func,
       onTaskMoved: PropTypes.func,
+      onTaskStatusChanged: PropTypes.func,
       hasPermission: PropTypes.func.isRequired,
       onTagsChanged: PropTypes.func,
       onTagClicked: PropTypes.func
@@ -176,6 +177,7 @@ class TaskList extends React.Component {
       onMove: this.moveTask,
       onDuplicate: this.refresh,
       onEdited: this.taskEdited,
+      onStatusChanged: this.props.onTaskStatusChanged,
       onTagClicked: this.props.onTagClicked,
       hasPermission: this.props.hasPermission,
       history: this.props.history
