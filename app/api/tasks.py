@@ -63,6 +63,7 @@ class TaskSerializer(serializers.ModelSerializer):
     project = serializers.PrimaryKeyRelatedField(queryset=models.Project.objects.all())
     processing_node = serializers.PrimaryKeyRelatedField(queryset=ProcessingNode.objects.all())
     processing_node_name = serializers.SerializerMethodField()
+    submitted_by = serializers.SlugRelatedField(slug_field='username', read_only=True)
     can_rerun_from = serializers.SerializerMethodField()
     statistics = serializers.SerializerMethodField()
     extent = serializers.SerializerMethodField()
@@ -167,6 +168,9 @@ class TaskViewSet(viewsets.ViewSet):
 
         task.pending_action = pending_action
         task.partial = False # Otherwise this will not be processed
+        if pending_action == pending_actions.RESTART:
+            # Whoever restarts a task runs it under their own Tapis identity
+            task.submitted_by = request.user
         task.last_error = None
         task.save()
 
@@ -309,6 +313,7 @@ class TaskViewSet(viewsets.ViewSet):
             raise exceptions.NotFound()
 
         task.partial = False
+        task.submitted_by = request.user
         task.images_count = len(task.scan_images())
 
         if task.images_count < 1:
