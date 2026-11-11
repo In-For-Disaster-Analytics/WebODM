@@ -501,6 +501,7 @@ class TaskTerminalStateLoggingTests(SimpleTestCase):
         owner = SimpleNamespace(username='newuser')
         return SimpleNamespace(
             id='task-1', project_id=40, project=SimpleNamespace(owner=owner),
+            _tapis_token_user=lambda: owner,
             processing_node=SimpleNamespace(hostname='clusterodm'),
             status=getattr(status_codes, status), last_error=last_error, save=MagicMock())
 
