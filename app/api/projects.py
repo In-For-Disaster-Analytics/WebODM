@@ -1,4 +1,9 @@
 import re
+from datetime import timedelta
+from django import forms
+from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from guardian.shortcuts import (
     get_perms,
     get_users_with_perms,
@@ -16,13 +21,15 @@ from django.db import transaction
 from django.contrib.auth.models import User, Group
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.contrib.postgres.aggregates import StringAgg
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Count, Exists, IntegerField, OuterRef, Subquery
+from django.db.models.functions import Coalesce
 
 from app import models
 from .tasks import TaskIDsSerializer
 from .tags import TagsField, parse_tags_input
 from .common import get_and_check_project
 from .permissions import HasRequiredAllocation
+from nodeodm import status_codes
 from django.utils.translation import gettext as _
 
 def normalized_perm_names(perms):
@@ -56,8 +63,69 @@ class ProjectSerializer(serializers.ModelSerializer):
         exclude = ('deleting', )
 
 
+def project_task_state_filters():
+    """
+    Task predicates for the project list activity filters and per-row counts.
+    "failed" is limited to tasks created within PROJECT_LIST_FAILED_WINDOW_DAYS
+    (Task has no failure timestamp, so created_at is the proxy).
+    """
+    window_start = timezone.now() - timedelta(days=settings.PROJECT_LIST_FAILED_WINDOW_DAYS)
+    queued = Q(status=status_codes.QUEUED) | Q(status__isnull=True, partial=False)
+    running = Q(status=status_codes.RUNNING)
+    failed = Q(status=status_codes.FAILED, created_at__gte=window_start)
+    return {'queued': queued, 'running': running, 'failed': failed}
+
+
+def project_has_tasks(predicate=None):
+    """Correlated EXISTS over a project's tasks (no join, safe with search/distinct)"""
+    tasks = models.Task.objects.filter(project=OuterRef('pk'))
+    if predicate is not None:
+        tasks = tasks.filter(predicate)
+    return Exists(tasks)
+
+
+def project_task_count(predicate=None):
+    """Correlated scalar count of a project's tasks (no join, safe with search/distinct)"""
+    tasks = models.Task.objects.filter(project=OuterRef('pk'))
+    if predicate is not None:
+        tasks = tasks.filter(predicate)
+    counts = tasks.order_by().values('project').annotate(c=Count('pk')).values('c')
+    return Coalesce(Subquery(counts, output_field=IntegerField()), 0)
+
+
+class StrictBooleanField(forms.Field):
+    """Accepts true/false/1/0 (case-insensitive); anything else is a validation error (HTTP 400)"""
+    def to_python(self, value):
+        if value in self.empty_values:
+            return None
+        v = str(value).strip().lower()
+        if v in ('true', '1'):
+            return True
+        if v in ('false', '0'):
+            return False
+        raise DjangoValidationError(_("Enter a valid boolean value: true or false."), code='invalid')
+
+
+class StrictBooleanFilter(filters.Filter):
+    field_class = StrictBooleanField
+
+
 class ProjectFilter(filters.FilterSet):
     search = filters.CharFilter(method='filter_search')
+    hide_empty = StrictBooleanFilter(method='filter_hide_empty')
+    has_active_work = StrictBooleanFilter(method='filter_has_active_work')
+
+    def filter_hide_empty(self, qs, name, value):
+        if not value:
+            return qs
+        return qs.annotate(has_tasks=project_has_tasks()).filter(has_tasks=True)
+
+    def filter_has_active_work(self, qs, name, value):
+        if not value:
+            return qs
+        states = project_task_state_filters()
+        active = states['queued'] | states['running'] | states['failed']
+        return qs.annotate(has_active_tasks=project_has_tasks(active)).filter(has_active_tasks=True)
 
     def filter_search(self, qs, name, value):
         value = value.replace(":", "#")
@@ -101,7 +169,23 @@ class ProjectFilter(filters.FilterSet):
 
     class Meta:
         model = models.Project
-        fields = ['search', 'id', 'name', 'description', 'created_at']
+        fields = ['search', 'hide_empty', 'has_active_work', 'id', 'name', 'description', 'created_at']
+
+
+class ProjectListSerializer(ProjectSerializer):
+    """Project list items, which also carry per-state task counts (see ProjectViewSet.get_queryset)"""
+    task_counts = serializers.SerializerMethodField()
+
+    def get_task_counts(self, obj):
+        return {
+            'total': obj.task_count_total,
+            'queued': obj.task_count_queued,
+            'running': obj.task_count_running,
+            'failed': obj.task_count_failed,
+        }
+
+    class Meta(ProjectSerializer.Meta):
+        pass
 
 
 class ProjectsPagination(PageNumberPagination):
@@ -137,6 +221,26 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if self.action in self.allocation_gated_actions:
             permission_classes.append(HasRequiredAllocation())
         return permission_classes
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProjectListSerializer
+        return super().get_serializer_class()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != 'list':
+            return qs
+
+        # Correlated subqueries (not Count() joins) so the counts stay correct
+        # alongside the name-search join + distinct(), at a fixed SQL cost per page.
+        states = project_task_state_filters()
+        return qs.annotate(
+            task_count_total=project_task_count(),
+            task_count_queued=project_task_count(states['queued']),
+            task_count_running=project_task_count(states['running']),
+            task_count_failed=project_task_count(states['failed']),
+        )
 
     # Disable pagination when not requesting any page
     def paginate_queryset(self, queryset):

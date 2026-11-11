@@ -34,6 +34,7 @@ class TaskListItem extends React.Component {
       onDuplicate: PropTypes.func,
       hasPermission: PropTypes.func,
       onEdited: PropTypes.func,
+      onStatusChanged: PropTypes.func, // called when the task status changes
       onTagClicked: PropTypes.func
   }
 
@@ -132,6 +133,8 @@ class TaskListItem extends React.Component {
 
         // Update timer if we switched to running
         if (oldStatus !== this.state.task.status){
+          if (this.props.onStatusChanged) this.props.onStatusChanged(this.state.task);
+
           if (this.state.task.status === statusCodes.RUNNING){
             if (this.console) this.console.clear();
             if (this.basicView) this.basicView.reset();
