@@ -1,0 +1,56 @@
+.task-version-group{
+    .task-version-toggle{
+        padding: 2px 10px 4px 24px;
+        font-size: 90%;
+
+        .version-status-dot{
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 6px;
+            vertical-align: middle;
+
+            &.active{ background: #337ab7; }
+            &.failed{ background: #d9534f; }
+        }
+    }
+
+    .task-version-others{
+        // Opened rows are full TaskListItems and line up with the head item;
+        // only the compact rows carry the indent and the guide line.
+        .task-version-opened{
+            margin-bottom: 6px;
+        }
+
+        .task-version-row{
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+            margin-left: 24px;
+            padding: 3px 10px;
+            border-left: 2px solid rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            font-size: 90%;
+
+            &:hover{ background: rgba(0, 0, 0, 0.04); }
+
+            // name flexes, the other columns have fixed widths so rows line up
+            .version-name{ font-weight: bold; flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .task-version-badge{ flex: 0 0 48px; text-align: center; }
+            .version-status{ flex: 0 0 110px; white-space: nowrap; }
+            .version-date{ flex: 0 0 84px; white-space: nowrap; }
+            .version-status.error{ color: #d9534f; }
+            .version-status.done{ color: #5cb85c; }
+            .version-provenance{ margin-left: auto; }
+
+            @media (max-width: 576px){
+                .version-name{ flex-basis: 100%; }
+                .version-status{ flex-basis: 100px; }
+                .version-date{ flex-basis: 76px; }
+                .version-provenance{ flex-basis: 100%; margin-left: 0; }
+            }
+        }
+    }
+}
