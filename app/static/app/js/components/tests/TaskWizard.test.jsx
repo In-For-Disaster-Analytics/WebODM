@@ -11,7 +11,7 @@ import PRESETS, { preset, customPreset } from '../../tests/mocks/systemPresets';
 // A node that advertises every option the system presets and the catalog use.
 const optionNames = {};
 PRESETS.forEach(p => p.options.forEach(o => optionNames[o.name] = true));
-['skip-orthophoto', 'skip-3dmodel', 'skip-report', 'tiles', '3d-tiles', 'pc-classify', 'dtm', 'dsm'].forEach(n => optionNames[n] = true);
+['skip-orthophoto', 'skip-3dmodel', 'skip-report', 'tiles', '3d-tiles', 'pc-classify', 'dtm', 'dsm', 'camera-lens', 'cog'].forEach(n => optionNames[n] = true);
 const baseNodeOptions = Object.keys(optionNames).map(name => ({ name, type: 'string', value: '' }));
 const tapisOptions = [
   { name: 'tapis-queue', type: 'enum', value: 'vm-small', domain: ['vm-small', 'normal', 'development'],
@@ -78,7 +78,7 @@ describe('<TaskWizard />', () => {
       expect(wrapper.state('ready')).toBe(true);
       expect(wrapper.state('selected')).toEqual(['orthophoto', 'dsm', 'dtm', 'point-cloud', 'model-3d', 'report']);
       expect(wrapper.state('choices')['pc-quality']).toBe('low');
-      expect(wrapper.state('base').length).toBe(11);
+      expect(wrapper.state('base').length).toBe(7);
       expect(wrapper.state('base')).toContainEqual({ name: 'pc-filter', value: 5 });
       expect(wrapper.state('baseRemovals')).toEqual([]);
       expect(wrapper.state('extras')).toEqual([]); // the pipeline settings are the base, not extras
@@ -160,6 +160,43 @@ describe('<TaskWizard />', () => {
 
       wrapper.instance().handleToggleOutput('report', false);
       expect(formProps(wrapper).optionsOverride.map(o => o.name)).toContain('skip-report');
+    });
+
+    it('a new task starts with cloud-optimised GeoTIFFs on and the site\'s own setup answers', () => {
+      const { wrapper } = mountWizard({ node: localNode });
+      expect(wrapper.state('choices')).toMatchObject({ cog: 'cog', 'feature-quality': 'high', crop: '3', 'auto-boundary': 'on' });
+      expect(formProps(wrapper).optionsOverride).toContainEqual({ name: 'cog', value: true });
+      expect(names(wrapper.state('base'))).not.toEqual(expect.arrayContaining(['crop', 'feature-quality', 'min-num-features', 'auto-boundary']));
+    });
+
+    it('starting from a preset keeps cog on for a new task', () => {
+      const { wrapper } = mountWizard({ node: localNode });
+      wrapper.instance().handlePresetStart(preset('Fast Orthophoto'));
+      expect(wrapper.state('choices').cog).toBe('cog');
+    });
+
+    it('a new task on a node without cog does not list cog as "not offered", and does not send it', () => {
+      const bare = Object.assign({}, localNode, { options: localNode.options.filter(o => ['cog', 'camera-lens'].indexOf(o.name) === -1) });
+      const { wrapper } = mountWizard({ node: bare });
+      expect(names(formProps(wrapper).optionsOverride)).not.toContain('cog');
+      wrapper.setState({ step: 'review' });
+      wrapper.update();
+      expect(wrapper.find('.review-unsupported').exists()).toBe(false);
+    });
+
+    it('a node that offers cog gets it on a new task, and a preset does not turn it on in an edit', () => {
+      const { wrapper } = mountWizard({ node: localNode });
+      expect(names(formProps(wrapper).optionsOverride)).toContain('cog');
+    });
+
+    it('the Options step offers the advanced editor and the options that will be sent', () => {
+      const { wrapper } = mountWizard({ node: localNode });
+      wrapper.setState({ step: 'options' });
+      wrapper.update();
+      const step = wrapper.find(OutputOptionsStep);
+      expect(step.prop('onAdvanced')).toBe(wrapper.instance().handleAdjustOptions);
+      expect(step.prop('options')).toEqual(wrapper.instance().composed().options);
+      expect(step.prop('availableOptions')).toEqual(localNode.options);
     });
 
     it('hands what the form gets to getTaskInfo through optionsOverride', () => {
@@ -560,6 +597,27 @@ describe('<TaskWizard />', () => {
       expect(composed).toContainEqual({ name: 'dsm', value: true });
       ['split', 'pc-filter', 'use-3dmesh', 'rerun-from'].forEach(n => expect(names(composed)).not.toContain(n));
       expect(formProps(wrapper).optionsOverride).toEqual(composed);
+    });
+
+    it('an edit does not gain cog, and the setup answers it writes are not reported as changes', () => {
+      const { wrapper } = mountEdit();
+      expect(wrapper.state('choices').cog).toBe('standard');
+      expect(names(wrapper.instance().composed().options)).not.toContain('cog');
+      const changed = names(wrapper.instance().changes().changed);
+      ['camera-lens', 'feature-quality', 'crop', 'auto-boundary', 'cog'].forEach(n => expect(changed).not.toContain(n));
+    });
+
+    it('an old task saved without any setup option has no changes and gets no restart advice until something is edited', () => {
+      const { wrapper } = mountEdit({ task: makeTask({ options: [{ name: 'dsm', value: true }, { name: 'pc-classify', value: true }, { name: 'dtm', value: true }, { name: 'skip-3dmodel', value: true }] }) });
+      expect(wrapper.instance().changes()).toEqual({ changed: [], removedOutputs: [] });
+      wrapper.instance().handleChoice('feature-quality', 'ultra');
+      expect(names(wrapper.instance().changes().changed)).toEqual(['feature-quality']);
+    });
+
+    it('starting from a preset in an edit does not switch cog on', () => {
+      const { wrapper } = mountEdit();
+      wrapper.instance().handlePresetStart(preset('Fast Orthophoto'));
+      expect(wrapper.state('choices').cog).toBe('standard');
     });
 
     it('the name, tags and node fields come from the form (task prop), still on step 1', () => {

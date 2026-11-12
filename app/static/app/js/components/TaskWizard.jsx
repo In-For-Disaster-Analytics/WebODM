@@ -155,7 +155,7 @@ class TaskWizard extends React.Component {
     if (this.isEdit()) return Object.assign({}, derived.state, { choices: Object.assign(Composer.defaultChoices(), derived.state.choices) });
 
     const state = Object.assign({}, derived.state, {
-      choices: Object.assign(Composer.defaultChoices(), derived.state.choices),
+      choices: Composer.newTaskChoices(Object.assign(Composer.defaultChoices(), derived.state.choices)),
       extras: this.withoutBase(derived.state.extras, this.pipelineBase(derived))
     });
     return this.applyLastOutputs(state);
@@ -212,8 +212,10 @@ class TaskWizard extends React.Component {
   }
 
   composed(){
-    const { base, baseRemovals, selected, choices, imagery, extras } = this.state;
-    return Composer.compose({ base, baseRemovals, selected, choices, imagery, extras, availableOptions: this.availableOptions() });
+    const { base, baseRemovals, selected, imagery, extras } = this.state;
+    const availableOptions = this.availableOptions();
+    const choices = this.isEdit() ? this.state.choices : Composer.withNodeSupport(this.state.choices, availableOptions);
+    return Composer.compose({ base, baseRemovals, selected, choices, imagery, extras, availableOptions });
   }
 
   // ---- Form integration ------------------------------------------------------
@@ -315,9 +317,10 @@ class TaskWizard extends React.Component {
   // "Start from a preset…": inspect the preset's options into the checklist and choices.
   handlePresetStart = preset => {
     const state = Composer.inspect(preset.options);
+    const choices = Object.assign(Composer.defaultChoices(), state.choices);
     this.setState({
       selected: Composer.closeRequires(state.selected),
-      choices: Object.assign(Composer.defaultChoices(), state.choices),
+      choices: this.isEdit() ? choices : Composer.newTaskChoices(choices),
       imagery: state.imagery,
       extras: this.withoutBase(state.extras, this.state.base),
       baseRemovals: [],
@@ -594,7 +597,10 @@ class TaskWizard extends React.Component {
         selected={this.state.selected}
         choices={this.state.choices}
         factor={factor}
+        availableOptions={this.availableOptions()}
+        options={this.composed().options}
         onChoice={this.handleChoice}
+        onAdvanced={this.handleAdjustOptions}
       />
     );
   }

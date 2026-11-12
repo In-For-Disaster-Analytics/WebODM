@@ -18,8 +18,13 @@ const PRESETS = [
   ] }
 ].map((p, i) => Object.assign({ id: i + 1, system: true }, p));
 
-// The pipeline settings the wizard keeps outside its control on Lonestar6 (Default minus outputs; pc-filter stays).
-export const DEFAULT_PIPELINE_NAMES = ['auto-boundary', 'feature-quality', 'min-num-features', 'pc-filter', 'crop', 'split', 'split-overlap', 'sm-cluster', 'sm-no-align', 'max-concurrency', 'merge'];
+// The pipeline settings the wizard keeps outside its control on Lonestar6 (Default minus outputs and
+// setup questions; pc-filter stays). auto-boundary, feature-quality, min-num-features and crop are
+// setup questions now, so the wizard shows them instead of hiding them in the base.
+export const DEFAULT_PIPELINE_NAMES = ['pc-filter', 'split', 'split-overlap', 'sm-cluster', 'sm-no-align', 'max-concurrency', 'merge'];
+
+// The options the setup questions write (TaskOutputs SETUP).
+export const SETUP_NAMES = ['camera-lens', 'feature-quality', 'min-num-features', 'crop', 'auto-boundary', 'cog'];
 
 export const preset = name => PRESETS.find(p => p.name === name);
 export const customPreset = { id: -1, name: '(Custom)', options: [], system: true };

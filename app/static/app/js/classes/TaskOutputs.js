@@ -24,7 +24,14 @@ import { _ } from './gettext';
 //   nodeOption the processing node must advertise this option for the output to be offered
 //   stage      first pipeline stage the output needs
 //
-// Values come from the system presets in app/boot.py or from ODM defaults.
+// Setup questions (SETUP) are not outputs: they describe the survey (camera, site, delivery)
+// and apply to every run whatever is ticked. A group is {id, icon, title(), help(), choices}
+// and its choices have the output-choice shape above, plus:
+//   newTaskDefault  value key a NEW task starts on when the Default preset does not set the
+//                   choice's options (an edit always starts from the task's saved options)
+//
+// Values come from the system presets in app/boot.py or from ODM defaults. Help texts follow
+// the option descriptions in ODX opendm/config.py.
 
 const RESOLUTION_VALUES = (name) => [
   { value: '5', label: () => _("Standard (5 cm/px)"), recommended: true,
@@ -204,6 +211,119 @@ const IMAGERY = {
   ]
 };
 
+// Questions about the survey. Answers write ODM options; the wording is the user's, not ODM's.
+const SETUP = [
+  {
+    id: 'setup-camera',
+    icon: 'fa fa-camera',
+    title: () => _("What camera took the photos?"),
+    help: () => _("ODM normally reads the lens type from the image metadata."),
+    choices: [
+      {
+        id: 'camera-lens',
+        optionName: 'camera-lens',
+        nodeOption: 'camera-lens',
+        absent: 'auto',
+        title: () => _("Lens type"),
+        help: () => _("Setting it by hand can improve the geometric undistortion for unusual lenses."),
+        values: [
+          { value: 'auto', label: () => _("Detect from the images"), recommended: true, help: () => _("A standard drone or camera.") },
+          { value: 'fisheye', label: () => _("Fisheye"), help: () => _("A wide-angle or fisheye lens.") },
+          { value: 'spherical', label: () => _("360° camera"), help: () => _("Spherical or equirectangular images.") }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'setup-alignment',
+    icon: 'fa fa-project-diagram',
+    title: () => _("How hard should ODM work to align the photos?"),
+    help: () => _("Alignment finds matching features between photos. If a run fails to align, or leaves holes, raise these and run again."),
+    choices: [
+      {
+        id: 'feature-quality',
+        optionName: 'feature-quality',
+        nodeOption: 'feature-quality',
+        absent: 'high',
+        title: () => _("Feature quality"),
+        help: () => _("Higher quality generates better features, but requires more memory and takes longer."),
+        values: [
+          { value: 'medium', label: () => _("Medium"), help: () => _("Faster, with less memory.") },
+          { value: 'high', label: () => _("High"), recommended: true, help: () => _("ODM's own default.") },
+          { value: 'ultra', label: () => _("Ultra"), help: () => _("Slowest, and needs the most memory.") }
+        ]
+      },
+      {
+        id: 'min-num-features',
+        optionName: 'min-num-features',
+        nodeOption: 'min-num-features',
+        absent: '10000',
+        title: () => _("Features per photo"),
+        help: () => _("More features can find more matches, which may reconstruct areas with little overlap or too few features. They also slow processing down."),
+        values: [
+          { value: '10000', label: () => _("Standard (10,000)"), recommended: true, help: () => _("ODM's own default.") },
+          { value: '20000', label: () => _("More (20,000)"), help: () => _("Try this when areas fail to align. A longer run.") }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'setup-edges',
+    icon: 'fa fa-crop-alt',
+    title: () => _("What should happen at the edges of the survey?"),
+    help: () => _("The edges are usually covered by few photos, so they are the least accurate part."),
+    choices: [
+      {
+        id: 'crop',
+        optionName: 'crop',
+        nodeOption: 'crop',
+        absent: '3',
+        title: () => _("Trim the edges"),
+        help: () => _("Crops the outputs with a smooth buffer inside the survey boundary."),
+        values: [
+          { value: '3', label: () => _("Trim 3 m"), recommended: true, help: () => _("ODM's own default.") },
+          { value: '0', label: () => _("Keep everything"), help: () => _("No cropping. Ragged edges stay.") }
+        ]
+      },
+      {
+        id: 'auto-boundary',
+        optionName: 'auto-boundary',
+        nodeOption: 'auto-boundary',
+        absent: 'off',
+        title: () => _("Limit the area to where the photos were taken"),
+        help: () => _("Uses the camera positions to leave out far-away background such as sky or distant landscape."),
+        values: [
+          { value: 'on', label: () => _("Yes"), recommended: true, help: () => _("Removes far-away artifacts."),
+            options: [{ name: 'auto-boundary', value: true }] },
+          { value: 'off', label: () => _("No"), help: () => _("Reconstruct everything the photos show."), options: [] }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'setup-delivery',
+    icon: 'fa fa-file-export',
+    title: () => _("How will you use the files?"),
+    help: () => _("The map and the elevation models can be delivered as plain or cloud-optimised GeoTIFFs."),
+    choices: [
+      {
+        id: 'cog',
+        optionName: 'cog',
+        nodeOption: 'cog',
+        absent: 'standard',
+        newTaskDefault: 'cog',
+        title: () => _("GeoTIFF format"),
+        help: () => _("Cloud-optimised GeoTIFFs open quickly in web viewers and GIS tools, and work like normal GeoTIFFs everywhere else."),
+        values: [
+          { value: 'cog', label: () => _("Cloud-optimised GeoTIFF"), recommended: true, help: () => _("Best for the web and for sharing."),
+            options: [{ name: 'cog', value: true }] },
+          { value: 'standard', label: () => _("Plain GeoTIFF"), help: () => _("ODM's own default."), options: [] }
+        ]
+      }
+    ]
+  }
+];
+
 // Options ODM forces onto each other after parsing (opendm/config.py).
 const COUPLING = [
   { when: { name: 'fast-orthophoto', value: true }, forces: { name: 'skip-3dmodel', value: true } },
@@ -211,7 +331,7 @@ const COUPLING = [
   { when: { name: 'use-3dmesh', value: true }, forces: { name: 'skip-3dmodel', value: false } }
 ];
 
-const TaskOutputs = { OUTPUTS, IMAGERY, COUPLING };
+const TaskOutputs = { OUTPUTS, SETUP, IMAGERY, COUPLING };
 
-export { OUTPUTS, IMAGERY, COUPLING };
+export { OUTPUTS, SETUP, IMAGERY, COUPLING };
 export default TaskOutputs;

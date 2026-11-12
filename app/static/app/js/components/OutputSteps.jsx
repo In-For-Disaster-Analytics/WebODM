@@ -1,7 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
-import { OUTPUTS, IMAGERY } from '../classes/TaskOutputs';
-import { CUSTOM, isOutputAvailable, isImageryAvailable, visibleChoices } from '../classes/TaskOptionsComposer';
+import { OUTPUTS, SETUP, IMAGERY } from '../classes/TaskOutputs';
+import { CUSTOM, isOutputAvailable, isImageryAvailable, isChoiceAvailable, visibleChoices } from '../classes/TaskOptionsComposer';
 import { _, interpolate } from '../classes/gettext';
 
 const outputTitle = id => {
@@ -109,21 +109,34 @@ class OutputSelectStep extends React.Component {
   }
 }
 
-// Step 2: one card per ticked output that has choices, with radio groups, help, a
-// "Recommended" badge, and the running run-time factor.
+// Step 2: one card per ticked output that has choices, then one card per setup question
+// (camera, alignment, edges, delivery), with radio groups, help, a "Recommended" badge, the
+// running run-time factor, the options that will be sent, and a way into the full editor.
 class OutputOptionsStep extends React.Component {
   static defaultProps = {
     selected: [],
     choices: {},
-    factor: 1
+    factor: 1,
+    availableOptions: null,
+    options: []
   };
 
   static propTypes = {
     selected: PropTypes.array,
     choices: PropTypes.object,         // {choiceId: valueKey}
     factor: PropTypes.number,          // run-time factor of the current choices
-    onChoice: PropTypes.func.isRequired // (choiceId, valueKey) => void
+    availableOptions: PropTypes.array, // processing node options (null: everything is offered)
+    options: PropTypes.array,          // [{name, value}] the composed list that will be sent
+    onChoice: PropTypes.func.isRequired, // (choiceId, valueKey) => void
+    onAdvanced: PropTypes.func         // opens the advanced option editor
   };
+
+  constructor(props){
+    super(props);
+    this.state = { showOptions: false };
+  }
+
+  toggleOptions = () => this.setState({ showOptions: !this.state.showOptions });
 
   handleChoice = (choiceId, value) => () => this.props.onChoice(choiceId, value);
 
@@ -151,15 +164,43 @@ class OutputOptionsStep extends React.Component {
     );
   }
 
+  renderSetupGroup(group, choices){
+    return (
+      <div key={group.id} className="output-card setup-card theme-border-highlight-8" data-setup-id={group.id}>
+        <div className="output-card-title"><i className={group.icon}></i> {group.title()}</div>
+        <p className="setup-help text-muted">{group.help()}</p>
+        {choices.map(choice => this.renderChoice(choice))}
+      </div>
+    );
+  }
+
+  renderOptionsList(){
+    const { options } = this.props;
+    return (
+      <div className="resulting-options">
+        <a href="javascript:void(0);" className="toggle-resulting-options" onClick={this.toggleOptions}>
+          <i className={"fa fa-" + (this.state.showOptions ? "chevron-down" : "chevron-right")}></i> {interpolate(_("Options that will be sent (%(count)s)"), { count: options.length })}
+        </a>
+        {this.state.showOptions ?
+          <ul className="list-unstyled resulting-options-list text-muted">
+            {options.map(o => <li key={o.name}><code>{o.name}</code> = {String(o.value)}</li>)}
+          </ul> : ""}
+      </div>
+    );
+  }
+
   render(){
     const cards = OUTPUTS
       .filter(output => this.props.selected.indexOf(output.id) !== -1)
       .map(output => ({ output, choices: visibleChoices(output) }))
       .filter(card => card.choices.length > 0);
+    const setup = SETUP
+      .map(group => ({ group, choices: group.choices.filter(choice => isChoiceAvailable(choice, this.props.availableOptions)) }))
+      .filter(card => card.choices.length > 0);
 
     return (
       <div className="output-options-step">
-        {cards.length === 0 ? <p className="text-muted">{_("The outputs you chose have no further choices.")}</p> : ""}
+        {cards.length === 0 && setup.length === 0 ? <p className="text-muted">{_("The outputs you chose have no further choices.")}</p> : ""}
         {cards.map(card => (
           <div key={card.output.id} className="output-card theme-border-highlight-8" data-output-id={card.output.id}>
             <div className="output-card-title"><i className={card.output.icon}></i> {card.output.title()}</div>
@@ -168,9 +209,18 @@ class OutputOptionsStep extends React.Component {
             {card.choices.map(choice => this.renderChoice(choice))}
           </div>
         ))}
+        {setup.map(card => this.renderSetupGroup(card.group, card.choices))}
         <p className="runtime-factor text-muted">
           <i className="fa fa-clock"></i> {interpolate(_("Estimated run-time factor: %(factor)s x (an initial estimate, not yet measured)"), { factor: this.props.factor.toFixed(1) })}
         </p>
+        {this.renderOptionsList()}
+        {this.props.onAdvanced ?
+          <p className="advanced-options-link">
+            <button type="button" className="btn btn-sm btn-default adjust-options" onClick={this.props.onAdvanced}>
+              <i className="fa fa-sliders-h"></i> {_("Advanced options")}
+            </button>
+            {" "}<span className="text-muted">{_("Every other ODM option, for experienced users.")}</span>
+          </p> : ""}
       </div>
     );
   }
