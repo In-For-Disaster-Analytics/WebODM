@@ -1,7 +1,7 @@
 import React from 'react';
 import { shallow } from 'enzyme';
 import { OutputSelectStep, OutputOptionsStep } from '../OutputSteps';
-import { OUTPUTS } from '../../classes/TaskOutputs';
+import { OUTPUTS, SETUP } from '../../classes/TaskOutputs';
 
 const everything = ['tiles', '3d-tiles', 'radiometric-calibration'].map(name => ({ name }));
 
@@ -83,7 +83,7 @@ describe('<OutputOptionsStep />', () => {
 
   it('shows one card per selected output that has choices, in catalog order', () => {
     const wrapper = render({ selected: ['orthophoto', 'dsm', 'dtm', 'point-cloud', 'report'] });
-    expect(wrapper.find('.output-card').map(c => c.prop('data-output-id'))).toEqual(['orthophoto', 'dsm', 'point-cloud']);
+    expect(wrapper.find('.output-card:not(.setup-card)').map(c => c.prop('data-output-id'))).toEqual(['orthophoto', 'dsm', 'point-cloud']);
   });
 
   it('shows radios with a Recommended badge on the recommended value only', () => {
@@ -105,7 +105,7 @@ describe('<OutputOptionsStep />', () => {
     const fastOn = render({ selected: ['orthophoto'] });
     expect(fastOn.find('[data-choice-id="fast-mode"]').exists()).toBe(false);
     expect(fastOn.find('.fast-mode-on').text()).toMatch(/Fast mode: on/);
-    expect(fastOn.find('.recommended').length).toBe(1); // only the resolution badge: nothing badges Fast mode
+    expect(fastOn.find('.output-card:not(.setup-card) .recommended').length).toBe(1); // only the resolution badge: nothing badges Fast mode
     expect(render({ selected: ['orthophoto', 'point-cloud'] }).find('.fast-mode-on').exists()).toBe(false);
   });
 
@@ -116,6 +116,61 @@ describe('<OutputOptionsStep />', () => {
 
   it('shows the running run-time factor and a note when there is nothing to choose', () => {
     expect(render({ factor: 1.5 }).find('.runtime-factor').text()).toMatch(/1\.5 x/);
-    expect(render({ selected: ['report'] }).text()).toMatch(/no further choices/);
+    expect(render({ selected: ['report'], availableOptions: [{ name: 'report' }] }).text()).toMatch(/no further choices/);
+  });
+
+  describe('setup questions', () => {
+    it('shows one card per question group after the output cards, even with only the report ticked', () => {
+      const wrapper = render({ selected: ['report'] });
+      expect(wrapper.find('.setup-card').map(c => c.prop('data-setup-id'))).toEqual(SETUP.map(g => g.id));
+      expect(wrapper.text()).not.toMatch(/no further choices/);
+    });
+
+    it('asks in the user\'s words, shows the preselected answer and badges the recommended one', () => {
+      const wrapper = render({ choices: Object.assign({}, choices, { cog: 'cog', 'auto-boundary': 'on' }) });
+      expect(wrapper.find('[data-setup-id="setup-camera"] .output-card-title').text()).toMatch(/What camera took the photos\?/);
+      const cog = wrapper.find('[data-choice-id="cog"]');
+      expect(cog.find('input').map(i => i.prop('checked'))).toEqual([true, false]);
+      expect(cog.find('.radio').at(0).find('.recommended').exists()).toBe(true);
+      expect(cog.find('.radio').at(1).find('.recommended').exists()).toBe(false);
+    });
+
+    it('reports an answer', () => {
+      const onChoice = jest.fn();
+      const wrapper = render({ onChoice });
+      wrapper.find('[data-choice-id="min-num-features"] input').at(1).simulate('change');
+      expect(onChoice).toHaveBeenCalledWith('min-num-features', '20000');
+    });
+
+    it('hides a question the processing node does not offer, and its whole card when none are offered', () => {
+      const wrapper = render({ availableOptions: [{ name: 'camera-lens' }, { name: 'feature-quality' }] });
+      expect(wrapper.find('[data-choice-id="camera-lens"]').exists()).toBe(true);
+      expect(wrapper.find('[data-choice-id="min-num-features"]').exists()).toBe(false);
+      expect(wrapper.find('[data-setup-id="setup-alignment"]').exists()).toBe(true);
+      expect(wrapper.find('[data-setup-id="setup-delivery"]').exists()).toBe(false);
+    });
+
+    it('keeps a custom answer visible and says so', () => {
+      const wrapper = render({ choices: Object.assign({}, choices, { 'min-num-features': 'custom' }) });
+      expect(wrapper.find('[data-choice-id="min-num-features"]').text()).toMatch(/Custom \(kept\)/);
+    });
+  });
+
+  describe('options that will be sent and the advanced editor', () => {
+    it('lists the composed options once opened, with their count', () => {
+      const options = [{ name: 'cog', value: true }, { name: 'crop', value: '3' }];
+      const wrapper = render({ options });
+      expect(wrapper.find('.toggle-resulting-options').text()).toMatch(/\(2\)/);
+      expect(wrapper.find('.resulting-options-list').exists()).toBe(false);
+      wrapper.find('.toggle-resulting-options').simulate('click');
+      expect(wrapper.find('.resulting-options-list li').map(li => li.text())).toEqual(['cog = true', 'crop = 3']);
+    });
+
+    it('opens the advanced editor from the Options step, and omits the button without a handler', () => {
+      expect(render().find('.adjust-options').exists()).toBe(false);
+      const onAdvanced = jest.fn();
+      render({ onAdvanced }).find('.adjust-options').simulate('click');
+      expect(onAdvanced).toHaveBeenCalledTimes(1);
+    });
   });
 });

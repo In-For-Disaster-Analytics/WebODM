@@ -1,6 +1,6 @@
 import Composer, { normalise, inspect, compose, tick, closeRequires, deriveBase, sameOptions, visibleChoices, CUSTOM } from '../TaskOptionsComposer';
-import { OUTPUTS } from '../TaskOutputs';
-import PRESETS, { preset, DEFAULT_PIPELINE_NAMES, customPreset } from '../../tests/mocks/systemPresets';
+import { OUTPUTS, SETUP } from '../TaskOutputs';
+import PRESETS, { preset, DEFAULT_PIPELINE_NAMES, SETUP_NAMES, customPreset } from '../../tests/mocks/systemPresets';
 
 const presets = () => [customPreset].concat(PRESETS);
 const names = list => list.map(o => o.name).sort();
@@ -40,15 +40,16 @@ describe('normalise', () => {
 });
 
 describe('inspect on the system presets', () => {
-  it('Default: orthophoto, DSM, DTM, point cloud (low), 3D model (Standard), report; extras are the eleven pipeline settings (pc-filter included)', () => {
+  it('Default: orthophoto, DSM, DTM, point cloud (low), 3D model (Standard), report; extras are the seven pipeline settings (pc-filter included)', () => {
     const state = inspect(preset('Default').options);
     expect(state.selected).toEqual(['orthophoto', 'dsm', 'dtm', 'point-cloud', 'model-3d', 'report']);
     expect(state.choices).toEqual({
-      'orthophoto-resolution': '5', 'dsm-resolution': '5', 'pc-quality': 'low', 'mesh-detail': 'standard'
+      'orthophoto-resolution': '5', 'dsm-resolution': '5', 'pc-quality': 'low', 'mesh-detail': 'standard',
+      'camera-lens': 'auto', 'feature-quality': 'high', 'min-num-features': '10000', crop: '3', 'auto-boundary': 'on', cog: 'standard'
     });
     expect(state.imagery).toBe('');
     expect(names(state.extras)).toEqual(DEFAULT_PIPELINE_NAMES.slice().sort());
-    expect(state.extras.length).toBe(11);
+    expect(state.extras.length).toBe(7);
     expect(state.extras).toContainEqual({ name: 'pc-filter', value: 5 });
   });
 
@@ -56,7 +57,8 @@ describe('inspect on the system presets', () => {
     const state = inspect(preset('Fast Orthophoto').options);
     expect(state.selected).toEqual(['orthophoto', 'report']);
     expect(state.choices['fast-mode']).toBeUndefined();
-    expect(names(state.extras)).toEqual(['auto-boundary']);
+    expect(state.choices['auto-boundary']).toBe('on');
+    expect(state.extras).toEqual([]);
   });
 
   it('3D Model: Detailed, point cloud high, use-3dmesh kept in extras', () => {
@@ -65,18 +67,22 @@ describe('inspect on the system presets', () => {
     expect(state.selected).toContain('point-cloud');
     expect(state.choices['mesh-detail']).toBe('detailed');
     expect(state.choices['pc-quality']).toBe('high');
-    expect(names(state.extras)).toEqual(['auto-boundary', 'use-3dmesh']);
+    expect(state.choices['auto-boundary']).toBe('on');
+    expect(names(state.extras)).toEqual(['use-3dmesh']);
   });
 
   it('Multispectral: imagery yes', () => {
     const state = inspect(preset('Multispectral').options);
     expect(state.imagery).toBe('camera');
-    expect(names(state.extras)).toEqual(['auto-boundary']);
+    expect(state.extras).toEqual([]);
   });
 
   it('Forest, Field and High Resolution keep their foreign settings as extras', () => {
     const forest = inspect(preset('Forest').options);
-    expect(byName(forest.extras)).toEqual({ 'auto-boundary': true, 'min-num-features': '18000', 'use-3dmesh': true, 'feature-quality': 'medium' });
+    expect(byName(forest.extras)).toEqual({ 'min-num-features': '18000', 'use-3dmesh': true }); // 18000 is outside the curated list
+    expect(forest.choices['min-num-features']).toBe(CUSTOM);
+    expect(forest.choices['feature-quality']).toBe('medium');
+    expect(forest.choices['auto-boundary']).toBe('on');
     expect(forest.selected).toEqual(expect.arrayContaining(['point-cloud', 'model-3d']));
     expect(forest.choices['pc-quality']).toBe('medium'); // ODM's default: absent means medium
 
@@ -89,7 +95,8 @@ describe('inspect on the system presets', () => {
     expect(high.selected).toContain('dsm');
     expect(high.choices['orthophoto-resolution']).toBe('1');
     expect(high.choices['dsm-resolution']).toBe('1');
-    expect(names(high.extras)).toEqual(['auto-boundary']);
+    expect(high.extras).toEqual([]);
+    expect(high.choices['auto-boundary']).toBe('on');
     expect(high.selected).toContain('point-cloud'); // Fast mode is off
   });
 
@@ -127,7 +134,8 @@ describe('compose', () => {
     const { options } = compose(state(['orthophoto', 'dsm', 'point-cloud'], { base, imagery: 'camera', extras: [{ name: 'crop', value: 3 }] }));
     expect(options.map(o => o.name)).toEqual([
       'split', 'orthophoto-resolution', 'dsm', 'dem-resolution', 'pc-quality',
-      'skip-3dmodel', 'skip-report', 'radiometric-calibration', 'crop'
+      'camera-lens', 'feature-quality', 'min-num-features', 'crop', 'auto-boundary', 'cog',
+      'skip-3dmodel', 'skip-report', 'radiometric-calibration'
     ]);
     expect(compose(state(['orthophoto', 'dsm', 'point-cloud'], { base, imagery: 'camera', extras: [{ name: 'crop', value: 3 }] })).options).toEqual(options);
   });
@@ -144,22 +152,26 @@ describe('compose', () => {
   it('lists options the node does not advertise as unsupported and drops them', () => {
     const result = compose(state(['orthophoto', 'point-cloud', 'tiles'], {
       base: [{ name: 'split', value: 75 }],
-      availableOptions: [{ name: 'orthophoto-resolution' }, { name: 'pc-quality' }, { name: 'skip-3dmodel' }, { name: 'skip-report' }]
+      availableOptions: [{ name: 'orthophoto-resolution' }, { name: 'pc-quality' }, { name: 'skip-3dmodel' }, { name: 'skip-report' }].concat(SETUP_NAMES.map(name => ({ name })))
     }));
-    expect(names(result.options)).toEqual(['orthophoto-resolution', 'pc-quality', 'skip-3dmodel', 'skip-report']);
+    expect(names(result.options)).toEqual(['orthophoto-resolution', 'pc-quality', 'skip-3dmodel', 'skip-report'].concat(SETUP_NAMES).sort());
     expect(names(result.unsupported)).toEqual(['split', 'tiles']);
   });
 
   it('has an empty base in edit-style use: only deltas and extras come out', () => {
     const { options } = compose({ selected: ['dsm'], choices: Composer.defaultChoices(), extras: [{ name: 'min-num-features', value: 1 }] });
-    expect(options.map(o => o.name)).toEqual(['dsm', 'dem-resolution', 'skip-orthophoto', 'fast-orthophoto', 'skip-3dmodel', 'skip-report', 'min-num-features']);
+    expect(options.map(o => o.name)).toEqual([
+      'dsm', 'dem-resolution', 'camera-lens', 'feature-quality', 'min-num-features', 'crop', 'auto-boundary', 'cog',
+      'skip-orthophoto', 'fast-orthophoto', 'skip-3dmodel', 'skip-report'
+    ]);
+    expect(options.find(o => o.name === 'min-num-features').value).toBe(1); // the extra wins over the setup answer
   });
 
   it('writes nothing for unticked default-off outputs, skip flags for unticked default-on ones', () => {
     const { options } = compose(state(['orthophoto', 'point-cloud', 'model-3d', 'report']));
-    expect(names(options)).toEqual(['orthophoto-resolution', 'pc-quality', 'mesh-octree-depth', 'mesh-size'].sort());
+    expect(names(options)).toEqual(['orthophoto-resolution', 'pc-quality', 'mesh-octree-depth', 'mesh-size'].concat(SETUP_NAMES).sort());
     const none = compose(state([]));
-    expect(names(none.options)).toEqual(['fast-orthophoto', 'skip-3dmodel', 'skip-orthophoto', 'skip-report']);
+    expect(names(none.options)).toEqual(['fast-orthophoto', 'skip-3dmodel', 'skip-orthophoto', 'skip-report'].concat(SETUP_NAMES).sort());
   });
 
   it('unticking Point cloud writes fast-orthophoto and skip-3dmodel; ticking it writes neither', () => {
@@ -196,12 +208,12 @@ describe('compose', () => {
 
   it('an extra whose value differs from the base survives into the output and overrides the base', () => {
     const { options } = compose(state(['orthophoto', 'point-cloud'], {
-      base: [{ name: 'merge', value: 'all' }, { name: 'crop', value: 3 }],
+      base: [{ name: 'merge', value: 'all' }, { name: 'split-overlap', value: 50 }],
       extras: [{ name: 'merge', value: 'orthophoto' }, { name: 'sm-no-align', value: true }]
     }));
     expect(options.filter(o => o.name === 'merge')).toEqual([{ name: 'merge', value: 'orthophoto' }]);
     expect(options).toContainEqual({ name: 'sm-no-align', value: true });
-    expect(options).toContainEqual({ name: 'crop', value: 3 });
+    expect(options).toContainEqual({ name: 'split-overlap', value: 50 });
   });
 
   it('leaves base removals out of the base only', () => {
@@ -277,11 +289,93 @@ describe('round trip: normalise(compose(inspect(o))) equals normalise(o) for wiz
   it('for foreign options the difference is exactly the unsupported ones', () => {
     const foreign = preset('Default').options;
     const available = foreign.filter(o => o.name !== 'sm-cluster' && o.name !== 'split').map(o => ({ name: o.name }))
+      .concat([{ name: 'camera-lens' }]) // not in Default: compose writes ODM's own value for it
       .concat(OUTPUTS.reduce((all, o) => all.concat(o.off.map(x => ({ name: x.name }))), []));
     const result = compose(Object.assign({ base: [], availableOptions: available }, inspect(foreign)));
     expect(names(result.unsupported)).toEqual(['sm-cluster', 'split']);
-    const expected = normalise(foreign).filter(o => ['sm-cluster', 'split'].indexOf(o.name) === -1);
+    const expected = normalise(foreign).filter(o => ['sm-cluster', 'split'].indexOf(o.name) === -1).concat([{ name: 'camera-lens', value: 'auto' }]);
     expect(sameOptions(result.options, expected)).toBe(true);
+  });
+});
+
+describe('setup questions', () => {
+  const state = (options) => Object.assign({ base: [], selected: [] }, inspect(options));
+  const out = (options, extra = {}) => byName(compose(Object.assign(state(options), extra)).options);
+
+  it('apply whatever is ticked: even with nothing ticked they are written', () => {
+    const options = byName(compose({ selected: [], choices: Composer.defaultChoices() }).options);
+    expect(options['feature-quality']).toBe('high');
+    expect(options.cog).toBe(true);
+  });
+
+  it('read the saved options back: curated value, ODM default when absent, Custom outside the list', () => {
+    const saved = inspect([
+      { name: 'camera-lens', value: 'fisheye' }, { name: 'feature-quality', value: 'ultra' }, { name: 'min-num-features', value: 8000 },
+      { name: 'crop', value: 0 }, { name: 'auto-boundary', value: true }, { name: 'cog', value: true }
+    ]);
+    expect(saved.choices).toMatchObject({
+      'camera-lens': 'fisheye', 'feature-quality': 'ultra', 'min-num-features': CUSTOM, crop: '0', 'auto-boundary': 'on', cog: 'cog'
+    });
+    expect(byName(saved.extras)).toEqual({ 'min-num-features': 8000 });
+
+    const bare = inspect([]);
+    expect(bare.choices).toMatchObject({
+      'camera-lens': 'auto', 'feature-quality': 'high', 'min-num-features': '10000', crop: '3', 'auto-boundary': 'off', cog: 'standard'
+    });
+  });
+
+  it('write each answer, and a flag answered "no" writes nothing', () => {
+    const options = out([{ name: 'camera-lens', value: 'spherical' }, { name: 'min-num-features', value: '20000' }, { name: 'auto-boundary', value: true }]);
+    expect(options).toMatchObject({ 'camera-lens': 'spherical', 'min-num-features': '20000', 'auto-boundary': true });
+    expect(options.cog).toBeUndefined();
+    expect(out([], { choices: Composer.defaultChoices() })['auto-boundary']).toBe(true);
+    expect(out([], { choices: Object.assign(Composer.defaultChoices(), { 'auto-boundary': 'off', cog: 'standard' }) })).not.toHaveProperty('auto-boundary');
+  });
+
+  it('a saved task round-trips: no setup option appears or disappears', () => {
+    const saved = [
+      { name: 'feature-quality', value: 'medium' }, { name: 'crop', value: 0 }, { name: 'min-num-features', value: 8000 }, { name: 'cog', value: true }
+    ];
+    const again = compose(Object.assign({ base: [] }, inspect(saved))).options;
+    ['feature-quality', 'crop', 'min-num-features', 'cog'].forEach(name => {
+      expect(again.find(o => o.name === name)).toBeDefined();
+    });
+    expect(sameOptions(again.filter(o => saved.some(s => s.name === o.name)), saved)).toBe(true);
+  });
+
+  it('a new task starts on cloud-optimised GeoTIFFs only where Default leaves ODM\'s own value', () => {
+    const fromDefault = inspect(preset('Default').options).choices;
+    expect(fromDefault.cog).toBe('standard');
+    expect(Composer.newTaskChoices(fromDefault).cog).toBe('cog');
+    expect(Composer.newTaskChoices(fromDefault)['feature-quality']).toBe(fromDefault['feature-quality']);
+    expect(Composer.newTaskChoices({ cog: 'cog' }).cog).toBe('cog');
+    expect(Composer.newTaskChoices(fromDefault)).not.toBe(fromDefault);
+  });
+
+  it('ODM\'s own value for a question the node cannot answer is dropped quietly, any other value is reported', () => {
+    const available = ['orthophoto-resolution', 'fast-orthophoto', 'skip-3dmodel', 'skip-report'].map(name => ({ name })); // the unticked outputs' own flags
+    const quiet = compose({ selected: ['orthophoto'], choices: Object.assign(Composer.defaultChoices(), { cog: 'standard', 'feature-quality': 'high', 'camera-lens': 'auto', crop: '3', 'min-num-features': '10000', 'auto-boundary': 'off' }), availableOptions: available });
+    expect(names(quiet.unsupported)).toEqual([]);
+    const loud = compose({ selected: ['orthophoto'], choices: Object.assign(Composer.defaultChoices(), { cog: 'cog', 'feature-quality': 'ultra', 'auto-boundary': 'off', crop: '3', 'camera-lens': 'auto', 'min-num-features': '10000' }), availableOptions: available });
+    expect(names(loud.unsupported)).toEqual(['cog', 'feature-quality']);
+  });
+
+  it('withNodeSupport starts a new task on ODM\'s own value where the node lacks the option, and leaves the rest alone', () => {
+    const choices = Composer.newTaskChoices(inspect(preset('Default').options).choices);
+    const next = Composer.withNodeSupport(choices, [{ name: 'feature-quality' }, { name: 'crop' }]);
+    expect(next.cog).toBe('standard');
+    expect(next['camera-lens']).toBe('auto');
+    expect(next['feature-quality']).toBe(choices['feature-quality']);
+    expect(next.crop).toBe(choices.crop);
+    expect(Composer.withNodeSupport(choices, null)).toEqual(choices);
+    expect(choices.cog).toBe('cog'); // not mutated
+  });
+
+  it('are offered only when the node advertises their option', () => {
+    const lens = SETUP[0].choices[0];
+    expect(Composer.isChoiceAvailable(lens, null)).toBe(true);
+    expect(Composer.isChoiceAvailable(lens, [{ name: 'camera-lens' }])).toBe(true);
+    expect(Composer.isChoiceAvailable(lens, [{ name: 'dsm' }])).toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
-import { OUTPUTS, IMAGERY, COUPLING } from '../TaskOutputs';
+import { OUTPUTS, SETUP, IMAGERY, COUPLING } from '../TaskOutputs';
+import stageFile from '../odmStageMap.json';
 
 const optionNamesOf = output => {
   const names = [];
@@ -87,5 +88,55 @@ describe('TaskOutputs catalog', () => {
   it('only offers tiles, 3D tiles and radiometric calibration when the node advertises them', () => {
     expect(OUTPUTS.filter(o => o.nodeOption).map(o => [o.id, o.nodeOption])).toEqual([['tiles', 'tiles'], ['tiles-3d', '3d-tiles']]);
     expect(IMAGERY.nodeOption).toBe('radiometric-calibration');
+  });
+
+  describe('setup questions', () => {
+    const choices = SETUP.reduce((all, group) => all.concat(group.choices), []);
+    const outputChoiceIds = OUTPUTS.reduce((all, o) => all.concat(o.choices.map(c => c.id)), []);
+
+    it('have unique ids, text for every group, choice and value, one recommended value, and `absent` among the values', () => {
+      expect(new Set(SETUP.map(g => g.id)).size).toBe(SETUP.length);
+      expect(new Set(choices.map(c => c.id)).size).toBe(choices.length);
+      choices.forEach(c => expect(outputChoiceIds).not.toContain(c.id));
+      SETUP.forEach(group => {
+        ['title', 'help'].forEach(k => expect(typeof group[k]()).toBe('string'));
+        expect(typeof group.icon).toBe('string');
+        expect(group.choices.length).toBeGreaterThan(0);
+      });
+      choices.forEach(choice => {
+        expect(typeof choice.title()).toBe('string');
+        expect(typeof choice.help()).toBe('string');
+        choice.values.forEach(v => {
+          expect(typeof v.label()).toBe('string');
+          expect(typeof v.help()).toBe('string');
+        });
+        expect(choice.values.filter(v => v.recommended).length).toBe(1);
+        expect(choice.values.map(v => v.value)).toContain(choice.absent);
+        if (choice.newTaskDefault) expect(choice.values.map(v => v.value)).toContain(choice.newTaskDefault);
+      });
+    });
+
+    it('write only options that have a restart stage, so edit-mode advice can place them', () => {
+      choices.forEach(choice => {
+        choice.values.forEach(v => (v.options || [{ name: choice.optionName }]).forEach(o => {
+          expect(typeof stageFile.stages[o.name]).toBe('string');
+        }));
+      });
+    });
+
+    it('are advertised by the node through the option they set, and do not collide with an output', () => {
+      const managed = OUTPUTS.reduce((all, o) => all.concat(o.managed), []);
+      choices.forEach(choice => {
+        expect(choice.nodeOption).toBe(choice.optionName);
+        expect(managed).not.toContain(choice.optionName);
+      });
+    });
+
+    it('start new tasks on cloud-optimised GeoTIFFs', () => {
+      const cog = choices.find(c => c.id === 'cog');
+      expect(cog.newTaskDefault).toBe('cog');
+      expect(cog.values.find(v => v.value === 'cog').options).toEqual([{ name: 'cog', value: true }]);
+      expect(cog.absent).toBe('standard'); // ODM's own default writes nothing
+    });
   });
 });

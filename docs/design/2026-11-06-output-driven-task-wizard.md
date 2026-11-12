@@ -498,6 +498,39 @@ effective options (present in `log.json` as `engine`/`version`/`options`, not pa
 the assets produced, and `log.json` for failed tasks (NodeODM does not serve `all.zip` for
 them).
 
+### 8. Setup questions — amendment 2026-11-12 (`classes/TaskOutputs.js`, `OutputSteps.jsx`)
+
+Will, 2026-11-12: the wizard should *prompt* for the basic settings people need (feature
+number, cloud-optimised GeoTIFFs and the like), not hide them in the base layer or behind a
+button. Outputs describe what to build; setup questions describe the survey and apply to
+every run whatever is ticked.
+
+- **Catalog.** A new `SETUP` list next to `OUTPUTS`: groups `{id, icon, title(), help(), choices}`
+  whose choices have the output-choice shape plus `nodeOption` and an optional
+  `newTaskDefault`. Wizard `choices` state holds them beside the output choices, so the state
+  shape, `inspect()` and `compose()` are unchanged in kind. A flag answered "no" is a value
+  with `options: []`.
+- **Questions (stacked as cards on the Options step, recommended answer preselected, nothing
+  blocks Next):** camera (`camera-lens`: detect / fisheye / 360°); alignment
+  (`feature-quality`: medium / high / ultra; `min-num-features`: 10,000 / 20,000); edges
+  (`crop`: 3 m / 0; `auto-boundary`: yes / no); delivery (`cog`: cloud-optimised / plain).
+  Help texts follow ODX `opendm/config.py`. Values the wizard does not offer (e.g.
+  `min-num-features` 18000) read back as Custom and stay in extras.
+- **New tasks start with `cog` on.** `newTaskDefault` applies only where the Default preset
+  leaves the choice on ODM's own value; a preset started from in new mode gets the same
+  treatment. An edit starts from the task's saved options and never gains `cog`.
+- **Options moved out of the base.** `auto-boundary`, `feature-quality`, `min-num-features`
+  and `crop` were hidden base options on Lonestar6; they now show as answers (the base shrinks
+  from 11 to 7 settings).
+- **Visibility.** The Options step lists the composed options ("Options that will be sent")
+  and has an "Advanced options" button into the existing dialog; Review keeps its button.
+- **Restart advice.** Unchanged: it works from option names against the generated stage
+  map, which already covers every setup option (a catalog test asserts it).
+- **Deliberately left out:** `rolling-shutter` (needs a readout time; no measured benefit),
+  `sfm-algorithm` (ODM marks `planar` deprecated), `matcher-neighbors` and `gps-accuracy`
+  (no defensible plain-language mapping yet), `pc-filter` (stays in the base, see the
+  2026-11-06 QA decision). All remain in the advanced dialog.
+
 ## Files likely affected
 
 PR 0 (new): `app/models/task_run.py`, `app/migrations/0060_task_run.py`,
@@ -878,6 +911,13 @@ ODM's 4×-per-step statement cited from ODX `opendm/config.py:458`.
   all adopted; should-change adopted except keeping `detect` in the catalog, which was
   removed in favour of composer-owned reverse logic); skeptic "revise" (10 findings, all
   adopted; two-PR split adopted pending user confirmation). Disagreement: none left open.
+- 2026-11-12 — Setup questions are catalog data (`SETUP`), not a second state model: their
+  answers live in the same `choices` map, so `inspect`/`compose`/restart advice need no
+  new concepts. Rejected: a collapsed "Advanced" group (people do not look for what they do
+  not know exists), separate wizard steps per question (six extra steps), and editing the
+  server's Default preset to turn on `cog` (a database change; the catalog default is
+  visible and testable). Dropped from the first cut for lack of a defensible mapping:
+  rolling-shutter, sfm-algorithm, matcher-neighbors, gps-accuracy.
 
 ## User feedback / decisions
 
@@ -901,3 +941,8 @@ ODM's 4×-per-step statement cited from ODX `opendm/config.py:458`.
   forever, no retention setting), PR 1 with factors at 1.0, and the ClusterODX `shapeOnly`
   change that the queue rule needs. Not read as approval to run the calibration jobs on
   BCS26030 or to push/open PRs; those are asked for separately.
+
+- 2026-11-12 — Will: the basic options (feature number etc.) should be prompted by the
+  wizard, stacked as cards on the Options step; preselecting the recommended answer is fine;
+  `cog` should always start on. Implemented as section 8 on branch
+  `feature/wizard-setup-questions` (local, nothing pushed).

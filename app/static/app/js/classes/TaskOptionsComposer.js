@@ -1,10 +1,11 @@
-import { OUTPUTS, IMAGERY, COUPLING } from './TaskOutputs';
+import { OUTPUTS, SETUP, IMAGERY, COUPLING } from './TaskOutputs';
 
 // All reverse-mapping logic for the task wizard. TaskOutputs.js is data only; this module
 // turns a flat ODM option list into wizard state (inspect) and wizard state back into an
 // option list (compose). Pure functions: inputs are never mutated.
 //
-// Wizard state is {selected, choices, imagery, extras}:
+// Wizard state is {selected, choices, imagery, extras}. `choices` also holds the setup
+// questions (TaskOutputs SETUP), which apply whatever is ticked:
 //   selected  [outputId]            ticked outputs
 //   choices   {choiceId: valueKey}  one entry per catalog choice; 'custom' means "the saved
 //                                   value is outside the curated list; it is kept in extras"
@@ -27,6 +28,10 @@ const STRIPPED = /^(tapis-|rerun-from$)/;
 const isObject = o => o !== null && typeof o === 'object';
 const outputById = id => OUTPUTS.find(o => o.id === id);
 
+// Choices that are not tied to an output (the setup questions); they apply to every run.
+const SETUP_CHOICES = SETUP.reduce((list, group) => list.concat(group.choices), []);
+const ALL_CHOICES = OUTPUTS.reduce((list, output) => list.concat(output.choices), SETUP_CHOICES.slice());
+
 // Option names that are flags (default false in ODM): absent means false.
 const FLAG_NAMES = (() => {
   const names = {};
@@ -35,6 +40,7 @@ const FLAG_NAMES = (() => {
     output.on.concat(output.off).forEach(add);
     output.choices.forEach(choice => choice.values.forEach(v => (v.options || []).forEach(add)));
   });
+  SETUP_CHOICES.forEach(choice => choice.values.forEach(v => (v.options || []).forEach(add)));
   COUPLING.forEach(rule => { add(rule.when); add(rule.forces); });
   return names;
 })();
@@ -106,8 +112,34 @@ export function recommendedValue(choice){
 
 export function defaultChoices(){
   const choices = {};
-  OUTPUTS.forEach(output => output.choices.forEach(choice => choices[choice.id] = recommendedValue(choice)));
+  ALL_CHOICES.forEach(choice => choices[choice.id] = recommendedValue(choice));
   return choices;
+}
+
+// A new task starts some setup choices on a value ODM does not use by default (cloud-optimised
+// GeoTIFFs). Applies only where the Default preset left the choice on ODM's own value.
+export function newTaskChoices(choices){
+  const next = Object.assign({}, choices);
+  SETUP_CHOICES.forEach(choice => {
+    if (choice.newTaskDefault && next[choice.id] === choice.absent) next[choice.id] = choice.newTaskDefault;
+  });
+  return next;
+}
+
+// The processing node must advertise the choice's option for the question to be offered.
+export function isChoiceAvailable(choice, availableOptions){
+  if (!choice.nodeOption || !Array.isArray(availableOptions)) return true;
+  return availableOptions.some(o => o && o.name === choice.nodeOption);
+}
+
+// For a NEW task: a setup question the node does not offer cannot be answered, so it starts on
+// ODM's own value rather than on a default the user would see listed as "not offered".
+export function withNodeSupport(choices, availableOptions){
+  const next = Object.assign({}, choices);
+  SETUP_CHOICES.forEach(choice => {
+    if (!isChoiceAvailable(choice, availableOptions)) next[choice.id] = choice.absent;
+  });
+  return next;
 }
 
 export function isOutputAvailable(output, availableOptions){
@@ -163,6 +195,12 @@ export function inspect(options){
     });
   });
 
+  SETUP_CHOICES.forEach(choice => {
+    const picked = pickChoiceValue(choice, map);
+    choices[choice.id] = picked.key;
+    picked.options.forEach(o => accounted[o.name] = true);
+  });
+
   let imagery = '';
   const imageryHit = IMAGERY.values.find(v => v.options.every(o => has(map, o)));
   if (imageryHit){
@@ -203,6 +241,15 @@ export function compose({ base = [], baseRemovals = [], selected = [], choices =
       const value = choice.values.find(v => v.value === key);
       if (value) list = list.concat(clone(valueOptions(choice, value)));
     });
+  });
+
+  SETUP_CHOICES.forEach(choice => {
+    const key = choices[choice.id] !== undefined ? choices[choice.id] : recommendedValue(choice);
+    if (key === CUSTOM) return;
+    // ODM's own value for a question the node cannot answer is not worth reporting as unsupported.
+    if (key === choice.absent && !isChoiceAvailable(choice, availableOptions)) return;
+    const value = choice.values.find(v => v.value === key);
+    if (value) list = list.concat(clone(valueOptions(choice, value)));
   });
 
   OUTPUTS.forEach(output => {
@@ -294,7 +341,7 @@ export function tick({ selected, choices }, id, on){
 
 const TaskOptionsComposer = {
   CUSTOM, normalise, sameValue, sameOptions, inspect, compose, tick, closeRequires, deriveBase, findDefaultPreset,
-  defaultChoices, recommendedValue, visibleChoices, isOutputAvailable, isImageryAvailable
+  defaultChoices, newTaskChoices, withNodeSupport, isChoiceAvailable, recommendedValue, visibleChoices, isOutputAvailable, isImageryAvailable
 };
 
 export default TaskOptionsComposer;
